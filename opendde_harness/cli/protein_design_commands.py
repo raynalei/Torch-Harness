@@ -28,6 +28,35 @@ console = Console()
 error_console = Console(stderr=True)
 
 
+@protein_design_app.command("initial-round")
+def initial_round(
+    config: Path = typer.Option(..., "--config", "-c", exists=True, dir_okay=False, resolve_path=True),
+    check: bool = typer.Option(False, "--check", help="Validate shared inputs and API health without submitting jobs."),
+    attach_job: list[str] | None = typer.Option(
+        None, "--attach-job", help="Reconcile an uncertain submission: checkpoint-job-key=remote-job-id. Repeatable."
+    ),
+) -> None:
+    """Run or resume a deterministic PPIFlow + TorchCraft initial round in the foreground."""
+    from opendde_harness.plugin.protein_design.initial_round.config import InitialRoundConfig
+    from opendde_harness.plugin.protein_design.initial_round.runner import InitialRoundRunner
+
+    try:
+        attachments = {}
+        for item in attach_job or []:
+            key, separator, value = item.partition("=")
+            if not separator or not key or not value or key in attachments:
+                raise ValueError("--attach-job requires distinct checkpoint-job-key=remote-job-id entries")
+            attachments[key] = value
+        workflow = InitialRoundConfig.load(config)
+        result = asyncio.run(InitialRoundRunner(workflow, attach_jobs=attachments).run(check_only=check))
+    except Exception as exc:
+        error_console.print(f"Initial round failed: {exc}", markup=False)
+        raise typer.Exit(1) from exc
+    typer.echo(json.dumps(result, ensure_ascii=False, allow_nan=False))
+    if result["status"] == "partial":
+        raise typer.Exit(2)
+
+
 def _load_plugin_config(config_path: Path | None) -> dict[str, Any]:
     from opendde_harness.cli._helpers import load_runtime_config
     from opendde_harness.config.opendde_harness import load_opendde_harness_config

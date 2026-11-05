@@ -113,3 +113,56 @@ def test_validate_rejects_overlapping_stages(tmp_path, monkeypatch):
     result = CliRunner().invoke(commands.protein_design_app, ["validate", "--config", str(path), "--json"])
     assert result.exit_code == 1
     assert "overlap" in result.output
+
+
+def test_initial_round_cli_loads_separate_config_and_check_mode(tmp_path, monkeypatch):
+    from opendde_harness.plugin.protein_design.initial_round.config import InitialRoundConfig
+    from opendde_harness.plugin.protein_design.initial_round.runner import InitialRoundRunner
+
+    source = tmp_path / "initial.yaml"
+    source.write_text("name: example")
+    sentinel = object()
+    monkeypatch.setattr(InitialRoundConfig, "load", lambda path: sentinel)
+    seen = {}
+
+    def initialize(self, config, *, attach_jobs):
+        seen.update(config=config, attach_jobs=attach_jobs)
+
+    async def run(self, *, check_only):
+        seen["check_only"] = check_only
+        return {"status": "checked", "inference_verified": False}
+
+    monkeypatch.setattr(InitialRoundRunner, "__init__", initialize)
+    monkeypatch.setattr(InitialRoundRunner, "run", run)
+    result = CliRunner().invoke(
+        commands.protein_design_app,
+        ["initial-round", "-c", str(source), "--check", "--attach-job", "generate/ppiflow=known"],
+    )
+    assert result.exit_code == 0, result.output
+    assert seen == {"config": sentinel, "attach_jobs": {"generate/ppiflow": "known"}, "check_only": True}
+    assert json.loads(result.output)["inference_verified"] is False
+
+
+def test_initial_round_cli_invalid_config_is_nonzero(tmp_path):
+    source = tmp_path / "initial.yaml"
+    source.write_text("name: missing-fields")
+    result = CliRunner().invoke(commands.protein_design_app, ["initial-round", "-c", str(source)])
+    assert result.exit_code == 1
+    assert "Initial round failed" in result.output
+
+
+def test_initial_round_cli_partial_result_is_nonzero(tmp_path, monkeypatch):
+    from opendde_harness.plugin.protein_design.initial_round.config import InitialRoundConfig
+    from opendde_harness.plugin.protein_design.initial_round.runner import InitialRoundRunner
+
+    source = tmp_path / "initial.yaml"
+    source.write_text("name: example")
+    monkeypatch.setattr(InitialRoundConfig, "load", lambda path: object())
+    monkeypatch.setattr(InitialRoundRunner, "__init__", lambda *args, **kwargs: None)
+
+    async def run(self, *, check_only):
+        return {"status": "partial", "failed": ["candidate"]}
+
+    monkeypatch.setattr(InitialRoundRunner, "run", run)
+    result = CliRunner().invoke(commands.protein_design_app, ["initial-round", "-c", str(source)])
+    assert result.exit_code == 2 and json.loads(result.output)["status"] == "partial"

@@ -157,6 +157,10 @@ structures captured in the client's tracing data. See the [dashboard guide](docs
 
 ## Development & License
 
+For a deterministic PPIFlow + TorchCraft initial round using external Slurm APIs,
+see the [initial-round guide](docs/initial-round.md) and
+[example configuration](docs/examples/initial_round.yaml).
+
 See the [repository rules](AGENTS.md) and [compute image build instructions](docker/README.md). Ordinary users consume a prebuilt image; Dockerfiles remain available for publishers and customization. Licensed under [Apache-2.0](LICENSE); see [third-party notices](LICENSES/README.md). TUI and memory foundations are adapted from Raven, and long-term memory is served by EverOS. Models may have separate terms. Computational results require experimental validation. Model calls and compute may incur costs.
 
 ## Citation and Acknowledgements

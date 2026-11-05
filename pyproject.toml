@@ -66,6 +66,9 @@ protein-design = [
     "torch>=2.3.0,<2.8.0",
     "transformers>=4.30.0",
 ]
+initial-round = [
+    "biotite>=1.2,<2",
+]
 
 [project.scripts]
 ddeharness = "opendde_harness.cli.commands:run"

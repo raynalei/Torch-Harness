@@ -1,0 +1,85 @@
+# Run on a host with access to both the APIs and the shared HPC filesystem.
+# Replace example hostnames, paths, chain IDs, hotspot conventions and templates.
+name: vhh_initial
+work_dir: /lustre/project/harness/runs
+path_mappings:
+  - local: /lustre/project
+    remote: /lustre/project
+
+generators:
+  ppiflow:
+    service:
+      url: http://ppiflow.internal:8010
+      # These generator READMEs document /docs, but do not promise /health.
+      health_path: /openapi.json
+      status_field: status
+      exit_code_field: exit_code
+      # Set false ONLY if the deployed API does not return exit codes and its
+      # terminal status alone has been verified to imply successful execution.
+      require_exit_code: true
+    request:
+      mode: nanobody
+      name: initial_ppiflow
+      antigen_pdb: /lustre/project/inputs/target.pdb
+      antigen_chain: A
+      framework_dir: /lustre/project/inputs/frameworks
+      heavy_chain: B
+      specified_hotspots: A4,A10
+      samples_per_target: 10
+      num_timesteps: 200
+    chains:
+      target: [A]
+      binder: [B]
+      refold_map: {A: A, B: B}
+    fold_template: /lustre/project/inputs/prepared_fold.json
+    structure_glob: '*.pdb'
+    per_source_refold_limit: 3
+  torchcraft:
+    service:
+      url: http://torchcraft.internal:8020
+      health_path: /openapi.json
+      status_field: status
+      exit_code_field: exit_code
+    request:
+      mode: vhh
+      name: initial_torchcraft
+      pdb_path: /lustre/project/inputs/target.pdb
+      # Use the deployed TorchCraft indexing convention; this is not inferred
+      # from PPIFlow's chain-qualified PDB residue IDs.
+      hotspot_indices: '4,10'
+      target_full_seq: /lustre/project/inputs/target_sequence.csv
+      framework_cif_path: /lustre/project/inputs/framework.cif
+      num_designs: 10
+      seed: 1
+    chains:
+      target: [A]
+      binder: [B]
+      refold_map: {A: A, B: B}
+    fold_template: /lustre/project/inputs/prepared_fold.json
+    per_source_refold_limit: 3
+
+evaluation:
+  af3score:
+    url: http://af3score.internal:8040
+    metrics_field: metrics
+    metric_fields: {iptm: iptm}
+  torchfold:
+    # If deployed on the AF3Score host, use a different port.
+    url: http://torchfold.internal:8050
+    metric_fields: {iptm: iptm}
+  rosetta:
+    url: http://rosetta.internal:8030
+    metrics_field: metrics
+    metric_fields: {interface_dg: dG_separated}
+  torchfold_options:
+    run_data_pipeline: false
+    num_diffusion_samples: 2
+  rosetta_options:
+    pack_input: false
+    pack_separated: true
+  # DockQ requires NumPy <2; Harness requires NumPy >=2. Keep them isolated.
+  dockq_python: /lustre/project/tools/dockq/bin/python
+  dockq_timeout: 300
+  min_af3score_iptm: 0.5
+  min_refold_iptm: 0.8
+  min_dockq: 0.49
