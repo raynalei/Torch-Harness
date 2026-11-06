@@ -59,6 +59,13 @@ generators:
     per_source_refold_limit: 3
 
 evaluation:
+  af3score_options:
+    run_data_pipeline: false
+    run_inference: true
+    init_guess: true
+    num_workers: 4
+    seed: 10
+    write_fold_input_json_file: false
   af3score:
     url: http://af3score.internal:8040
     metrics_field: metrics

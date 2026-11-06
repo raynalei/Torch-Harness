@@ -1,6 +1,6 @@
 ---
 name: protein-design
-description: Prepare, validate, run and interpret antibody design or mini binder sequence design and optimization tasks from YAML or user intent.
+description: Prepare, run and interpret antibody or minibinder workflows, including registered PPIFlow, TorchCraft, AF3Score, TorchFold and Rosetta model tools.
 metadata:
   opendde:
     always: false
@@ -10,7 +10,17 @@ metadata:
 
 ## Design scope
 
-Choose between antibody design (the default: VHH, scFv or paired VH/VL) and fixed-length single-chain mini binder design and optimization (`design.type: minibinder`). De novo non-antibody backbone generation, enzymes and arbitrary protein design are not supported. Never relabel a mini binder as an antibody.
+For registered external model requests, use the tool workflow below. The subsequent YAML instructions describe the legacy evolutionary workflow: antibody design (VHH, scFv or paired VH/VL) and fixed-length single-chain mini binder optimization (`design.type: minibinder`). That legacy workflow does not generate de novo non-antibody backbones. Never relabel a mini binder as an antibody.
+
+## Registered external model tools
+
+Call `protein_model_list` to discover configured aliases and request schemas; an empty list means no external models are registered. The named tools are `protein_model_ppiflow`, `protein_model_torchcraft`, `protein_model_torchfold` and `protein_model_af3score`; each exposes its own request schema. The generic `protein_model_submit` also supports Rosetta. Registration is independent of chat-provider configuration and the legacy compute URL. Use only the operations the registry advertises. A configured endpoint or health response is not evidence of successful model inference.
+
+Resolve scientific inputs and the compute scope with the user. Reuse existing authorization for the same inputs and scope rather than repeatedly asking. Call `protein_model_submit` with a unique, stable `request_id` and `user_confirmed: true` only when authorized. Submission returns immediately. Preserve the request ID and query `protein_model_status` when needed; never poll in a tight loop. Read completed artifacts with `protein_model_results`. A lost submission response is uncertain: do not submit again under a new request ID; ask the service operator to reconcile it. `protein_model_cancel` currently supports AF3Score only, and reports cancellation requested rather than claiming the remote job stopped.
+
+AF3Score `pdb` mode can perform fast scoring or database searches plus inference. Pipeline-only tasks (`run_data_pipeline=true`, `run_inference=false`) produce prepared inputs and no metrics. `prepared` mode does not rewrite supplied MSA/templates or automatically extract metrics; use a separate `metrics` task with the original PDB directory and AF3Score output directory when required. `init_guess` is independent of structural templates. Never fabricate scores or compare fast/MSA scoring as if their protocols were identical. Use absolute paths on the service's filesystem; these tools do not upload files, activate Conda or start API servers.
+
+For external-only requests, proceed through these tools; do not apply the legacy YAML/Docker/checkpoint prerequisites below. Predicted structures, confidence and Rosetta energies are not experimentally measured affinity.
 
 For mini binders, read [references/minibinder.md](references/minibinder.md) instead of antibody-framework guidance. Accept a complete or X-masked starting sequence of a confirmed length and explicit mutable positions; every X must be mutable. Full redesign resolves X before folding; do not invent CDR annotations. Apply the shared target preparation and launch approval steps below, substituting mini binder design/fixed regions for antibody format/CDR/framework questions. If identity is ambiguous, resolve the designed binder's type before preparing the configuration.
 

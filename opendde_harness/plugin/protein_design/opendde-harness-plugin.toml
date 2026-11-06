@@ -40,3 +40,39 @@ factory = "opendde_harness.plugin.protein_design.tools.control:make_candidates_t
 [[plugin.contributes.tools]]
 name = "protein_design_search_target_msa"
 factory = "opendde_harness.plugin.protein_design.tools.control:make_target_msa_search_tool"
+
+[[plugin.contributes.tools]]
+name = "protein_model_list"
+factory = "opendde_harness.plugin.protein_design.tools.models:make_model_list_tool"
+
+[[plugin.contributes.tools]]
+name = "protein_model_submit"
+factory = "opendde_harness.plugin.protein_design.tools.models:make_model_submit_tool"
+
+[[plugin.contributes.tools]]
+name = "protein_model_status"
+factory = "opendde_harness.plugin.protein_design.tools.models:make_model_status_tool"
+
+[[plugin.contributes.tools]]
+name = "protein_model_results"
+factory = "opendde_harness.plugin.protein_design.tools.models:make_model_results_tool"
+
+[[plugin.contributes.tools]]
+name = "protein_model_cancel"
+factory = "opendde_harness.plugin.protein_design.tools.models:make_model_cancel_tool"
+
+[[plugin.contributes.tools]]
+name = "protein_model_ppiflow"
+factory = "opendde_harness.plugin.protein_design.tools.models:make_ppiflow_tool"
+
+[[plugin.contributes.tools]]
+name = "protein_model_torchcraft"
+factory = "opendde_harness.plugin.protein_design.tools.models:make_torchcraft_tool"
+
+[[plugin.contributes.tools]]
+name = "protein_model_torchfold"
+factory = "opendde_harness.plugin.protein_design.tools.models:make_torchfold_tool"
+
+[[plugin.contributes.tools]]
+name = "protein_model_af3score"
+factory = "opendde_harness.plugin.protein_design.tools.models:make_af3score_tool"

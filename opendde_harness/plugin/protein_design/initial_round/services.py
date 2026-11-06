@@ -22,10 +22,11 @@ class RemoteJobFailedError(RuntimeError):
     pass
 
 
-class SlurmService:
-    def __init__(self, config: Service, checkpoint: Checkpoint, *, transport=None):
+class ServiceConnection:
+    """Bounded HTTP operations shared by foreground workflows and agent tools."""
+
+    def __init__(self, config: Service, *, transport=None):
         self.config = config
-        self.checkpoint = checkpoint
         headers = {}
         if config.token_env:
             token = os.environ.get(config.token_env)
@@ -46,6 +47,12 @@ class SlurmService:
         response = await self.client.get(path.lstrip("/"))
         response.raise_for_status()
         return response.json()
+
+
+class SlurmService(ServiceConnection):
+    def __init__(self, config: Service, checkpoint: Checkpoint, *, transport=None):
+        super().__init__(config, transport=transport)
+        self.checkpoint = checkpoint
 
     async def run(
         self,

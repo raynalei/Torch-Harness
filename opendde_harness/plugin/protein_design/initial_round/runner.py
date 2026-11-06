@@ -9,6 +9,7 @@ import importlib.util
 import json
 from pathlib import Path
 
+from opendde_harness.plugin.protein_design.core.model_requests import AF3ScoreRequest
 from opendde_harness.utils.portable_lock import file_lock
 
 from .artifacts import (
@@ -220,12 +221,14 @@ class InitialRoundRunner:
             f"score/{key}",
             "/v1/tasks",
             "task_id",
-            {
-                **evaluation.af3score_options,
-                "mode": "pdb",
-                "input_pdb_dir": self.files.remote(input_dir),
-                "num_samples": 1,
-            },
+            AF3ScoreRequest.model_validate(
+                {
+                    **evaluation.af3score_options,
+                    "mode": "pdb",
+                    "input_pdb_dir": self.files.remote(input_dir),
+                    "num_samples": 1,
+                }
+            ).model_dump(exclude_none=True),
         )
         service = self.services["af3score"]
         job = self.checkpoint.data["jobs"][f"score/{key}"]

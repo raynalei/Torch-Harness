@@ -1,0 +1,46 @@
+{
+  "plugins": {
+    "config": {
+      "protein-design": {
+        "model_services": {
+          "ppiflow": {
+            "kind": "ppiflow",
+            "service": {
+              "url": "http://127.0.0.1:8010",
+              "health_path": "/openapi.json"
+            },
+            "max_samples": 10,
+            "allowed_input_roots": ["/lustre/project"]
+          },
+          "torchcraft": {
+            "kind": "torchcraft",
+            "service": {
+              "url": "http://127.0.0.1:8020",
+              "health_path": "/openapi.json"
+            },
+            "max_samples": 10,
+            "allowed_input_roots": ["/lustre/project"]
+          },
+          "rosetta": {
+            "kind": "rosetta",
+            "service": {"url": "http://127.0.0.1:8030"},
+            "max_samples": 5,
+            "allowed_input_roots": ["/lustre/project"]
+          },
+          "af3score": {
+            "kind": "af3score",
+            "service": {"url": "http://127.0.0.1:8040"},
+            "max_samples": 5,
+            "allowed_input_roots": ["/lustre/project"]
+          },
+          "torchfold": {
+            "kind": "torchfold",
+            "service": {"url": "http://127.0.0.1:8050"},
+            "max_samples": 5,
+            "allowed_input_roots": ["/lustre/project"]
+          }
+        }
+      }
+    }
+  }
+}

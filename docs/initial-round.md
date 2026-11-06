@@ -101,6 +101,10 @@ Each service can configure dotted `status_field`, `exit_code_field`,
 - AF3Score submits one isolated PDB directory and one sample per candidate, then
   reads `/v1/tasks/{id}/metrics`. Default: `{"metrics":[{"iptm":0.9}]}`. Exactly
   one scalar measurement is required; ambiguous rows are errors.
+  `evaluation.af3score_options` accepts `run_data_pipeline`, `run_inference`,
+  `init_guess`, `num_workers`, `seed` and `write_fold_input_json_file`. The initial
+  round requires inference and one sample; pipeline-only/prepared/multi-sample
+  tasks are available through the [registered model tools](protein-model-tools.md).
 - TorchFold: select the highest-ipTM sample with paired `*summary_confidences.json`
   and `*model.cif`/`*model.pdb` in the same folder. Every selected file must appear
   in `/results`. For another output layout, configure `structure_field` to select

@@ -441,3 +441,28 @@ def test_example_configuration_parses_without_optional_model_imports():
     config = InitialRoundConfig.load(Path(__file__).parents[1] / "docs/examples/initial_round.yaml")
     assert set(config.generators) == {"ppiflow", "torchcraft"}
     assert config.generators["ppiflow"].service.health_path == "/openapi.json"
+
+
+async def test_updated_af3score_controls_are_forwarded_in_initial_round(round_config, fake_services):
+    transport, _ = fake_services
+    original = transport.handler
+    options = {
+        "run_data_pipeline": True,
+        "run_inference": True,
+        "init_guess": False,
+        "num_workers": 2,
+        "seed": 37,
+        "write_fold_input_json_file": True,
+    }
+    round_config.evaluation.af3score_options = options
+    bodies = []
+
+    def handler(request):
+        if request.method == "POST" and request.url.host == "af3score.test":
+            bodies.append(json.loads(request.content))
+        return original(request)
+
+    transport.handler = handler
+    assert (await InitialRoundRunner(round_config, transport=transport).run())["accepted"] == 2
+    assert len(bodies) == 2
+    assert all(all(body[key] == value for key, value in options.items()) for body in bodies)

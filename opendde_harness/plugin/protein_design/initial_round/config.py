@@ -10,6 +10,7 @@ import yaml
 from pydantic import ConfigDict, Field, model_validator
 
 from opendde_harness.plugin.protein_design.core.contracts import ContractModel
+from opendde_harness.plugin.protein_design.core.model_requests import AF3ScoreControls
 
 
 class RoundModel(ContractModel):
@@ -101,6 +102,11 @@ class Evaluation(RoundModel):
     def fixed_scoring_protocol(self):
         if self.af3score_options.get("num_samples", 1) != 1 or self.af3score_options.get("mode", "pdb") != "pdb":
             raise ValueError("initial round AF3Score uses mode=pdb and num_samples=1")
+        controls = AF3ScoreControls.model_validate({k: v for k, v in self.af3score_options.items() if k != "mode"})
+        if not controls.run_inference:
+            raise ValueError(
+                "initial round requires AF3Score run_inference=true to produce selection metrics; use protein_model_submit for pipeline-only tasks"
+            )
         if (
             "run_data_pipeline" in self.torchfold_options
             and type(self.torchfold_options["run_data_pipeline"]) is not bool
