@@ -106,11 +106,16 @@ class PPIFlowRequest(ContractModel):
 
 
 class TorchCraftRequest(ContractModel):
-    mode: Literal["mini_binder", "vhh"]
+    mode: Literal["mini_binder", "vhh", "monomer_unconditional"] = Field(
+        description="mini_binder/vhh require target inputs; monomer_unconditional requires json_path and design_length, with no target/hotspot/framework inputs."
+    )
     name: str
-    pdb_path: str
-    hotspot_indices: str
-    target_full_seq: str
+    pdb_path: str | None = None
+    hotspot_indices: str | None = None
+    target_full_seq: str | None = Field(
+        default=None, description="Absolute remote path to the target sequence CSV, not a sequence string."
+    )
+    json_path: str | None = None
     design_length: int | None = Field(default=None, ge=1)
     framework_cif_path: str | None = None
     num_designs: int = Field(default=1, ge=1)
@@ -118,6 +123,19 @@ class TorchCraftRequest(ContractModel):
 
     @model_validator(mode="after")
     def mode_inputs(self):
+        if self.mode == "monomer_unconditional":
+            if not self.json_path or self.design_length is None:
+                raise ValueError("TorchCraft monomer_unconditional requires json_path and design_length")
+            if any(
+                value is not None
+                for value in (self.pdb_path, self.hotspot_indices, self.target_full_seq, self.framework_cif_path)
+            ):
+                raise ValueError("TorchCraft monomer_unconditional uses json_path, not target/framework inputs")
+            return self
+        if not all((self.pdb_path, self.hotspot_indices, self.target_full_seq)):
+            raise ValueError(f"TorchCraft {self.mode} requires pdb_path, hotspot_indices and target_full_seq CSV path")
+        if self.json_path is not None:
+            raise ValueError("json_path is currently documented for TorchCraft monomer_unconditional only")
         if self.mode == "vhh" and not self.framework_cif_path:
             raise ValueError("TorchCraft vhh requires framework_cif_path")
         if self.mode == "mini_binder" and self.design_length is None:

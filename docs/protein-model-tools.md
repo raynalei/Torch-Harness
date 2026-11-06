@@ -1,6 +1,6 @@
 # Registered protein models in Qwen conversations
 
-The protein-design plugin contributes four individually named model tools and
+The protein-design plugin contributes five individually named model tools and
 shared task-management tools to the main assistant:
 
 | Tool | Purpose |
@@ -9,6 +9,7 @@ shared task-management tools to the main assistant:
 | `protein_model_torchcraft` | Submit TorchCraft VHH/minibinder requests |
 | `protein_model_torchfold` | Submit TorchFold predictions/refolds |
 | `protein_model_af3score` | Submit AF3Score scoring, preprocessing or metrics tasks |
+| `protein_model_rosetta` | Submit any of the six documented Rosetta operations |
 | `protein_model_list` | Discover configured model aliases, request schemas, sample limits and optional HTTP health |
 | `protein_model_submit` | Validate and submit one authorized request; return its ID immediately |
 | `protein_model_status` | Query one saved job once, without waiting for Slurm |
@@ -26,6 +27,21 @@ Merge the `model_services` block from [this configuration fragment](examples/mod
 into `plugins.config.protein-design` in the active Harness configuration, usually
 `~/.opendde_harness/config.json`. Preserve existing provider, memory, workspace,
 compute and other plugin settings. Restart Harness after editing.
+
+Alternatively, register all five services on the same host using the explicit
+default ports, without manually editing the JSON:
+
+```bash
+uv run --frozen ddeharness protein-design models register --local-defaults
+uv run --frozen ddeharness protein-design models list --check-health
+```
+
+Use `--opendde-config /actual/path/config.json` for a custom instance. The
+conversation's `protein_model_list.active_config_path` identifies its selected
+file. For custom endpoints, use `models register --services-file` with the
+fragment instead. This preserves provider settings, backs up an existing config,
+and never submits a job. Restart Harness after registration. A tool function can
+be installed while its service registry is still empty; these are different states.
 
 Each alias is an operator-chosen name with:
 
@@ -68,7 +84,7 @@ Start by asking:
 Qwen can call `protein_model_list(check_health=true)` and read each model's
 request schema. This proves HTTP reachability only; no inference has been tested.
 There are no registered model aliases until the operator configures them.
-The four named tools each advertise their own model-specific request schema.
+The five named tools each advertise their own model-specific request schema.
 When exactly one alias of that kind is registered, its `model` argument can be
 omitted. With multiple aliases, Qwen must choose one explicitly. The generic
 submit tool also supports all five kinds and supplies the Rosetta operation selector.
@@ -139,6 +155,31 @@ paths. Rosetta additionally requires an `operation` from:
 `interface_local_relax`, `mutation_binding_ddg`. Interface tools need both chain
 groups; mutation ΔΔG also needs the mutation and the service's configured flex
 ΔΔG protocol. Low-sampling smoke tests are not quantitative affinity evidence.
+
+TorchCraft also supports the supplied **`monomer_unconditional`** API example.
+It requires `json_path` and `design_length`, with no target/hotspot/framework
+parameters. For example, call `protein_model_torchcraft` with:
+
+```json
+{
+  "request_id": "monomer_demo_001",
+  "request": {
+    "mode": "monomer_unconditional",
+    "name": "monomer_demo",
+    "json_path": "/lustre/project/inputs/test-demo.json",
+    "design_length": 100,
+    "num_designs": 3,
+    "seed": 1
+  },
+  "user_confirmed": true
+}
+```
+
+The deployed TorchCraft API must implement this mode too; the client cannot add
+server capabilities. The target-bound initial-round CLI does not run this mode.
+For `vhh` / `mini_binder`, `target_full_seq` is the remote sequence **CSV path**,
+not a raw amino-acid sequence. Registration and the original tools/skills are
+listed in the [inventory and troubleshooting guide](tools-and-skills.md).
 
 For example, after authorization:
 

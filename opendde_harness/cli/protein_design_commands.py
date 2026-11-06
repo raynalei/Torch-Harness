@@ -10,6 +10,7 @@ from typing import Any
 import typer
 from rich.console import Console
 
+from opendde_harness.cli.protein_model_commands import models_app
 from opendde_harness.plugin.protein_design.core.contracts import TaskSnapshot, WorkflowConfig
 from opendde_harness.plugin.protein_design.core.detached import DetachedDesignTaskController
 from opendde_harness.plugin.protein_design.core.preparation import (
@@ -26,6 +27,7 @@ protein_design_app = typer.Typer(
 )
 console = Console()
 error_console = Console(stderr=True)
+protein_design_app.add_typer(models_app, name="models")
 
 
 @protein_design_app.command("initial-round")

@@ -31,13 +31,14 @@ class ModelRegistration(ContractModel):
 
 
 class ProteinModelRegistry:
-    def __init__(self, registrations: dict, root: Path, *, transport=None):
+    def __init__(self, registrations: dict, root: Path, *, transport=None, config_path: Path | None = None):
         self.models = {}
         for name, value in registrations.items():
             self.valid_id(name)
             self.models[name] = ModelRegistration.model_validate(value)
         self.root = root
         self.transport = transport
+        self.config_path = config_path
 
     @staticmethod
     def valid_id(value: str):
@@ -51,6 +52,10 @@ class ProteinModelRegistry:
 
     def catalogue(self):
         return {
+            "active_config_path": str(self.config_path) if self.config_path else None,
+            "available_model_kinds": sorted(REQUEST_TYPES),
+            "unconfigured_model_kinds": sorted(set(REQUEST_TYPES) - {model.kind for model in self.models.values()}),
+            "configuration_hint": "An empty models list means tool code is installed but no API services are configured. Register endpoints in this active config using protein-design models register, then restart Harness.",
             "models": [
                 {
                     "model": name,
@@ -68,7 +73,7 @@ class ProteinModelRegistry:
                     ),
                 }
                 for name, model in sorted(self.models.items())
-            ]
+            ],
         }
 
     def client(self, model: ModelRegistration):

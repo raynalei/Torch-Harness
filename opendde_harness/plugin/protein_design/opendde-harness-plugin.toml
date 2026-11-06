@@ -76,3 +76,7 @@ factory = "opendde_harness.plugin.protein_design.tools.models:make_torchfold_too
 [[plugin.contributes.tools]]
 name = "protein_model_af3score"
 factory = "opendde_harness.plugin.protein_design.tools.models:make_af3score_tool"
+
+[[plugin.contributes.tools]]
+name = "protein_model_rosetta"
+factory = "opendde_harness.plugin.protein_design.tools.models:make_rosetta_tool"

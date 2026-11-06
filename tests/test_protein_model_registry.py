@@ -448,3 +448,73 @@ def test_readiness_accepts_external_models_without_legacy_compute_url(registrati
 
     assert compute_configured({"model_services": registration})
     assert not compute_configured({"model_services": {}})
+
+
+async def test_torchcraft_unconditional_mode_accepts_the_users_curl_shape(api, tmp_path):
+    registration = {"torchcraft": {"kind": "torchcraft", "service": {"url": "https://torchcraft.test"}}}
+    registry = ProteinModelRegistry(registration, tmp_path, transport=api[0])
+    payload = {
+        "mode": "monomer_unconditional",
+        "name": "monomer_demo",
+        "json_path": "/shared/TorchX/test-demo.json",
+        "design_length": 100,
+        "num_designs": 3,
+        "seed": 1,
+    }
+    from opendde_harness.plugin.protein_design.tools.models import ProteinModelSubmitTool
+
+    tools = ToolRegistry()
+    tools.register(ProteinModelSubmitTool(registry, "torchcraft"))
+    response = json.loads(
+        await tools.execute(
+            "protein_model_torchcraft", {"request_id": "unconditional", "request": payload, "user_confirmed": True}
+        )
+    )
+    assert response["state"] == "submitted"
+    assert json.loads(api[1][0].content) == payload
+    assert (
+        "monomer_unconditional"
+        in tools.get_definitions()[0]["function"]["parameters"]["properties"]["request"]["properties"]["mode"]["enum"]
+    )
+
+
+def test_torchcraft_mode_specific_inputs_are_required():
+    from opendde_harness.plugin.protein_design.core.model_requests import TorchCraftRequest
+
+    for payload in (
+        {"mode": "monomer_unconditional", "name": "x", "design_length": 100},
+        {"mode": "mini_binder", "name": "x", "design_length": 80},
+        {"mode": "vhh", "name": "x", "json_path": "/shared/input.json"},
+    ):
+        with pytest.raises(ValueError):
+            TorchCraftRequest.model_validate(payload)
+
+
+async def test_rosetta_has_its_own_named_tool_and_six_operations(api, tmp_path):
+    plugins = active_registry()
+    tool = plugins.build_tool(
+        "protein_model_rosetta",
+        config={
+            "model_services": {"energy": {"kind": "rosetta", "service": {"url": "https://rosetta.test"}}},
+            "model_jobs_dir": str(tmp_path),
+        },
+        services=ServiceLocator(workspace=tmp_path, user_id="test", agent_id="test"),
+    )
+    tool.registry.transport = api[0]
+    assert len(tool.parameters["properties"]["operation"]["enum"]) == 6
+    assert "operation" in tool.parameters["required"]
+    tools = ToolRegistry()
+    tools.register(tool)
+    result = json.loads(
+        await tools.execute(
+            "protein_model_rosetta",
+            {
+                "request_id": "score",
+                "operation": "structure_score",
+                "request": {"input_pdb": "/shared/model.pdb"},
+                "user_confirmed": True,
+            },
+        )
+    )
+    assert result["state"] == "submitted"
+    assert api[1][0].url.path == "/v1/tools/structure_score"
