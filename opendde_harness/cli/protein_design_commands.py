@@ -34,11 +34,25 @@ protein_design_app.add_typer(models_app, name="models")
 def initial_round(
     config: Path = typer.Option(..., "--config", "-c", exists=True, dir_okay=False, resolve_path=True),
     check: bool = typer.Option(False, "--check", help="Validate shared inputs and API health without submitting jobs."),
+    pdb: Path | None = typer.Option(
+        None,
+        "--pdb",
+        exists=True,
+        dir_okay=False,
+        help="Mounted input PDB; overrides the profile's generator input path.",
+    ),
+    name: str | None = typer.Option(
+        None, "--name", help="Experiment name; use a new name for a different input/config."
+    ),
+    detach: bool = typer.Option(
+        False, "--detach", help="Launch a background worker that polls and advances stages automatically."
+    ),
     attach_job: list[str] | None = typer.Option(
         None, "--attach-job", help="Reconcile an uncertain submission: checkpoint-job-key=remote-job-id. Repeatable."
     ),
 ) -> None:
     """Run or resume a deterministic PPIFlow + TorchCraft initial round in the foreground."""
+    from opendde_harness.plugin.protein_design.initial_round.automation import prepare_run, start_round
     from opendde_harness.plugin.protein_design.initial_round.config import InitialRoundConfig
     from opendde_harness.plugin.protein_design.initial_round.runner import InitialRoundRunner
 
@@ -49,14 +63,35 @@ def initial_round(
             if not separator or not key or not value or key in attachments:
                 raise ValueError("--attach-job requires distinct checkpoint-job-key=remote-job-id entries")
             attachments[key] = value
-        workflow = InitialRoundConfig.load(config)
-        result = asyncio.run(InitialRoundRunner(workflow, attach_jobs=attachments).run(check_only=check))
+        workflow = (
+            prepare_run(config, pdb_path=pdb, name=name)
+            if pdb is not None or name is not None
+            else InitialRoundConfig.load(config)
+        )
+        if detach:
+            if check or attachments:
+                raise ValueError("--detach cannot be combined with --check or --attach-job")
+            result = start_round(workflow)
+        else:
+            result = asyncio.run(InitialRoundRunner(workflow, attach_jobs=attachments).run(check_only=check))
     except Exception as exc:
         error_console.print(f"Initial round failed: {exc}", markup=False)
         raise typer.Exit(1) from exc
     typer.echo(json.dumps(result, ensure_ascii=False, allow_nan=False))
-    if result["status"] == "partial":
+    if result.get("status") == "partial":
         raise typer.Exit(2)
+
+
+@protein_design_app.command("initial-round-status")
+def initial_round_status(run_dir: Path = typer.Option(..., "--run-dir", exists=True, file_okay=False)):
+    """Read saved background pipeline progress without polling the remote APIs."""
+    from opendde_harness.plugin.protein_design.initial_round.automation import round_status
+
+    try:
+        typer.echo(json.dumps(round_status(run_dir), ensure_ascii=False))
+    except Exception as exc:
+        typer.echo(f"Initial round status failed: {exc}", err=True)
+        raise typer.Exit(1) from exc
 
 
 def _load_plugin_config(config_path: Path | None) -> dict[str, Any]:

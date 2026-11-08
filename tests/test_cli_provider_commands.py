@@ -641,3 +641,46 @@ def test_the_endpoint_subcommand_is_gone_along_with_multi_endpoint_failover():
 
     assert result.exit_code != 0
     assert "endpoint" not in CliRunner().invoke(provider_app, ["--help"]).output
+
+
+def test_qwen_fast_profile_disables_thinking_without_erasing_provider(config_path):
+    before = _entry(config_path, "my-relay")
+    result = CliRunner().invoke(provider_app, ["model", "set", "my-relay", "lab-1", "--qwen-fast"])
+    assert result.exit_code == 0, result.output
+    entry = _entry(config_path, "my-relay")
+    assert entry["apiKey"] == before["apiKey"] and entry["baseUrl"] == before["baseUrl"]
+    row = Config.model_validate(json.loads(config_path.read_text())).providers.get("my-relay").row("lab-1")
+    assert row.reasoning is True and row.reasoning_effort == "off"
+    assert row.max_tokens == 2048 and row.compat["thinkingFormat"] == "qwen"
+
+
+def test_qwen_fast_preserves_compat_and_supports_vllm_format(config_path):
+    from opendde_harness.config.update_providers import set_model_row
+
+    set_model_row("my-relay", "lab-1", {"compat": {"supportsStore": False}, "max_tokens": 8000})
+    result = CliRunner().invoke(
+        provider_app,
+        [
+            "model",
+            "set",
+            "my-relay",
+            "lab-1",
+            "--qwen-fast",
+            "--thinking-format",
+            "qwen-chat-template",
+            "--max-tokens",
+            "1024",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    row = Config.model_validate(json.loads(config_path.read_text())).providers.get("my-relay").row("lab-1")
+    assert row.compat == {"supportsStore": False, "thinkingFormat": "qwen-chat-template"}
+    assert row.max_tokens == 1024
+
+
+def test_qwen_fast_rejects_conflicting_reasoning_request(config_path):
+    before = config_path.read_bytes()
+    result = CliRunner().invoke(
+        provider_app, ["model", "set", "my-relay", "lab-1", "--qwen-fast", "--reasoning-effort", "high"]
+    )
+    assert result.exit_code != 0 and config_path.read_bytes() == before

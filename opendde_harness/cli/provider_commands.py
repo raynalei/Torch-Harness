@@ -886,6 +886,14 @@ def model_set_cmd(
     ),
     context_window: int = typer.Option(None, "--context-window", help="Context window in tokens"),
     max_tokens: int = typer.Option(None, "--max-tokens", help="Output ceiling in tokens"),
+    qwen_fast: bool = typer.Option(
+        False,
+        "--qwen-fast",
+        help="Disable Qwen hybrid thinking on the wire and default to a 2048-token output ceiling.",
+    ),
+    thinking_format: str = typer.Option(
+        "", "--thinking-format", help="Qwen wire format: qwen (DashScope) or qwen-chat-template (vLLM-compatible)."
+    ),
     reasoning: bool = typer.Option(
         None, "--reasoning/--no-reasoning", help="Whether this model thinks before it answers"
     ),
@@ -943,6 +951,29 @@ def model_set_cmd(
             fields["cost"] = json.loads(cost)
         except json.JSONDecodeError as exc:
             raise typer.BadParameter(f"--cost is not valid JSON: {exc}")
+    if qwen_fast or thinking_format:
+        from opendde_harness.config.loader import load_config
+
+        entry = load_config().providers.get(provider)
+        if entry is None:
+            raise typer.BadParameter("configure the provider before setting its Qwen model profile")
+        row = entry.row(model)
+        format_name = thinking_format or "qwen"
+        if format_name not in {"qwen", "qwen-chat-template"}:
+            raise typer.BadParameter("--thinking-format must be qwen or qwen-chat-template")
+        wire = api or (row.api if row else None) or entry.api or "openai-completions"
+        if wire != "openai-completions":
+            raise typer.BadParameter("Qwen thinking controls require an openai-completions endpoint")
+        fields["api"] = wire
+        fields["compat"] = {**((row.compat or {}) if row else {}), "thinkingFormat": format_name}
+        if qwen_fast:
+            if reasoning is False or reasoning_effort not in {"", "off"}:
+                raise typer.BadParameter(
+                    "--qwen-fast cannot be combined with --no-reasoning or non-off effort; reasoning=true records capability while off disables thinking"
+                )
+            fields.update(
+                reasoning=True, reasoning_effort="off", max_tokens=max_tokens if max_tokens is not None else 2048
+            )
     if not fields:
         raise typer.BadParameter(
             "pass at least one of --api, --context-window, --max-tokens, --reasoning/--no-reasoning, "

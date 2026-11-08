@@ -67,10 +67,38 @@ def write_pdb(source: Path, destination: Path):
     save_structure(str(destination), atoms)
 
 
-def prepare_fold(template: Path, sequences: dict[str, str], chains: Chains, name: str, output: Path):
+def prepare_fold(
+    template: Path | None,
+    sequences: dict[str, str],
+    chains: Chains,
+    name: str,
+    output: Path,
+    *,
+    seeds: list[int] | None = None,
+    run_data_pipeline: bool = False,
+):
     import json
 
-    value = copy.deepcopy(json.loads(template.read_text()))
+    value = (
+        copy.deepcopy(json.loads(template.read_text()))
+        if template
+        else {
+            "name": name,
+            "dialect": "alphafold3",
+            "version": 1,
+            "modelSeeds": seeds or [1],
+            "sequences": [
+                {
+                    "protein": {
+                        "id": folded,
+                        "sequence": sequences[original],
+                        **({} if run_data_pipeline else {"unpairedMsa": "", "pairedMsa": "", "templates": []}),
+                    }
+                }
+                for original, folded in chains.refold_map.items()
+            ],
+        }
+    )
     if value.get("dialect") != "alphafold3" or not isinstance(value.get("sequences"), list):
         raise ValueError("fold_template must use the alphafold3 JSON dialect with sequences")
     seeds = value.get("modelSeeds")
@@ -92,7 +120,9 @@ def prepare_fold(template: Path, sequences: dict[str, str], chains: Chains, name
     for original, folded in chains.refold_map.items():
         protein = proteins[folded]
         if original in chains.binder:
-            protein.update(sequence=sequences[original], unpairedMsa="", pairedMsa="", templates=[])
+            protein.update(sequence=sequences[original])
+            if template or not run_data_pipeline:
+                protein.update(unpairedMsa="", pairedMsa="", templates=[])
             for key in ("unpairedMsaPath", "pairedMsaPath"):
                 protein.pop(key, None)
         elif protein.get("sequence") != sequences[original]:

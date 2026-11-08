@@ -382,7 +382,7 @@ async def test_one_failed_generator_still_checks_the_other_source(round_config, 
         return original(request)
 
     transport.handler = handler
-    with pytest.raises(RuntimeError, match="both generators are required"):
+    with pytest.raises(RuntimeError, match="all configured generators are required"):
         await InitialRoundRunner(round_config, transport=transport).run()
     assert calls[("torchcraft", "POST")] == 1
     assert calls[("af3score", "POST")] == 0
@@ -466,3 +466,68 @@ async def test_updated_af3score_controls_are_forwarded_in_initial_round(round_co
     assert (await InitialRoundRunner(round_config, transport=transport).run())["accepted"] == 2
     assert len(bodies) == 2
     assert all(all(body[key] == value for key, value in options.items()) for body in bodies)
+
+
+async def test_ppiflow_only_runs_all_stages_without_torchcraft_rosetta_or_template(round_config, fake_services):
+    transport, calls = fake_services
+    round_config.generators.pop("torchcraft")
+    round_config.generators["ppiflow"].fold_template = None
+    round_config.evaluation.rosetta = None
+    result = await InitialRoundRunner(round_config, transport=transport).run()
+    assert result["status"] == "completed" and result["accepted"] == 1
+    assert calls[("ppiflow", "POST")] == calls[("af3score", "POST")] == calls[("torchfold", "POST")] == 1
+    assert calls[("torchcraft", "GET")] == calls[("rosetta", "GET")] == 0
+    candidate = json.loads((round_config.work_dir / round_config.name / "candidates.json").read_text())[0]
+    assert candidate["metrics"]["design_refold_dockq"] == 1.0
+    assert "rosetta_interface_dg" not in candidate["metrics"]
+
+
+async def test_af3score_must_be_strictly_above_the_gate_before_refold(round_config, fake_services):
+    transport, calls = fake_services
+    round_config.generators.pop("torchcraft")
+    round_config.evaluation.rosetta = None
+    round_config.evaluation.min_af3score_iptm = 0.9
+    result = await InitialRoundRunner(round_config, transport=transport).run()
+    assert result["outcome"] == "no_hits"
+    assert calls[("torchfold", "POST")] == 0
+
+
+async def test_every_passing_structure_can_refold_without_a_top_k_cap(round_config, fake_services):
+    transport, calls = fake_services
+    round_config.generators.pop("torchcraft")
+    round_config.generators["ppiflow"].fold_template = None
+    round_config.generators["ppiflow"].per_source_refold_limit = None
+    round_config.generators["ppiflow"].deduplicate_sequences = False
+    round_config.evaluation.rosetta = None
+    for i in range(7):
+        pdb(round_config.work_dir / "ppiflow" / f"extra-{i}.pdb")
+    original = transport.handler
+
+    def handler(request):
+        if request.url.host == "ppiflow.test" and request.url.path.endswith("/results"):
+            return httpx.Response(
+                200,
+                json={
+                    "files": [
+                        f"/shared/ppiflow/{path.name}" for path in (round_config.work_dir / "ppiflow").glob("*.pdb")
+                    ]
+                },
+            )
+        return original(request)
+
+    transport.handler = handler
+    result = await InitialRoundRunner(round_config, transport=transport).run()
+    assert result["accepted"] == 8
+    assert calls[("torchfold", "POST")] == 8
+
+
+def test_generated_fold_input_supports_query_only_or_pipeline_search(round_config, tmp_path):
+    chains = round_config.generators["ppiflow"].chains
+    for pipeline in (False, True):
+        output = tmp_path / f"auto-{pipeline}.json"
+        prepare_fold(
+            None, {"A": "GGGGGG", "B": "AAAAAA"}, chains, "auto", output, seeds=[7], run_data_pipeline=pipeline
+        )
+        content = json.loads(output.read_text())
+        assert content["modelSeeds"] == [7]
+        assert all(("unpairedMsa" not in entity["protein"]) == pipeline for entity in content["sequences"])

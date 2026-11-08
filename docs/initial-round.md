@@ -1,5 +1,12 @@
 # Dual-generator initial round
 
+For the PPIFlow-only autonomous chain (PPIFlow -> AF3Score threshold -> TorchFold
+-> DockQ), use the [automatic initial-round guide](automatic-initial-round.md).
+TorchCraft and Rosetta are now optional; the dual-generator example below remains
+supported. `fold_template: null` builds the fold input automatically, while a
+prepared template can still be supplied. An unset/null refold limit admits every
+above-threshold candidate; sequence deduplication remains configurable.
+
 `ddeharness protein-design initial-round` runs a deterministic initial design
 round without LLM credentials or a local GPU. It is separate from the existing
 `protein-design start` evolutionary workflow and uses the supplied PPIFlow,

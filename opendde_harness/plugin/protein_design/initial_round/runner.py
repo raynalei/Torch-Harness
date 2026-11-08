@@ -55,9 +55,12 @@ class InitialRoundRunner:
         }
         target_sequences = []
         for source, generator in self.config.generators.items():
-            if not generator.fold_template.is_absolute() or not generator.fold_template.is_file():
+            if generator.fold_template is not None and (
+                not generator.fold_template.is_absolute() or not generator.fold_template.is_file()
+            ):
                 raise ValueError(f"{source}: fold_template must be an existing absolute local path")
-            self.input_hashes[f"{source}/fold_template"] = digest(generator.fold_template)
+            if generator.fold_template:
+                self.input_hashes[f"{source}/fold_template"] = digest(generator.fold_template)
             for key in path_keys[source]:
                 if key in generator.request:
                     path = self.files.local(generator.request[key])
@@ -66,6 +69,8 @@ class InitialRoundRunner:
                     inputs = sorted(p for p in path.rglob("*") if p.is_file()) if path.is_dir() else [path]
                     for item in inputs:
                         self.input_hashes[f"{source}/{key}/{self.files.remote(item)}"] = digest(item)
+            if generator.fold_template is None:
+                continue
             # Validate template shape before submitting expensive GPU jobs.
             template = json.loads(generator.fold_template.read_text())
             proteins = {p["protein"]["id"]: p["protein"]["sequence"] for p in template.get("sequences", [])}
@@ -83,7 +88,7 @@ class InitialRoundRunner:
                             "run_data_pipeline=false requires explicit prepared MSAs (or explicit empty strings)"
                         )
             probe.unlink()
-        if len(set(target_sequences)) != 1:
+        if len(set(target_sequences)) > 1:
             raise ValueError("both generators must design against the same target chain sequences")
 
     async def check(self):
@@ -111,7 +116,13 @@ class InitialRoundRunner:
         self.checkpoint.data["tools"] = tools
         self.checkpoint.save()
         configs = {name: g.service for name, g in self.config.generators.items()}
-        configs.update({name: getattr(self.config.evaluation, name) for name in ("af3score", "torchfold", "rosetta")})
+        configs.update(
+            {
+                name: getattr(self.config.evaluation, name)
+                for name in ("af3score", "torchfold", "rosetta")
+                if getattr(self.config.evaluation, name) is not None
+            }
+        )
         result = {}
         for name, config in configs.items():
             service = SlurmService(config, self.checkpoint, transport=self.transport)
@@ -195,7 +206,7 @@ class InitialRoundRunner:
         if errors:
             self.checkpoint.data["generation_errors"] = errors
             self.checkpoint.save()
-            raise RuntimeError(f"both generators are required; generation failures: {errors}")
+            raise RuntimeError(f"all configured generators are required; generation failures: {errors}")
         return candidates
 
     async def score(self, candidate: dict):
@@ -249,7 +260,15 @@ class InitialRoundRunner:
         directory = self.root / key
         if "torchfold_iptm" not in candidate["metrics"]:
             input_json = directory / "fold_input.json"
-            prepare_fold(generator.fold_template, candidate["chains"], generator.chains, key, input_json)
+            prepare_fold(
+                generator.fold_template,
+                candidate["chains"],
+                generator.chains,
+                key,
+                input_json,
+                seeds=generator.fold_seeds,
+                run_data_pipeline=evaluation.torchfold_options.get("run_data_pipeline", False),
+            )
             result = await self.job(
                 "torchfold",
                 f"refold/{key}",
@@ -301,7 +320,7 @@ class InitialRoundRunner:
             candidate["metrics"]["design_refold_dockq"] = measured([scores], "dockq", confidence=True)
             write_json(directory / "dockq.json", scores)
             self.save_candidates()
-        if "rosetta_interface_dg" not in candidate["metrics"]:
+        if evaluation.rosetta is not None and "rosetta_interface_dg" not in candidate["metrics"]:
             model = directory / "refold.pdb"
             write_pdb(self.files.local(candidate["refold_structure"]), model)
             chain_map = generator.chains.refold_map
@@ -348,7 +367,7 @@ class InitialRoundRunner:
             key=lambda c: (
                 -c["metrics"]["torchfold_iptm"],
                 -c["metrics"]["design_refold_dockq"],
-                c["metrics"]["rosetta_interface_dg"],
+                c["metrics"].get("rosetta_interface_dg", 0.0),
                 c["candidate_id"],
             ),
         )
@@ -363,7 +382,8 @@ class InitialRoundRunner:
             "failed": failed,
             "ranking": [c["candidate_id"] for c in accepted],
             "dockq_reference": "generated_design_pose",
-            "ranking_policy": "refold_iptm_desc,dockq_desc,interface_dg_asc",
+            "ranking_policy": "refold_iptm_desc,dockq_desc"
+            + (",interface_dg_asc" if self.config.evaluation.rosetta else ""),
         }
         write_json(self.root / "summary.json", result)
         write_json(
@@ -441,11 +461,14 @@ class InitialRoundRunner:
                         key=lambda c: (-c["metrics"]["af3score_iptm"], c["candidate_id"]),
                     )
                     for c in ordered:
-                        if c["metrics"]["af3score_iptm"] < self.config.evaluation.min_af3score_iptm:
+                        if c["metrics"]["af3score_iptm"] <= self.config.evaluation.min_af3score_iptm:
                             c["status"] = "filtered"
-                        elif c["sequence"] in seen:
+                        elif generator.deduplicate_sequences and c["sequence"] in seen:
                             c["status"] = "duplicate"
-                        elif selected >= generator.per_source_refold_limit:
+                        elif (
+                            generator.per_source_refold_limit is not None
+                            and selected >= generator.per_source_refold_limit
+                        ):
                             c["status"] = "not_selected"
                         else:
                             selected += 1

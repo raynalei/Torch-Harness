@@ -80,3 +80,11 @@ factory = "opendde_harness.plugin.protein_design.tools.models:make_af3score_tool
 [[plugin.contributes.tools]]
 name = "protein_model_rosetta"
 factory = "opendde_harness.plugin.protein_design.tools.models:make_rosetta_tool"
+
+[[plugin.contributes.tools]]
+name = "protein_initial_round_start"
+factory = "opendde_harness.plugin.protein_design.tools.initial_round:make_initial_round_start_tool"
+
+[[plugin.contributes.tools]]
+name = "protein_initial_round_status"
+factory = "opendde_harness.plugin.protein_design.tools.initial_round:make_initial_round_status_tool"

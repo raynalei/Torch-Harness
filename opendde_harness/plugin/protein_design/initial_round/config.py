@@ -75,17 +75,19 @@ class Generator(RoundModel):
     service: Service
     request: dict[str, Any]
     chains: Chains
-    fold_template: Path
+    fold_template: Path | None = None
+    fold_seeds: list[int] = Field(default_factory=lambda: [1], min_length=1)
     # Optional explicit key in /results holding a candidate manifest.
     candidates_field: str = "candidates"
     structure_glob: str = "*.pdb"
-    per_source_refold_limit: int = Field(default=5, ge=1, le=1000)
+    per_source_refold_limit: int | None = Field(default=None, ge=1, le=1000)
+    deduplicate_sequences: bool = True
 
 
 class Evaluation(RoundModel):
     af3score: Service
     torchfold: Service
-    rosetta: Service
+    rosetta: Service | None = None
     af3score_options: dict[str, Any] = Field(default_factory=dict)
     torchfold_options: dict[str, Any] = Field(default_factory=lambda: {"run_data_pipeline": False})
     rosetta_options: dict[str, Any] = Field(default_factory=lambda: {"pack_input": False, "pack_separated": True})
@@ -124,15 +126,18 @@ class InitialRoundConfig(RoundModel):
 
     @model_validator(mode="after")
     def check_workflow(self):
-        if set(self.generators) != {"ppiflow", "torchcraft"}:
-            raise ValueError("initial round requires both ppiflow and torchcraft")
-        pair = (self.generators["ppiflow"].request.get("mode"), self.generators["torchcraft"].request.get("mode"))
-        if pair not in {("nanobody", "vhh"), ("binder", "mini_binder")}:
-            raise ValueError("pair nanobody with vhh, or binder with mini_binder")
+        if not self.generators or "ppiflow" not in self.generators:
+            raise ValueError("initial round requires ppiflow")
+        if "torchcraft" in self.generators:
+            pair = (self.generators["ppiflow"].request.get("mode"), self.generators["torchcraft"].request.get("mode"))
+            if pair not in {("nanobody", "vhh"), ("binder", "mini_binder")}:
+                raise ValueError("pair nanobody with vhh, or binder with mini_binder")
         if not self.work_dir.is_absolute():
             raise ValueError("work_dir must be absolute and on the shared filesystem")
         modes = {"ppiflow": {"nanobody", "binder"}, "torchcraft": {"vhh", "mini_binder"}}
         for name, generator in self.generators.items():
+            if any(type(seed) is not int or seed < 0 for seed in generator.fold_seeds):
+                raise ValueError("fold_seeds must contain nonnegative integers")
             if generator.request.get("mode") not in modes[name]:
                 raise ValueError(f"{name} initial round supports {sorted(modes[name])}")
             required = {

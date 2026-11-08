@@ -234,6 +234,12 @@ READMEs do not establish cancellation support, so the cancel tool rejects them.
 
 ## Relationship to initial-round CLI
 
+For a complete initial round, prefer `protein_initial_round_start` and
+`protein_initial_round_status`: a detached Python worker handles GET polling and
+stage advancement without further Qwen calls. The PPIFlow-only profile, PDB input
+override and actual Qwen thinking controls are documented in
+[automatic initial rounds](automatic-initial-round.md).
+
 The existing `protein-design initial-round` command remains the bounded,
 deterministic dual-generator workflow. It now validates and forwards the updated
 AF3Score controls, but deliberately requires `mode=pdb`, `num_samples=1` and

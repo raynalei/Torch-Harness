@@ -93,6 +93,10 @@ extend or override this bundled set.
 
 ## Added external-model tools
 
+Automatic full-round orchestration additionally exposes `protein_initial_round_start`
+and `protein_initial_round_status`; these launch/read a deterministic worker rather
+than asking Qwen to poll each model. See [automatic initial rounds](automatic-initial-round.md).
+
 All five documented services now have dedicated main-assistant tools:
 `protein_model_ppiflow`, `protein_model_torchcraft`, `protein_model_torchfold`,
 `protein_model_af3score`, and `protein_model_rosetta`. Shared tools are
