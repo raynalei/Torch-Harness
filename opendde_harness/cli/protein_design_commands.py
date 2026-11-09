@@ -51,7 +51,7 @@ def initial_round(
         None, "--attach-job", help="Reconcile an uncertain submission: checkpoint-job-key=remote-job-id. Repeatable."
     ),
 ) -> None:
-    """Run or resume a deterministic PPIFlow + TorchCraft initial round in the foreground."""
+    """Run or resume a PPIFlow initial round, optionally with compatible TorchCraft generation."""
     from opendde_harness.plugin.protein_design.initial_round.automation import prepare_run, start_round
     from opendde_harness.plugin.protein_design.initial_round.config import InitialRoundConfig
     from opendde_harness.plugin.protein_design.initial_round.runner import InitialRoundRunner

@@ -180,3 +180,18 @@ for subsequent polling. Ctrl-C stops the client and its DockQ subprocess, but
 **does not cancel external Slurm jobs**: most supplied APIs do not document a
 cancellation route. Cancel those through the service/cluster, then inspect the
 checkpoint before restarting. An advisory run lock prevents concurrent runners.
+
+## Paired-chain antibodies
+
+PPIFlow-only initial rounds also accept `mode: antibody`. Use the same request
+fields as `protein_model_ppiflow`: `name`, `antigen_pdb`, `antigen_chain`,
+`framework_dir`, `heavy_chain`, `light_chain`, and `cdr_length`. Optional hotspots
+and sampling controls are forwarded unchanged. Set `chains.binder` to both
+heavy and light chain IDs, `chains.target` to the antigen chains, and include
+every chain in `refold_map`. Both binder sequences are placed in TorchFold
+inputs; template MSA/features are cleared separately for each binder chain.
+DockQ reports the minimum score across target/binder interfaces, excluding the
+heavy/light interface. Rosetta groups both mapped binder chains together.
+Exported binder sequences are joined with `|` in `chains.binder` order.
+TorchCraft has no registered paired-antibody mode, so do not add a TorchCraft
+generator to this configuration. Existing VHH/minibinder pairings are unchanged.

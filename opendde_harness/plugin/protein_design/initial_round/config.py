@@ -10,7 +10,7 @@ import yaml
 from pydantic import ConfigDict, Field, model_validator
 
 from opendde_harness.plugin.protein_design.core.contracts import ContractModel
-from opendde_harness.plugin.protein_design.core.model_requests import AF3ScoreControls
+from opendde_harness.plugin.protein_design.core.model_requests import AF3ScoreControls, validate_request
 
 
 class RoundModel(ContractModel):
@@ -134,13 +134,21 @@ class InitialRoundConfig(RoundModel):
                 raise ValueError("pair nanobody with vhh, or binder with mini_binder")
         if not self.work_dir.is_absolute():
             raise ValueError("work_dir must be absolute and on the shared filesystem")
-        modes = {"ppiflow": {"nanobody", "binder"}, "torchcraft": {"vhh", "mini_binder"}}
+        modes = {"ppiflow": {"nanobody", "binder", "antibody"}, "torchcraft": {"vhh", "mini_binder"}}
         for name, generator in self.generators.items():
             if any(type(seed) is not int or seed < 0 for seed in generator.fold_seeds):
                 raise ValueError("fold_seeds must contain nonnegative integers")
             if generator.request.get("mode") not in modes[name]:
                 raise ValueError(f"{name} initial round supports {sorted(modes[name])}")
             required = {
+                "antibody": (
+                    "antigen_pdb",
+                    "antigen_chain",
+                    "framework_dir",
+                    "heavy_chain",
+                    "light_chain",
+                    "cdr_length",
+                ),
                 "nanobody": ("antigen_pdb", "antigen_chain", "framework_dir", "heavy_chain"),
                 "binder": ("input_pdb", "target_chain", "binder_chain", "samples_min_length", "samples_max_length"),
                 "vhh": ("pdb_path", "hotspot_indices", "target_full_seq", "framework_cif_path"),
@@ -148,7 +156,16 @@ class InitialRoundConfig(RoundModel):
             }[generator.request["mode"]]
             if any(generator.request.get(key) in (None, "") for key in required):
                 raise ValueError(f"{name} {generator.request['mode']} requires {', '.join(required)}")
-            if len(generator.chains.binder) != 1:
+            if generator.request["mode"] == "antibody":
+                # Use the same request contract as the public model tools.
+                validate_request("ppiflow", generator.request)
+                heavy = generator.request["heavy_chain"]
+                light = generator.request["light_chain"]
+                if heavy == light or set(generator.chains.binder) != {heavy, light}:
+                    raise ValueError("antibody binder chains must match distinct heavy_chain and light_chain")
+                if generator.request["antigen_chain"] not in generator.chains.target:
+                    raise ValueError("antibody antigen_chain must be included in target chains")
+            elif len(generator.chains.binder) != 1:
                 raise ValueError("initial round VHH/minibinder modes require exactly one binder chain")
         if not math.isfinite(self.evaluation.dockq_timeout):
             raise ValueError("dockq_timeout must be finite")

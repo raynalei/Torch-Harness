@@ -23,10 +23,13 @@ from opendde_harness.plugin.protein_design.initial_round.storage import Checkpoi
 pytestmark = pytest.mark.in_memory_transport
 
 
-def pdb(path, *, binder="ALA", target="A", chain="B"):
+def pdb(path, *, binder="ALA", target="A", chain="B", light=None):
     lines = []
     serial = 1
-    for chain_id, residue, y in [(target, "GLY", 0), (chain, binder, 4)]:
+    rows = [(target, "GLY", 0), (chain, binder, 4)]
+    if light is not None:
+        rows.append((light, "VAL", 8))
+    for chain_id, residue, y in rows:
         for index in range(1, 7):
             for atom, dx, dz, element in [
                 ("N", 0, 0, "N"),
@@ -273,14 +276,17 @@ def fake_services(round_config, tmp_path, monkeypatch):
                 prepared = json.loads(files.local(body["json_path"]).read_text())
                 assert prepared["sequences"][1]["protein"]["sequence"] == "AAAAAA"
                 out = tmp_path / job
-                pdb(out / "model.pdb", target="X", chain="Y")
+                pdb(out / "model.pdb", target="X", chain="Y", light="Z" if len(prepared["sequences"]) == 3 else None)
                 (out / "summary_confidences.json").write_text(json.dumps({"iptm": 0.95}))
                 outputs[job] = {
                     "files": [files.remote(out / "model.pdb"), files.remote(out / "summary_confidences.json")]
                 }
                 return httpx.Response(202, json={"fold_id": job})
             if source == "rosetta":
-                assert body["chain_group_a"] == "Y" and body["chain_group_b"] == "X"
+                assert body["chain_group_a"] == (
+                    "YZ" if round_config.generators["ppiflow"].request["mode"] == "antibody" else "Y"
+                )
+                assert body["chain_group_b"] == "X"
                 outputs[job] = {"metrics": {"dG_separated": -12.0}}
             else:
                 assert body["mode"] == "pdb" and body["num_samples"] == 1
@@ -531,3 +537,94 @@ def test_generated_fold_input_supports_query_only_or_pipeline_search(round_confi
         content = json.loads(output.read_text())
         assert content["modelSeeds"] == [7]
         assert all(("unpairedMsa" not in entity["protein"]) == pipeline for entity in content["sequences"])
+
+
+@pytest.fixture
+def antibody_config(round_config):
+    value = round_config.model_dump(mode="json")
+    value["generators"].pop("torchcraft")
+    generator = value["generators"]["ppiflow"]
+    generator["request"].update(mode="antibody", name="paired", light_chain="L", cdr_length="CDRH3,10-20,CDRL3,9-11")
+    generator["chains"] = {"target": ["A"], "binder": ["B", "L"], "refold_map": {"A": "X", "B": "Y", "L": "Z"}}
+    generator["fold_template"] = None
+    return InitialRoundConfig.model_validate(value)
+
+
+def test_antibody_contract_matches_model_api_and_chain_roles(antibody_config):
+    from opendde_harness.plugin.protein_design.core.model_requests import validate_request
+
+    generator = antibody_config.generators["ppiflow"]
+    assert validate_request("ppiflow", generator.request)["light_chain"] == "L"
+    for field, bad, message in [
+        ("light_chain", "B", "distinct"),
+        ("antigen_chain", "Q", "target chains"),
+        ("cdr_length", "", "requires"),
+    ]:
+        value = antibody_config.model_dump(mode="json")
+        value["generators"]["ppiflow"]["request"][field] = bad
+        with pytest.raises(ValueError, match=message):
+            InitialRoundConfig.model_validate(value)
+
+
+@pytest.mark.parametrize("template", [False, True])
+def test_antibody_fold_keeps_all_chains_and_clears_both_binder_features(antibody_config, tmp_path, template):
+    generator = antibody_config.generators["ppiflow"]
+    output = tmp_path / "paired_fold.json"
+    sequences = {"A": "GGGGGG", "B": "AAAAAA", "L": "VVVVVV"}
+    prepare_fold(None, sequences, generator.chains, "paired", output)
+    if template:
+        value = json.loads(output.read_text())
+        for entity in value["sequences"][1:]:
+            entity["protein"].update(sequence="OLD", unpairedMsa="OLD", pairedMsa="OLD", templates=[{}])
+        source = tmp_path / "paired_template.json"
+        source.write_text(json.dumps(value))
+        prepare_fold(source, sequences, generator.chains, "paired", output)
+    proteins = {entity["protein"]["id"]: entity["protein"] for entity in json.loads(output.read_text())["sequences"]}
+    assert {key: protein["sequence"] for key, protein in proteins.items()} == {
+        "X": "GGGGGG",
+        "Y": "AAAAAA",
+        "Z": "VVVVVV",
+    }
+    for chain in ("Y", "Z"):
+        assert proteins[chain]["unpairedMsa"] == proteins[chain]["pairedMsa"] == ""
+        assert proteins[chain]["templates"] == []
+
+
+async def test_antibody_round_exports_both_sequences_and_resumes(
+    antibody_config, round_config, fake_services, tmp_path
+):
+    # The protocol fixture observes this config for Rosetta grouping assertions.
+    round_config.generators = antibody_config.generators
+    pdb(tmp_path / "ppiflow/generated.pdb", light="L")
+    transport, calls = fake_services
+    result = await InitialRoundRunner(antibody_config, transport=transport).run()
+    assert result["accepted"] == 1 and result["status"] == "completed"
+    root = antibody_config.work_dir / antibody_config.name
+    candidate = json.loads((root / "initial_candidates.json").read_text())[0]
+    assert candidate["sequence"] == "AAAAAA|VVVVVV"
+    assert set(candidate["metadata"]["chains"]) == {"A", "B", "L"}
+    before = calls.copy()
+    assert await InitialRoundRunner(antibody_config, transport=transport).run() == result
+    assert {k: v for k, v in calls.items() if k[1] == "POST"} == {k: v for k, v in before.items() if k[1] == "POST"}
+
+
+def test_antibody_dockq_scores_target_interfaces_not_heavy_light(monkeypatch):
+    from types import ModuleType
+
+    from opendde_harness.plugin.protein_design.initial_round.dockq import evaluate
+
+    package = ModuleType("DockQ")
+    module = ModuleType("DockQ.DockQ")
+    module.load_PDB = lambda path: path
+
+    def score(model, native, *, chain_map):
+        assert (model, native) == ("refold.pdb", "design.pdb")
+        assert chain_map == {"C": "X", "A": "Y", "B": "Z"}
+        return {("C", "A"): {"DockQ": 0.8}, ("B", "C"): {"DockQ": 0.7}, ("A", "B"): {"DockQ": 0.1}}, None
+
+    module.run_on_all_native_interfaces = score
+    monkeypatch.setitem(sys.modules, "DockQ", package)
+    monkeypatch.setitem(sys.modules, "DockQ.DockQ", module)
+    result = evaluate("refold.pdb", "design.pdb", {"C": "X", "A": "Y", "B": "Z"}, ["C"], ["A", "B"])
+    assert result["dockq"] == 0.7
+    assert len(result["interfaces"]) == 2

@@ -13,8 +13,8 @@ from opendde_harness.plugin.protein_design.initial_round.automation import prepa
 from opendde_harness.plugin.protein_design.initial_round.storage import write_json
 
 
-@pytest.fixture
-def profile(tmp_path):
+@pytest.fixture(params=["nanobody", "antibody"])
+def profile(tmp_path, request):
     import yaml
 
     value = yaml.safe_load((Path(__file__).parents[1] / "docs/examples/initial_round.yaml").read_text())
@@ -25,6 +25,11 @@ def profile(tmp_path):
     value["generators"]["ppiflow"]["fold_template"] = None
     value["generators"]["ppiflow"]["request"]["antigen_pdb"] = "/shared/input.pdb"
     value["generators"]["ppiflow"]["request"]["framework_dir"] = "/shared/frameworks"
+    if request.param == "antibody":
+        generator = value["generators"]["ppiflow"]
+        generator["request"].update(mode="antibody", light_chain="L", cdr_length="CDRH3,10-20,CDRL3,9-11")
+        generator["chains"]["binder"].append("L")
+        generator["chains"]["refold_map"]["L"] = "Z"
     (tmp_path / "input.pdb").write_text("input")
     (tmp_path / "frameworks").mkdir()
     value["evaluation"]["rosetta"] = None
