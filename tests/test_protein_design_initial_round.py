@@ -647,7 +647,7 @@ async def test_sbatch_api_startup_is_lazy_and_check_remains_read_only(
 
     monkeypatch.setattr("opendde_harness.plugin.protein_design.initial_round.services.ensure_api", ensure)
     checked = await InitialRoundRunner(round_config, transport=transport).run(check_only=True)
-    assert checked["status"] == "checked" and starts == [False]
+    assert checked["status"] == "checked" and starts == []
     starts.clear()
     result = await InitialRoundRunner(round_config, transport=transport).run()
     assert result["accepted"] == 2 and starts == [True]
@@ -673,3 +673,49 @@ async def test_ppiflow_cli_options_are_forwarded_unchanged(round_config, fake_se
     assert (await InitialRoundRunner(round_config, transport=transport).run())["accepted"] == 2
     assert len(bodies) == 1
     assert all(bodies[0][key] == value for key, value in extras.items())
+
+
+async def test_cold_sbatch_preflight_never_probes_http_or_slurm(round_config, fake_services, tmp_path, monkeypatch):
+    _, calls = fake_services
+    for name, service in [
+        *((name, g.service) for name, g in round_config.generators.items()),
+        *((name, getattr(round_config.evaluation, name)) for name in ("af3score", "torchfold", "rosetta")),
+    ]:
+        service.sbatch_script = tmp_path / f"{name}.sbatch"
+
+    def forbid_http(request):
+        pytest.fail("sbatch-managed preflight must not probe HTTP")
+
+    async def forbid_start(*args, **kwargs):
+        pytest.fail("sbatch-managed preflight must not resolve or submit Slurm allocations")
+
+    monkeypatch.setattr("opendde_harness.plugin.protein_design.initial_round.services.ensure_api", forbid_start)
+    result = await InitialRoundRunner(round_config, transport=httpx.MockTransport(forbid_http)).run(check_only=True)
+    assert result["status"] == "checked" and not result["inference_verified"]
+    assert all(v == {"reachable": None, "startup": "deferred_until_first_request"} for v in result["services"].values())
+    assert not calls
+
+
+async def test_dockq_preflight_uses_configured_python_and_preserves_actual_error(round_config, tmp_path, monkeypatch):
+    commands = []
+
+    async def process(*args, **kwargs):
+        commands.append(args)
+
+        class Failed:
+            returncode = 1
+
+            async def communicate(self):
+                return b"", b"ModuleNotFoundError: No module named 'numpy'"
+
+        return Failed()
+
+    monkeypatch.setattr(
+        "opendde_harness.plugin.protein_design.initial_round.runner.asyncio.create_subprocess_exec", process
+    )
+    with pytest.raises(RuntimeError, match="DockQ.DockQ"):
+        await InitialRoundRunner(round_config).run(check_only=True)
+    assert commands[0][0] == str(round_config.evaluation.dockq_python)
+    assert commands[0][1].endswith("/initial_round/dockq.py") and commands[0][2] == "--check"
+    log = tmp_path / round_config.name / "dockq-check.log"
+    assert "No module named 'numpy'" in log.read_text()

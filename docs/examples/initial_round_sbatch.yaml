@@ -62,7 +62,7 @@ evaluation:
     metrics_field: metrics
     metric_fields:
       iptm: iptm
-    sbatch_script: /lustre/grp/cmclab/leiy/af3score-api.sbatch
+    sbatch_script: /lustre/grp/cmclab/leiy/af3score_api/af3score-api.sbatch
     sbatch_state_file: /lustre/grp/cmclab/leiy/af3score_api/api-state/af3score.json
     sbatch_resolve_host: true
     startup_timeout: 1800

@@ -101,14 +101,20 @@ class InitialRoundRunner:
             stderr=asyncio.subprocess.PIPE,
         )
         try:
-            stdout, _ = await asyncio.wait_for(process.communicate(), 30)
+            stdout, stderr = await asyncio.wait_for(process.communicate(), 30)
         except BaseException:
             if process.returncode is None:
                 process.kill()
             await process.wait()
             raise
         if process.returncode:
-            raise RuntimeError("DockQ interpreter cannot import DockQ; install the isolated tool environment")
+            log = self.root / "dockq-check.log"
+            log.write_bytes(stdout + b"\n" + stderr)
+            raise RuntimeError(
+                f"DockQ preflight failed using {self.config.evaluation.dockq_python} "
+                f"and {Path(__file__).with_name('dockq.py')} --check; "
+                f"the module is DockQ.DockQ (case-sensitive), not dockq. See {log}"
+            )
         tools = json.loads(stdout)
         previous = self.checkpoint.data.get("tools")
         if previous is not None and previous != tools and self.checkpoint.data["jobs"]:
@@ -127,9 +133,10 @@ class InitialRoundRunner:
         for name, config in configs.items():
             service = SlurmService(config, self.checkpoint, transport=self.transport)
             self.services[name] = service
-            if start_services and config.sbatch_script is not None:
-                # Allocate each API only when its stage is actually reached.
-                result[name] = {"startup": "deferred_until_first_request"}
+            if config.sbatch_script is not None:
+                # Preflight never probes placeholder/loopback URLs or queues API jobs.
+                # Only the stage's first request resolves and checks its allocation.
+                result[name] = {"reachable": None, "startup": "deferred_until_first_request"}
                 continue
             health = await service.get(config.health_path, start_service=start_services)
             if (

@@ -14,6 +14,28 @@ For registered external model requests, use the tool workflow below. The subsequ
 
 ## Registered external model tools
 
+### Initial-round preflight
+
+Use `ddeharness protein-design initial-round -c <profile> --check` for preflight,
+not ad hoc package imports or shell network probes. The runner executes the
+bundled `initial_round/dockq.py --check` with the YAML's `evaluation.dockq_python`.
+The Python module is **`DockQ.DockQ`**, case-sensitive; `import dockq` is not a
+valid test. Do not use the active shell's python/python3 to judge this isolated
+interpreter. If preflight fails, read the reported `dockq-check.log` and diagnose
+the actual exception before proposing an installation. Do not grep the config
+directory or repeatedly search for the package source to perform this check.
+
+For any service with `sbatch_script`, preflight checks no local ports and submits
+no Slurm job. It reports `reachable: null` and startup deferred. This is expected,
+not an unhealthy-service failure. Do not run curl, socket probes, registry health
+checks or a local-port scan to second-guess this result. After authorization,
+launch the worker; each stage submits/reuses its recorded allocation, resolves
+the Slurm node, and checks that node's API before its HTTP task. Never treat the
+placeholder `127.0.0.1` URL as the allocated service address. Resolve real missing
+script/input files, but do not claim sbatch-managed services must be running
+before launch. These instructions apply before the legacy workflow below.
+
+
 For a complete authorized PPIFlow initial round, prefer `protein_initial_round_start` with the configured `initial_round_config` profile and mounted PDB path. The detached Python worker handles generation, GET polling, AF3Score threshold filtering, refold-input construction, TorchFold and design/reference DockQ without further model calls. Report its run directory concisely; query saved progress with `protein_initial_round_status` when asked. Do not manually poll the five model APIs from repeated chat turns. PPIFlow-only profiles support paired VH/VL antibodies with `mode: antibody`, both heavy/light chains in `chains.binder`, and a complete `refold_map`; TorchCraft cannot be paired with this mode. A profile is prepared once with the appropriate framework, chains, hotspots, shared paths and service configuration; do not invent these scientific inputs from a PDB alone.
 
 Call `protein_model_list` to discover configured aliases, the active config path and request schemas. An empty models list means tool code is installed but no external API endpoints are configured in that instance; it does not mean the tools are missing. The five named tools are `protein_model_ppiflow`, `protein_model_torchcraft`, `protein_model_torchfold`, `protein_model_af3score` and `protein_model_rosetta`; each exposes its own request schema. Use the documented `protein-design models register` command to register operator-supplied endpoints in the correct config, then restart Harness. Never invent a working endpoint. Registration is independent of chat-provider configuration and the legacy compute URL. Use only the operations the registry advertises. A configured endpoint or health response is not evidence of successful model inference.

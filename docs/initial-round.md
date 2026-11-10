@@ -55,9 +55,12 @@ uv run --frozen ddeharness protein-design initial-round -c initial.yaml
 ```
 
 The command runs in the foreground. Use a persistent terminal on the submission
-host for long jobs. `--check` validates local inputs, the isolated DockQ import,
-and API health responses without submitting inference jobs; it does not prove
-GPU/model readiness. Exit codes: 0 completed/check passed, 1 configuration or
+host for long jobs. `--check` validates local inputs and runs the bundled
+`dockq.py --check` with `evaluation.dockq_python` (module `DockQ.DockQ`, not
+`dockq`). Failed subprocess output is saved to `dockq-check.log`. Sbatch-managed
+API checks are deferred without HTTP/port probes or Slurm submissions; only
+externally managed APIs are probed during preflight. This does not prove GPU/model
+readiness. Exit codes: 0 completed/check passed, 1 configuration or
 round-level error, 2 partial completion with candidate errors. Zero accepted
 candidates is a legitimate completed `no_hits` outcome, not a fabricated success.
 
@@ -237,9 +240,9 @@ an already configured tunnel or fixed service address; it does not create a tunn
 
 Each API starts lazily when its stage is reached. The first registry request can
 wait up to the startup budget, but it still does not wait for inference to finish.
-Initial-round `--check` and registry health probes never submit API jobs. With cold
-APIs, `--check` reports that they are not ready; launch the authorized normal run
-to start them automatically. Successful health checks do not validate inference.
+Initial-round `--check` and registry health probes never submit API jobs. For sbatch-managed APIs, `--check` skips HTTP/port probes and reports
+`reachable: null` with startup deferred, even on a cold start. Launch the authorized
+normal run to start them automatically. Successful health checks do not validate inference.
 
 Use the same `sbatch_state_file` for the same API in registry and pipeline config
 to share its allocation. If omitted, state is stored beside the script in a file
