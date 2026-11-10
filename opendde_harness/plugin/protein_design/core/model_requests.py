@@ -57,6 +57,9 @@ class PPIFlowRequest(ContractModel):
     name: str
     samples_per_target: int = Field(default=1, ge=1, le=1000)
     num_timesteps: int | None = Field(default=None, ge=1)
+    config: str | None = None
+    model_weights: str | None = None
+    output_dir: str | None = None
     antigen_pdb: str | None = None
     antigen_chain: str | None = None
     framework_dir: str | None = None

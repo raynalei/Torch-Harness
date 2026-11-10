@@ -159,7 +159,7 @@ structures captured in the client's tracing data. See the [dashboard guide](docs
 
 For a deterministic PPIFlow + TorchCraft initial round using external Slurm APIs,
 see the [initial-round guide](docs/initial-round.md) and
-[example configuration](docs/examples/initial_round.yaml).
+[example configuration](docs/examples/initial_round_sbatch.yaml).
 To call PPIFlow, TorchCraft, TorchFold and AF3Score directly from Qwen or another
 chat provider, see [registered protein-model tools](docs/protein-model-tools.md).
 For the original tools/skills and registration troubleshooting, see the

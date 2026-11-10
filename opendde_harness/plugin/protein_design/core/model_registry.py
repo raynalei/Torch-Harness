@@ -139,6 +139,9 @@ class ProteinModelRegistry:
     def validate_paths(model, payload):
         for key, value in payload.items():
             if key not in {
+                "config",
+                "model_weights",
+                "output_dir",
                 "input_pdb_dir",
                 "json_dir",
                 "h5_dir",

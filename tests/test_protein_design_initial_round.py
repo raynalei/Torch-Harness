@@ -444,8 +444,8 @@ async def test_generator_can_probe_openapi_when_health_route_is_not_documented(r
 
 
 def test_example_configuration_parses_without_optional_model_imports():
-    config = InitialRoundConfig.load(Path(__file__).parents[1] / "docs/examples/initial_round.yaml")
-    assert set(config.generators) == {"ppiflow", "torchcraft"}
+    config = InitialRoundConfig.load(Path(__file__).parents[1] / "docs/examples/initial_round_sbatch.yaml")
+    assert set(config.generators) == {"ppiflow"}
     assert config.generators["ppiflow"].service.health_path == "/openapi.json"
 
 
@@ -651,3 +651,25 @@ async def test_sbatch_api_startup_is_lazy_and_check_remains_read_only(
     starts.clear()
     result = await InitialRoundRunner(round_config, transport=transport).run()
     assert result["accepted"] == 2 and starts == [True]
+
+
+async def test_ppiflow_cli_options_are_forwarded_unchanged(round_config, fake_services):
+    transport, _ = fake_services
+    extras = {
+        "config": "/shared/test_antibody_v3.yaml",
+        "model_weights": "/shared/model_214.ckpt.enc",
+        "output_dir": "/shared/sample_antibody/3/",
+    }
+    round_config.generators["ppiflow"].request.update(extras)
+    original = transport.handler
+    bodies = []
+
+    def handler(request):
+        if request.method == "POST" and request.url.host == "ppiflow.test":
+            bodies.append(json.loads(request.content))
+        return original(request)
+
+    transport.handler = handler
+    assert (await InitialRoundRunner(round_config, transport=transport).run())["accepted"] == 2
+    assert len(bodies) == 1
+    assert all(bodies[0][key] == value for key, value in extras.items())

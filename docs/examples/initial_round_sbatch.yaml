@@ -1,10 +1,12 @@
-# Deployment example: replace shared paths, scripts and response fields for your services.
-# The URL host is replaced by the single Slurm node; ports stay as configured.
-name: vhh_initial
-work_dir: /shared/harness/runs
+# 7n0a paired VH/VL initial round. API servers are started exclusively through sbatch.
+# Paths are deployment-specific. Confirm scripts, shared storage and DockQ before launch.
+# PPIFlow API must accept config/model_weights/output_dir and forward them to sample_antibody.
+# PYTHONPATH is configured in the API/service environment, not as an HTTP request argument.
+name: 7n0a
+work_dir: /lustre/grp/cmclab/leiy/harness/runs
 path_mappings:
-- local: /shared
-  remote: /shared
+- local: /lustre/grp/cmclab
+  remote: /lustre/grp/cmclab
 generators:
   ppiflow:
     service:
@@ -13,62 +15,40 @@ generators:
       status_field: status
       exit_code_field: exit_code
       require_exit_code: true
-      sbatch_script: /shared/scripts/ppiflow-api.sbatch
-      sbatch_state_file: /shared/harness/api-state/ppiflow.json
+      sbatch_script: /lustre/grp/cmclab/leiy/ppiflow_api/ppiflow-api.sbatch
+      sbatch_state_file: /lustre/grp/cmclab/leiy/ppiflow_api/api-state/ppiflow.json
       sbatch_resolve_host: true
       startup_timeout: 1800
       startup_poll_interval: 5
     request:
-      mode: nanobody
-      name: initial_ppiflow
-      antigen_pdb: /shared/inputs/target.pdb
-      antigen_chain: A
-      framework_dir: /shared/inputs/frameworks
-      heavy_chain: B
-      specified_hotspots: A4,A10
-      samples_per_target: 10
+      mode: antibody
+      name: 7n0a
+      antigen_pdb: /lustre/grp/cmclab/share/guoly/app_code/test_data/antigen/clean_7n0a.pdb
+      antigen_chain: C
+      specified_hotspots: C4,C10,C117,C125
+      framework_dir: /lustre/grp/cmclab/share/guoly/app_code/test_data/framework_scfv
+      heavy_chain: A
+      light_chain: B
+      cdr_length: CDRH1,8-9,CDRH2,7-8,CDRH3,10-20,CDRL1,7-7,CDRL2,3-3,CDRL3,9-11
+      config: /lustre/grp/cmclab/share/guoly/app_code/v3_basic/configs/test_antibody_v3.yaml
+      samples_per_target: 5
       num_timesteps: 200
+      model_weights: /lustre/grp/cmclab/share/changdr/model/20260618_distill/model_214.ckpt.enc
+      output_dir: /lustre/grp/cmclab/guoly/pjt/sample_code_api/test_api_samples/sample_antibody/3/
     chains:
       target:
-      - A
+      - C
       binder:
+      - A
       - B
       refold_map:
+        C: C
         A: A
         B: B
-    fold_template: /shared/inputs/prepared_fold.json
+    fold_template: null
     structure_glob: '*.pdb'
-    per_source_refold_limit: 3
-  torchcraft:
-    service:
-      url: http://127.0.0.1:8020
-      health_path: /openapi.json
-      status_field: status
-      exit_code_field: exit_code
-      sbatch_script: /shared/scripts/torchcraft-api.sbatch
-      sbatch_state_file: /shared/harness/api-state/torchcraft.json
-      sbatch_resolve_host: true
-      startup_timeout: 1800
-      startup_poll_interval: 5
-    request:
-      mode: vhh
-      name: initial_torchcraft
-      pdb_path: /shared/inputs/target.pdb
-      hotspot_indices: 4,10
-      target_full_seq: /shared/inputs/target_sequence.csv
-      framework_cif_path: /shared/inputs/framework.cif
-      num_designs: 10
-      seed: 1
-    chains:
-      target:
-      - A
-      binder:
-      - B
-      refold_map:
-        A: A
-        B: B
-    fold_template: /shared/inputs/prepared_fold.json
-    per_source_refold_limit: 3
+    per_source_refold_limit: null
+    deduplicate_sequences: false
 evaluation:
   af3score_options:
     run_data_pipeline: false
@@ -82,8 +62,8 @@ evaluation:
     metrics_field: metrics
     metric_fields:
       iptm: iptm
-    sbatch_script: /shared/scripts/af3score-api.sbatch
-    sbatch_state_file: /shared/harness/api-state/af3score.json
+    sbatch_script: /lustre/grp/cmclab/leiy/af3score-api.sbatch
+    sbatch_state_file: /lustre/grp/cmclab/leiy/af3score_api/api-state/af3score.json
     sbatch_resolve_host: true
     startup_timeout: 1800
     startup_poll_interval: 5
@@ -91,8 +71,8 @@ evaluation:
     url: http://127.0.0.1:8040
     metric_fields:
       iptm: iptm
-    sbatch_script: /shared/scripts/torchfold-api.sbatch
-    sbatch_state_file: /shared/harness/api-state/torchfold.json
+    sbatch_script: /lustre/grp/cmclab/leiy/torchfold_api/torchfold-api.sbatch
+    sbatch_state_file: /lustre/grp/cmclab/leiy/torchfold_api/api-state/torchfold.json
     sbatch_resolve_host: true
     startup_timeout: 1800
     startup_poll_interval: 5
@@ -101,8 +81,8 @@ evaluation:
     metrics_field: metrics
     metric_fields:
       interface_dg: dG_separated
-    sbatch_script: /shared/scripts/rosetta-api.sbatch
-    sbatch_state_file: /shared/harness/api-state/rosetta.json
+    sbatch_script: /lustre/grp/cmclab/leiy/rosetta_api/rosetta-api.sbatch
+    sbatch_state_file: /lustre/grp/cmclab/leiy/rosetta_api/api-state/rosetta.json
     sbatch_resolve_host: true
     startup_timeout: 1800
     startup_poll_interval: 5
@@ -112,7 +92,7 @@ evaluation:
   rosetta_options:
     pack_input: false
     pack_separated: true
-  dockq_python: /shared/tools/dockq/bin/python
+  dockq_python: /lustre/grp/cmclab/leiy/conda_envs/ppi_env/bin/python
   dockq_timeout: 300
   min_af3score_iptm: 0.5
   min_refold_iptm: 0.8

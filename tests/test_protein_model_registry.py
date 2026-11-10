@@ -518,3 +518,31 @@ async def test_rosetta_has_its_own_named_tool_and_six_operations(api, tmp_path):
     )
     assert result["state"] == "submitted"
     assert api[1][0].url.path == "/v1/tools/structure_score"
+
+
+async def test_ppiflow_antibody_accepts_cli_paths_and_rejects_paths_outside_roots(tmp_path, api):
+    transport, requests, _ = api
+    registry = ProteinModelRegistry(
+        {"ppi": {"kind": "ppiflow", "service": {"url": "https://ppi.test"}, "allowed_input_roots": ["/shared"]}},
+        tmp_path,
+        transport=transport,
+    )
+    payload = {
+        "mode": "antibody",
+        "name": "7n0a",
+        "antigen_pdb": "/shared/target.pdb",
+        "antigen_chain": "C",
+        "framework_dir": "/shared/framework_scfv",
+        "heavy_chain": "A",
+        "light_chain": "B",
+        "cdr_length": "CDRH3,10-20,CDRL3,9-11",
+        "config": "/shared/config.yaml",
+        "model_weights": "/shared/model.ckpt.enc",
+        "output_dir": "/shared/outputs/",
+    }
+    assert (await registry.submit("ppi", "paired", payload))["state"] == "submitted"
+    body = json.loads(next(r for r in requests if r.method == "POST").content)
+    assert all(body[key] == value for key, value in payload.items())
+    for field in ("config", "model_weights", "output_dir"):
+        with pytest.raises(ValueError, match="input roots"):
+            await registry.submit("ppi", "bad_" + field, {**payload, field: "/outside/file"})

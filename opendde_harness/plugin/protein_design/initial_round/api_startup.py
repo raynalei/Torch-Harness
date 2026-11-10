@@ -78,8 +78,6 @@ async def ensure_api(config: Service, client: httpx.AsyncClient, *, start: bool 
 
 async def _ensure_locked(config, client, script: Path, state_path: Path, deadline: float, *, start: bool):
     state = json.loads(state_path.read_text()) if state_path.exists() else None
-    if state is None and await healthy(client, config.health_path):
-        return
     if not script.is_file():
         raise ValueError(f"API sbatch script does not exist: {script}")
     signature = fingerprint(
@@ -89,7 +87,7 @@ async def _ensure_locked(config, client, script: Path, state_path: Path, deadlin
         raise ValueError("API script or URL changed; reconcile the old allocation and use a new sbatch_state_file")
     if state is None:
         if not start:
-            raise ApiStartupError("API is not healthy; --check does not submit API allocations")
+            raise ApiStartupError("API has no saved sbatch allocation; --check does not submit API allocations")
         state = {"signature": signature, "state": "submission_uncertain"}
         write_json(state_path, state)
         # A timeout or lost stdout may still mean the scheduler accepted the job.

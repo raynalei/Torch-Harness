@@ -149,12 +149,19 @@ async def test_concurrent_clients_submit_one_allocation(api):
             await client.close()
 
 
-async def test_healthy_existing_api_does_not_submit(api):
+async def test_untracked_healthy_api_is_not_reused(api):
     config, commands, _, _ = api
-    client = ServiceConnection(config, transport=httpx.MockTransport(lambda _: httpx.Response(200, json={"ok": True})))
+    hosts = []
+
+    def handler(request):
+        hosts.append(request.url.host)
+        return httpx.Response(200, json={"ok": True})
+
+    client = ServiceConnection(config, transport=httpx.MockTransport(handler))
     try:
         await client.post("v1/designs", json={})
-        assert commands == []
+        assert commands[0][0] == "sbatch"
+        assert set(hosts) == {"gpu01"}
     finally:
         await client.close()
 

@@ -17,11 +17,28 @@ from opendde_harness.plugin.protein_design.initial_round.storage import write_js
 def profile(tmp_path, request):
     import yaml
 
-    value = yaml.safe_load((Path(__file__).parents[1] / "docs/examples/initial_round.yaml").read_text())
+    value = yaml.safe_load((Path(__file__).parents[1] / "docs/examples/initial_round_sbatch.yaml").read_text())
     value.update(
         name="automated", work_dir=str(tmp_path), path_mappings=[{"local": str(tmp_path), "remote": "/shared"}]
     )
-    value["generators"].pop("torchcraft")
+    value["generators"].pop("torchcraft", None)
+    generator = value["generators"]["ppiflow"]
+    generator["request"] = {
+        "mode": "nanobody",
+        "name": "test",
+        "antigen_pdb": "/shared/input.pdb",
+        "antigen_chain": "A",
+        "framework_dir": "/shared/frameworks",
+        "heavy_chain": "B",
+    }
+    generator["chains"] = {"target": ["A"], "binder": ["B"], "refold_map": {"A": "X", "B": "Y"}}
+    # These control tests mock the detached worker rather than submit Slurm jobs.
+    for service in [
+        generator["service"],
+        *(value["evaluation"][name] for name in ("af3score", "torchfold", "rosetta")),
+    ]:
+        service.pop("sbatch_script", None)
+        service.pop("sbatch_state_file", None)
     value["generators"]["ppiflow"]["fold_template"] = None
     value["generators"]["ppiflow"]["request"]["antigen_pdb"] = "/shared/input.pdb"
     value["generators"]["ppiflow"]["request"]["framework_dir"] = "/shared/frameworks"

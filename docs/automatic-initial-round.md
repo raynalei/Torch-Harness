@@ -22,7 +22,7 @@ submitted job uses its saved ID instead of POSTing it again. A lost submission
 response remains uncertain and requires operator reconciliation, not blind retry.
 
 TorchCraft is optional, and Rosetta runs only if `evaluation.rosetta` is present.
-The prior dual-generator configuration remains supported. Every above-threshold
+VHH/minibinder generator combinations remain supported by the runner; the only bundled deployment profile is the sbatch example. Every above-threshold
 structure proceeds when `per_source_refold_limit: null` and
 `deduplicate_sequences: false`; a top-K limit and sequence deduplication are
 explicit optional policies. Below-threshold and exactly-equal candidates do not
@@ -30,9 +30,9 @@ submit TorchFold jobs. All-filtered runs finish with `no_hits`.
 
 ## Prepare once, then provide a PDB
 
-Copy [the PPIFlow-only profile](examples/ppiflow_initial_round.yaml). Replace
+Copy [the paired-antibody sbatch profile](examples/initial_round_sbatch.yaml). Replace
 service endpoints/response fields, shared paths, chain IDs, framework and hotspot
-policy with your already validated inputs. The example is for nanobody/VHH;
+policy with your already validated inputs. The example is for paired VH/VL antibody generation;
 PPIFlow `binder` can be configured using its documented input/chain/length fields.
 A PDB alone does not determine the binder format, framework or scientific epitope;
 those decisions belong in this prepared profile. The PDB must be on the mounted
@@ -49,11 +49,11 @@ Validate the generated JSON against the deployed TorchFold version before scalin
 
 ```bash
 uv run --frozen ddeharness protein-design initial-round \
-  -c /actual/profiles/ppiflow_initial_round.yaml \
+  -c /actual/profiles/initial_round_sbatch.yaml \
   --pdb /lustre/project/inputs/my_target.pdb --name target_001 --check
 
 uv run --frozen ddeharness protein-design initial-round \
-  -c /actual/profiles/ppiflow_initial_round.yaml \
+  -c /actual/profiles/initial_round_sbatch.yaml \
   --pdb /lustre/project/inputs/my_target.pdb --name target_001 --detach
 ```
 
@@ -90,7 +90,7 @@ configuration, preserving the existing provider and service registrations:
 
 ```json
 {
-  "initial_round_config": "/actual/profiles/ppiflow_initial_round.yaml"
+  "initial_round_config": "/actual/profiles/initial_round_sbatch.yaml"
 }
 ```
 

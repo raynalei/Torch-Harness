@@ -37,14 +37,16 @@ example. Neither CUDA nor the model dependencies belong in the client environmen
 
 ## Configuration and execution
 
-Copy [the example](examples/initial_round.yaml) to a local, reviewed configuration.
+Copy [the example](examples/initial_round_sbatch.yaml) to a local, reviewed configuration.
 Replace the service URLs, paths, output chain IDs and hotspot indices. The example
-uses VHH: PPIFlow `nanobody` plus TorchCraft `vhh`. For minibinders use PPIFlow
+uses paired VH/VL: PPIFlow `antibody` with target C, heavy A and light B,
+and no TorchCraft generator. VHH uses PPIFlow `nanobody` plus optional TorchCraft
+`vhh`. For minibinders use PPIFlow
 `binder` with `input_pdb`, `target_chain`, `binder_chain`, `samples_min_length`,
 `samples_max_length`; pair it with TorchCraft `mini_binder`, providing `pdb_path`,
 `hotspot_indices`, `target_full_seq`, and `design_length`. Requests otherwise pass
-through to the documented services. Paired antibodies and partial flow are not
-part of this initial-round command.
+through to the documented services. Partial-flow modes are not part of this
+initial-round command.
 
 ```bash
 uv run --frozen ddeharness protein-design initial-round -c initial.yaml --check
@@ -200,7 +202,7 @@ generator to this configuration. Existing VHH/minibinder pairings are unchanged.
 
 Each `Service` accepts optional API startup fields. The same fields work in
 `plugins.config.protein-design.model_services.<alias>.service` for individual
-model tools. See [the five-service example](examples/initial_round_sbatch.yaml).
+model tools. See [the sbatch deployment example](examples/initial_round_sbatch.yaml).
 
 ```yaml
 generators:
@@ -217,15 +219,14 @@ generators:
 ```
 
 Configure the equivalent block under `evaluation.af3score`, `evaluation.torchfold`
-and optional `evaluation.rosetta`, or `generators.torchcraft`. Omit
-`sbatch_script` to preserve the existing externally-managed API behavior.
+and optional `evaluation.rosetta`, or `generators.torchcraft`. The supported initial-round deployment example uses `sbatch_script` for every API.
+Independent registry services without sbatch configuration retain their HTTP behavior.
 Scripts and state files are absolute paths on the Harness host, not paths
 translated by `path_mappings`. Scripts must exist; their log directories, Conda
 environments, API code and model resources must already be prepared.
 
-On the first request to a stage, Harness checks health. If no saved allocation
-exists and the configured API is already healthy, it reuses that server.
-Otherwise it runs `sbatch --parsable SCRIPT` once, saves the allocation ID, waits
+On the first request to a stage, Harness uses only the saved sbatch allocation.
+With no saved allocation it runs `sbatch --parsable SCRIPT` once, saves the allocation ID, waits
 for RUNNING, expands the assigned node with `scontrol show hostnames`, substitutes
 that hostname in the configured URL, and waits for the health endpoint before
 sending the inference POST. The port and URL path are retained. Scripts must
@@ -252,3 +253,18 @@ reconciling the old allocation and using a new state file. Cluster-qualified and
 multi-node allocations are not supported. Harness does not cancel API allocations
 automatically, nor does stopping an API cancel inference jobs. Maintain durable
 API job storage across restarts; changing nodes does not migrate files.
+
+### PPIFlow command parameters
+
+The sole bundled profile, `examples/initial_round_sbatch.yaml`, now configures
+7n0a paired-antibody generation. It includes `request.config`,
+`request.model_weights`, and `request.output_dir`, which are forwarded unchanged
+to PPIFlow's `/v1/designs` endpoint alongside the antigen, framework, CDR and
+sampling parameters. The deployed API must accept these fields and pass them to
+`python -m ppiflowV3_1017.sample_antibody`; updating Harness cannot change a
+separately deployed API server. These paths are subject to registry input-root
+validation. Configure `PYTHONPATH` in the service or inference worker environment,
+relative to the intended PPIFlow code directory, not the Harness working directory.
+No untracked healthy API is used as a fallback: an API with sbatch configured
+must have a recorded allocation, or Harness submits its script. Health is checked
+only after resolving that allocation, as a readiness gate before task submission.
