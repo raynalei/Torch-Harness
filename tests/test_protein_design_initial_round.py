@@ -628,3 +628,26 @@ def test_antibody_dockq_scores_target_interfaces_not_heavy_light(monkeypatch):
     result = evaluate("refold.pdb", "design.pdb", {"C": "X", "A": "Y", "B": "Z"}, ["C"], ["A", "B"])
     assert result["dockq"] == 0.7
     assert len(result["interfaces"]) == 2
+
+
+async def test_sbatch_api_startup_is_lazy_and_check_remains_read_only(
+    round_config, fake_services, tmp_path, monkeypatch
+):
+    transport, calls = fake_services
+    script = tmp_path / "ppiflow.sbatch"
+    script.write_text("#!/bin/bash\n")
+    round_config.generators["ppiflow"].service.sbatch_script = script
+    starts = []
+
+    async def ensure(config, client, *, start=True):
+        if config.sbatch_script is not None:
+            starts.append(start)
+            # No inference has been posted before the generator's API startup.
+            assert calls[("ppiflow", "POST")] == 0
+
+    monkeypatch.setattr("opendde_harness.plugin.protein_design.initial_round.services.ensure_api", ensure)
+    checked = await InitialRoundRunner(round_config, transport=transport).run(check_only=True)
+    assert checked["status"] == "checked" and starts == [False]
+    starts.clear()
+    result = await InitialRoundRunner(round_config, transport=transport).run()
+    assert result["accepted"] == 2 and starts == [True]

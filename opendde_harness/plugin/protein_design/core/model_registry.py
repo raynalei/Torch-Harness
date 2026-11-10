@@ -87,7 +87,7 @@ class ProteinModelRegistry:
             client = None
             try:
                 client = self.client(model)
-                health = await client.get(model.service.health_path)
+                health = await client.get(model.service.health_path, start_service=False)
                 item["reachable"] = True
                 item["healthy"] = (
                     isinstance(health, dict)
@@ -218,8 +218,13 @@ class ProteinModelRegistry:
             }
             client = self.client(model)
             try:
+                await client.ensure_ready()
+            except BaseException:
+                await client.close()
+                raise
+            try:
                 write_json(path, record)
-                response = await client.client.post(route.lstrip("/"), json=payload)
+                response = await client.post(route.lstrip("/"), json=payload)
                 response.raise_for_status()
                 submitted = response.json()
                 remote_id = submitted[id_field]
@@ -329,11 +334,12 @@ class ProteinModelRegistry:
                 raise ValueError("cannot cancel an uncertain submission without a verified remote ID")
             if record.get("cancel_state"):
                 return self.public_record(record)
-            record["cancel_state"] = "uncertain"
-            write_json(path, record)
             client = self.client(model)
             try:
-                response = await client.client.post(f"v1/tasks/{record['remote_id']}/cancel")
+                await client.ensure_ready()
+                record["cancel_state"] = "uncertain"
+                write_json(path, record)
+                response = await client.post(f"v1/tasks/{record['remote_id']}/cancel")
                 response.raise_for_status()
                 record["cancel_state"] = "requested"
                 write_json(path, record)

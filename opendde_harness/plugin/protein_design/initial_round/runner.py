@@ -91,7 +91,7 @@ class InitialRoundRunner:
         if len(set(target_sequences)) > 1:
             raise ValueError("both generators must design against the same target chain sequences")
 
-    async def check(self):
+    async def check(self, *, start_services=False):
         self.validate_files()
         process = await asyncio.create_subprocess_exec(
             str(self.config.evaluation.dockq_python),
@@ -127,7 +127,11 @@ class InitialRoundRunner:
         for name, config in configs.items():
             service = SlurmService(config, self.checkpoint, transport=self.transport)
             self.services[name] = service
-            health = await service.get(config.health_path)
+            if start_services and config.sbatch_script is not None:
+                # Allocate each API only when its stage is actually reached.
+                result[name] = {"startup": "deferred_until_first_request"}
+                continue
+            health = await service.get(config.health_path, start_service=start_services)
             if (
                 not isinstance(health, dict)
                 or health.get("ok") is False
@@ -439,7 +443,7 @@ class InitialRoundRunner:
             if unknown:
                 raise ValueError(f"--attach-job keys must exist in checkpoint: {sorted(unknown)}")
             try:
-                health = await self.check()
+                health = await self.check(start_services=not check_only)
                 if check_only:
                     return {"status": "checked", "services": health, "inference_verified": False}
                 candidates = await self.generate()

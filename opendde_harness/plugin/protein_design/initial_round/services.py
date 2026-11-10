@@ -10,6 +10,7 @@ from urllib.parse import quote
 
 import httpx
 
+from .api_startup import ensure_api
 from .config import Service
 from .storage import Checkpoint, fingerprint, select
 
@@ -27,6 +28,7 @@ class ServiceConnection:
 
     def __init__(self, config: Service, *, transport=None):
         self.config = config
+        self._api_ready = False
         headers = {}
         if config.token_env:
             token = os.environ.get(config.token_env)
@@ -43,7 +45,17 @@ class ServiceConnection:
     async def close(self):
         await self.client.aclose()
 
-    async def get(self, path: str):
+    async def ensure_ready(self, *, start: bool = True):
+        if not self._api_ready:
+            await ensure_api(self.config, self.client, start=start)
+            self._api_ready = True
+
+    async def post(self, path: str, **kwargs):
+        await self.ensure_ready()
+        return await self.client.post(path.lstrip("/"), **kwargs)
+
+    async def get(self, path: str, *, start_service: bool = True):
+        await self.ensure_ready(start=start_service)
         response = await self.client.get(path.lstrip("/"))
         response.raise_for_status()
         return response.json()
@@ -70,11 +82,12 @@ class SlurmService(ServiceConnection):
         if job and job["request_hash"] != signature:
             raise ValueError(f"job request changed: {key}")
         if job is None:
+            await self.ensure_ready()
             job = jobs[key] = {"request_hash": signature, "state": "submission_uncertain", "submitted_at": time.time()}
             self.checkpoint.save()
             # Checkpoint before POST: a crash in this window needs manual reconciliation.
             try:
-                response = await self.client.post(route.lstrip("/"), json=payload)
+                response = await self.post(route, json=payload)
                 response.raise_for_status()
                 job_id = response.json()[id_field]
                 if not isinstance(job_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", job_id):

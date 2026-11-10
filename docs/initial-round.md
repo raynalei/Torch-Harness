@@ -195,3 +195,60 @@ heavy/light interface. Rosetta groups both mapped binder chains together.
 Exported binder sequences are joined with `|` in `chains.binder` order.
 TorchCraft has no registered paired-antibody mode, so do not add a TorchCraft
 generator to this configuration. Existing VHH/minibinder pairings are unchanged.
+
+## Starting API servers with sbatch
+
+Each `Service` accepts optional API startup fields. The same fields work in
+`plugins.config.protein-design.model_services.<alias>.service` for individual
+model tools. See [the five-service example](examples/initial_round_sbatch.yaml).
+
+```yaml
+generators:
+  ppiflow:
+    service:
+      url: http://127.0.0.1:8010
+      health_path: /openapi.json
+      sbatch_script: /shared/scripts/ppiflow-api.sbatch
+      sbatch_state_file: /shared/harness/api-state/ppiflow.json
+      sbatch_resolve_host: true
+      startup_timeout: 1800
+      startup_poll_interval: 5
+      slurm_command_timeout: 30
+```
+
+Configure the equivalent block under `evaluation.af3score`, `evaluation.torchfold`
+and optional `evaluation.rosetta`, or `generators.torchcraft`. Omit
+`sbatch_script` to preserve the existing externally-managed API behavior.
+Scripts and state files are absolute paths on the Harness host, not paths
+translated by `path_mappings`. Scripts must exist; their log directories, Conda
+environments, API code and model resources must already be prepared.
+
+On the first request to a stage, Harness checks health. If no saved allocation
+exists and the configured API is already healthy, it reuses that server.
+Otherwise it runs `sbatch --parsable SCRIPT` once, saves the allocation ID, waits
+for RUNNING, expands the assigned node with `scontrol show hostnames`, substitutes
+that hostname in the configured URL, and waits for the health endpoint before
+sending the inference POST. The port and URL path are retained. Scripts must
+allocate exactly one node and bind the API to `0.0.0.0`; Harness needs `sbatch`,
+`squeue` and `scontrol`, Slurm submission rights, and direct network access to the
+compute node. `sbatch_resolve_host: false` retains the configured hostname for
+an already configured tunnel or fixed service address; it does not create a tunnel.
+
+Each API starts lazily when its stage is reached. The first registry request can
+wait up to the startup budget, but it still does not wait for inference to finish.
+Initial-round `--check` and registry health probes never submit API jobs. With cold
+APIs, `--check` reports that they are not ready; launch the authorized normal run
+to start them automatically. Successful health checks do not validate inference.
+
+Use the same `sbatch_state_file` for the same API in registry and pipeline config
+to share its allocation. If omitted, state is stored beside the script in a file
+keyed by script path and configured URL. State access is locked across processes.
+Queue/startup timeouts retain the ID for a later retry. A missing or terminal
+allocation fails visibly; it is not resubmitted automatically. A lost sbatch
+response is marked uncertain before submission: reconcile with Slurm, then add
+the confirmed numeric `job_id` to that state file. Never remove uncertain state
+without checking for an existing allocation. Script or URL changes require
+reconciling the old allocation and using a new state file. Cluster-qualified and
+multi-node allocations are not supported. Harness does not cancel API allocations
+automatically, nor does stopping an API cancel inference jobs. Maintain durable
+API job storage across restarts; changing nodes does not migrate files.

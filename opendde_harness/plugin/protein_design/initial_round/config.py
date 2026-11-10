@@ -32,6 +32,12 @@ class Service(RoundModel):
     url: str
     health_path: str = Field(default="/health", pattern=r"^/[A-Za-z0-9_./-]*$")
     token_env: str | None = None
+    sbatch_script: Path | None = None
+    sbatch_state_file: Path | None = None
+    sbatch_resolve_host: bool = True
+    startup_timeout: float = Field(default=1800, gt=0)
+    startup_poll_interval: float = Field(default=5, gt=0)
+    slurm_command_timeout: float = Field(default=30, gt=0)
     request_timeout: float = Field(default=30, gt=0)
     poll_interval: float = Field(default=10, gt=0)
     job_timeout: float = Field(default=86400, gt=0)
@@ -47,6 +53,11 @@ class Service(RoundModel):
     def valid_url(self):
         from urllib.parse import urlsplit
 
+        for path in (self.sbatch_script, self.sbatch_state_file):
+            if path is not None and not path.is_absolute():
+                raise ValueError("sbatch paths must be absolute paths on the Harness host")
+        if self.sbatch_state_file is not None and self.sbatch_script is None:
+            raise ValueError("sbatch_state_file requires sbatch_script")
         parts = urlsplit(self.url)
         if parts.scheme not in {"http", "https"} or not parts.hostname or parts.username or parts.password:
             raise ValueError("service URL must be HTTP(S), without embedded credentials")

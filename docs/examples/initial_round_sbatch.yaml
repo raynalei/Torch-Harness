@@ -1,0 +1,119 @@
+# Deployment example: replace shared paths, scripts and response fields for your services.
+# The URL host is replaced by the single Slurm node; ports stay as configured.
+name: vhh_initial
+work_dir: /shared/harness/runs
+path_mappings:
+- local: /shared
+  remote: /shared
+generators:
+  ppiflow:
+    service:
+      url: http://127.0.0.1:8010
+      health_path: /openapi.json
+      status_field: status
+      exit_code_field: exit_code
+      require_exit_code: true
+      sbatch_script: /shared/scripts/ppiflow-api.sbatch
+      sbatch_state_file: /shared/harness/api-state/ppiflow.json
+      sbatch_resolve_host: true
+      startup_timeout: 1800
+      startup_poll_interval: 5
+    request:
+      mode: nanobody
+      name: initial_ppiflow
+      antigen_pdb: /shared/inputs/target.pdb
+      antigen_chain: A
+      framework_dir: /shared/inputs/frameworks
+      heavy_chain: B
+      specified_hotspots: A4,A10
+      samples_per_target: 10
+      num_timesteps: 200
+    chains:
+      target:
+      - A
+      binder:
+      - B
+      refold_map:
+        A: A
+        B: B
+    fold_template: /shared/inputs/prepared_fold.json
+    structure_glob: '*.pdb'
+    per_source_refold_limit: 3
+  torchcraft:
+    service:
+      url: http://127.0.0.1:8020
+      health_path: /openapi.json
+      status_field: status
+      exit_code_field: exit_code
+      sbatch_script: /shared/scripts/torchcraft-api.sbatch
+      sbatch_state_file: /shared/harness/api-state/torchcraft.json
+      sbatch_resolve_host: true
+      startup_timeout: 1800
+      startup_poll_interval: 5
+    request:
+      mode: vhh
+      name: initial_torchcraft
+      pdb_path: /shared/inputs/target.pdb
+      hotspot_indices: 4,10
+      target_full_seq: /shared/inputs/target_sequence.csv
+      framework_cif_path: /shared/inputs/framework.cif
+      num_designs: 10
+      seed: 1
+    chains:
+      target:
+      - A
+      binder:
+      - B
+      refold_map:
+        A: A
+        B: B
+    fold_template: /shared/inputs/prepared_fold.json
+    per_source_refold_limit: 3
+evaluation:
+  af3score_options:
+    run_data_pipeline: false
+    run_inference: true
+    init_guess: true
+    num_workers: 4
+    seed: 10
+    write_fold_input_json_file: false
+  af3score:
+    url: http://127.0.0.1:8030
+    metrics_field: metrics
+    metric_fields:
+      iptm: iptm
+    sbatch_script: /shared/scripts/af3score-api.sbatch
+    sbatch_state_file: /shared/harness/api-state/af3score.json
+    sbatch_resolve_host: true
+    startup_timeout: 1800
+    startup_poll_interval: 5
+  torchfold:
+    url: http://127.0.0.1:8040
+    metric_fields:
+      iptm: iptm
+    sbatch_script: /shared/scripts/torchfold-api.sbatch
+    sbatch_state_file: /shared/harness/api-state/torchfold.json
+    sbatch_resolve_host: true
+    startup_timeout: 1800
+    startup_poll_interval: 5
+  rosetta:
+    url: http://127.0.0.1:8050
+    metrics_field: metrics
+    metric_fields:
+      interface_dg: dG_separated
+    sbatch_script: /shared/scripts/rosetta-api.sbatch
+    sbatch_state_file: /shared/harness/api-state/rosetta.json
+    sbatch_resolve_host: true
+    startup_timeout: 1800
+    startup_poll_interval: 5
+  torchfold_options:
+    run_data_pipeline: false
+    num_diffusion_samples: 2
+  rosetta_options:
+    pack_input: false
+    pack_separated: true
+  dockq_python: /shared/tools/dockq/bin/python
+  dockq_timeout: 300
+  min_af3score_iptm: 0.5
+  min_refold_iptm: 0.8
+  min_dockq: 0.49
