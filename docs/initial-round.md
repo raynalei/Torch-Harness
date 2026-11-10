@@ -228,8 +228,8 @@ Scripts and state files are absolute paths on the Harness host, not paths
 translated by `path_mappings`. Scripts must exist; their log directories, Conda
 environments, API code and model resources must already be prepared.
 
-On the first request to a stage, Harness uses only the saved sbatch allocation.
-With no saved allocation it runs `sbatch --parsable SCRIPT` once, saves the allocation ID, waits
+On the first request to a stage in a new run, Harness allocates a unique state file
+and runs `sbatch --parsable SCRIPT` once, saves the allocation ID, waits
 for RUNNING, expands the assigned node with `scontrol show hostnames`, substitutes
 that hostname in the configured URL, and waits for the health endpoint before
 sending the inference POST. The port and URL path are retained. Scripts must
@@ -244,16 +244,26 @@ Initial-round `--check` and registry health probes never submit API jobs. For sb
 `reachable: null` with startup deferred, even on a cold start. Launch the authorized
 normal run to start them automatically. Successful health checks do not validate inference.
 
-Use the same `sbatch_state_file` for the same API in registry and pipeline config
-to share its allocation. If omitted, state is stored beside the script in a file
-keyed by script path and configured URL. State access is locked across processes.
-Queue/startup timeouts retain the ID for a later retry. A missing or terminal
-allocation fails visibly; it is not resubmitted automatically. A lost sbatch
-response is marked uncertain before submission: reconcile with Slurm, then add
-the confirmed numeric `job_id` to that state file. Never remove uncertain state
-without checking for an existing allocation. Script or URL changes require
-reconciling the old allocation and using a new state file. Cluster-qualified and
-multi-node allocations are not supported. Harness does not cancel API allocations
+New tasks never share API allocations. `sbatch_state_file` is now a filename
+prefix: `/shared/api-state/ppiflow.json` produces a distinct
+`ppiflow-<UUID>.json` for each new API connection/task. The original shared file
+is neither read nor deleted. If omitted, unique state files are written beside
+the script. A new pipeline invocation creates fresh API allocations as needed;
+within that invocation a stage's API serves its candidate tasks. Independent
+registry request IDs each start a fresh API. The startup state path is logged.
+
+A task's inference record saves its resolved `api_url`. Status/results/cancel
+and resuming an existing remote inference reconnect to that task's recorded
+endpoint; they do not create a new server to poll an old task. Repeating the same
+registry request ID still does not resubmit inference; use a new ID for a new
+experiment. Completed pipeline checkpoints still avoid repeating completed work;
+use a new run name to start a new experiment. Old records without an endpoint
+require reconciliation, not guessing a new server.
+
+Within one startup attempt, timeouts/uncertain submissions retain their own ID
+and are not blindly submitted twice. New independent tasks get their own state,
+regardless of stale state from other tasks. Cluster-qualified and multi-node
+allocations are not supported. Harness does not cancel old API allocations
 automatically, nor does stopping an API cancel inference jobs. Maintain durable
 API job storage across restarts; changing nodes does not migrate files.
 
@@ -269,5 +279,5 @@ separately deployed API server. These paths are subject to registry input-root
 validation. Configure `PYTHONPATH` in the service or inference worker environment,
 relative to the intended PPIFlow code directory, not the Harness working directory.
 No untracked healthy API is used as a fallback: an API with sbatch configured
-must have a recorded allocation, or Harness submits its script. Health is checked
+gets a new allocation for each new task. Health is checked
 only after resolving that allocation, as a readiness gate before task submission.

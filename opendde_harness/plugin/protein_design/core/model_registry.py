@@ -76,8 +76,13 @@ class ProteinModelRegistry:
             ],
         }
 
-    def client(self, model: ModelRegistration):
-        return ServiceConnection(model.service, transport=self.transport)
+    def client(self, model: ModelRegistration, record: dict | None = None):
+        if record is not None and model.service.sbatch_script is not None and not record.get("api_url"):
+            raise ValueError("older request has no recorded API endpoint; reconcile it before status/results/cancel")
+        client = ServiceConnection(model.service, transport=self.transport)
+        if record is not None and model.service.sbatch_script is not None:
+            client.attach_api(record["api_url"])
+        return client
 
     async def catalogue_with_health(self):
         catalogue = self.catalogue()
@@ -226,6 +231,7 @@ class ProteinModelRegistry:
                 await client.close()
                 raise
             try:
+                record["api_url"] = str(client.client.base_url)
                 write_json(path, record)
                 response = await client.post(route.lstrip("/"), json=payload)
                 response.raise_for_status()
@@ -251,7 +257,7 @@ class ProteinModelRegistry:
                 **self.public_record(record),
                 "error": "No remote ID was received; reconcile this request with the service operator before resubmitting.",
             }
-        client = self.client(model)
+        client = self.client(model, record)
         try:
             status = await client.get(f"{record['status_base']}/{record['remote_id']}")
         finally:
@@ -304,7 +310,7 @@ class ProteinModelRegistry:
             if current["state"] != "succeeded":
                 return {**current, "results_available": False}
             record, model = self.read(request_id)
-            client = self.client(model)
+            client = self.client(model, record)
             try:
                 base = f"{record['status_base']}/{record['remote_id']}"
                 results = await client.get(base + "/results")
@@ -337,7 +343,7 @@ class ProteinModelRegistry:
                 raise ValueError("cannot cancel an uncertain submission without a verified remote ID")
             if record.get("cancel_state"):
                 return self.public_record(record)
-            client = self.client(model)
+            client = self.client(model, record)
             try:
                 await client.ensure_ready()
                 record["cancel_state"] = "uncertain"

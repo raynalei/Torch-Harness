@@ -7,8 +7,10 @@ import os
 import re
 import time
 from urllib.parse import quote
+from uuid import uuid4
 
 import httpx
+from loguru import logger
 
 from .api_startup import ensure_api
 from .config import Service
@@ -28,6 +30,12 @@ class ServiceConnection:
 
     def __init__(self, config: Service, *, transport=None):
         self.config = config
+        if config.sbatch_script is not None:
+            # The configured path is a naming prefix, never a reusable allocation.
+            prefix = config.sbatch_state_file or config.sbatch_script.parent / ".harness-api.json"
+            self.config = config.model_copy(
+                update={"sbatch_state_file": prefix.with_name(f"{prefix.stem}-{uuid4().hex}{prefix.suffix or '.json'}")}
+            )
         self._api_ready = False
         headers = {}
         if config.token_env:
@@ -42,11 +50,29 @@ class ServiceConnection:
             transport=transport,
         )
 
+    def attach_api(self, url: str):
+        """Reconnect to the endpoint recorded for an already submitted inference."""
+        target = httpx.URL(url)
+        configured = httpx.URL(self.config.url.rstrip("/") + "/")
+        if (
+            target.scheme != configured.scheme
+            or target.port != configured.port
+            or target.path != configured.path
+            or target.userinfo
+            or target.query
+            or target.fragment
+        ):
+            raise ValueError("recorded API endpoint does not match the configured protocol, port and path")
+        self.client.base_url = target
+        self._api_ready = True
+
     async def close(self):
         await self.client.aclose()
 
     async def ensure_ready(self, *, start: bool = True):
         if not self._api_ready:
+            if start and self.config.sbatch_script is not None:
+                logger.info("Starting this task's API allocation; state file: {}", self.config.sbatch_state_file)
             await ensure_api(self.config, self.client, start=start)
             self._api_ready = True
 
@@ -83,7 +109,12 @@ class SlurmService(ServiceConnection):
             raise ValueError(f"job request changed: {key}")
         if job is None:
             await self.ensure_ready()
-            job = jobs[key] = {"request_hash": signature, "state": "submission_uncertain", "submitted_at": time.time()}
+            job = jobs[key] = {
+                "request_hash": signature,
+                "state": "submission_uncertain",
+                "submitted_at": time.time(),
+                "api_url": str(self.client.base_url),
+            }
             self.checkpoint.save()
             # Checkpoint before POST: a crash in this window needs manual reconciliation.
             try:
@@ -98,6 +129,8 @@ class SlurmService(ServiceConnection):
                 ) from exc
             job.update(id=job_id, state="submitted", submission=response.json())
             self.checkpoint.save()
+        elif self.config.sbatch_script is not None and job.get("api_url"):
+            self.attach_api(job["api_url"])
         if attach_id:
             if not re.fullmatch(r"[A-Za-z0-9_-]+", attach_id):
                 raise ValueError("invalid attached job ID")
@@ -111,6 +144,8 @@ class SlurmService(ServiceConnection):
             return job["results"]
         if job["state"] == "failed":
             raise RemoteJobFailedError(f"{key}: persisted failed job {job['id']}; use a new work_dir to retry")
+        if self.config.sbatch_script is not None and not job.get("api_url"):
+            raise ValueError("older job has no recorded API endpoint; reconcile it before continuing polling")
         status_route = f"{status_base or route}/{quote(job['id'], safe='')}"
         deadline = asyncio.get_running_loop().time() + self.config.job_timeout
         while asyncio.get_running_loop().time() < deadline:

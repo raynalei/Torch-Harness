@@ -29,7 +29,7 @@ For any service with `sbatch_script`, preflight checks no local ports and submit
 no Slurm job. It reports `reachable: null` and startup deferred. This is expected,
 not an unhealthy-service failure. Do not run curl, socket probes, registry health
 checks or a local-port scan to second-guess this result. After authorization,
-launch the worker; each stage submits/reuses its recorded allocation, resolves
+launch the worker; each new run starts fresh API allocations for its stages, resolves
 the Slurm node, and checks that node's API before its HTTP task. Never treat the
 placeholder `127.0.0.1` URL as the allocated service address. Resolve real missing
 script/input files, but do not claim sbatch-managed services must be running

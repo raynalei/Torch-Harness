@@ -54,18 +54,19 @@ async def test_sbatch_precedes_http_post_and_resolves_node_and_port(api):
         assert response.status_code == 202
         assert commands[0] == ("sbatch", "--parsable", str(config.sbatch_script))
         assert str(requests[-1].url) == "http://gpu01:8010/base/v1/designs"
-        state = json.loads(config.sbatch_state_file.read_text())
+        state = json.loads(client.config.sbatch_state_file.read_text())
         assert state["job_id"] == "123" and state["state"] == "ready"
         await client.post("v1/designs", json={})
         assert sum(command[0] == "sbatch" for command in commands) == 1
     finally:
         await client.close()
-    # Another process/client reuses the durable allocation, not a new sbatch.
+    # A new task/client always submits a fresh API allocation.
     other = ServiceConnection(config, transport=transport)
     try:
         await other.get("health")
         assert other.client.base_url.host == "gpu01"
-        assert sum(command[0] == "sbatch" for command in commands) == 1
+        assert sum(command[0] == "sbatch" for command in commands) == 2
+        assert other.config.sbatch_state_file != client.config.sbatch_state_file
     finally:
         await other.close()
 
@@ -138,12 +139,12 @@ async def test_startup_timeout_reuses_pending_job_on_retry(api, monkeypatch):
         await client.close()
 
 
-async def test_concurrent_clients_submit_one_allocation(api):
+async def test_concurrent_tasks_submit_separate_allocations(api):
     config, commands, _, transport = api
     clients = [ServiceConnection(config, transport=transport) for _ in range(2)]
     try:
         await asyncio.gather(*(client.post("v1/designs", json={}) for client in clients))
-        assert sum(command[0] == "sbatch" for command in commands) == 1
+        assert sum(command[0] == "sbatch" for command in commands) == 2
     finally:
         for client in clients:
             await client.close()
@@ -214,3 +215,42 @@ async def test_registry_api_failure_does_not_poison_inference_request(api, tmp_p
 def test_sbatch_paths_must_be_absolute(field):
     with pytest.raises(ValueError, match="absolute"):
         Service(url="http://localhost:8010", **{field: "relative/path"})
+
+
+async def test_stale_shared_state_never_blocks_new_task(api):
+    config, commands, _, transport = api
+    config.sbatch_state_file.write_text(json.dumps({"state": "submission_uncertain", "job_id": "999"}))
+    client = ServiceConnection(config, transport=transport)
+    try:
+        await client.post("v1/designs", json={})
+        assert commands[0][0] == "sbatch"
+        assert json.loads(config.sbatch_state_file.read_text())["job_id"] == "999"
+        assert client.config.sbatch_state_file != config.sbatch_state_file
+    finally:
+        await client.close()
+
+
+async def test_registry_polling_reconnects_to_own_task_not_new_allocation(api, tmp_path):
+    from opendde_harness.plugin.protein_design.core.model_registry import ProteinModelRegistry
+
+    config, commands, requests, transport = api
+    registry = ProteinModelRegistry(
+        {"ppi": {"kind": "ppiflow", "service": config.model_dump(mode="json")}},
+        tmp_path / "jobs",
+        transport=transport,
+    )
+    payload = {
+        "mode": "nanobody",
+        "name": "test",
+        "antigen_pdb": "/shared/target.pdb",
+        "antigen_chain": "C",
+        "framework_dir": "/shared/frameworks",
+        "heavy_chain": "A",
+    }
+    await registry.submit("ppi", "first", payload)
+    await registry.status("first")
+    await registry.results("first")
+    assert sum(command[0] == "sbatch" for command in commands) == 1
+    assert all(r.url.host == "gpu01" for r in requests)
+    await registry.submit("ppi", "second", payload)
+    assert sum(command[0] == "sbatch" for command in commands) == 2
