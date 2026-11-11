@@ -151,6 +151,28 @@ def test_initial_round_cli_invalid_config_is_nonzero(tmp_path):
     assert "Initial round failed" in result.output
 
 
+def test_initial_round_cli_detached_recovery_passes_attachments(tmp_path, monkeypatch):
+    from opendde_harness.plugin.protein_design.initial_round.config import InitialRoundConfig
+
+    source = tmp_path / "initial.yaml"
+    source.write_text("name: example")
+    sentinel = object()
+    monkeypatch.setattr(InitialRoundConfig, "load", lambda _: sentinel)
+    seen = {}
+
+    def launch(config, *, attach_jobs):
+        seen.update(config=config, attach_jobs=attach_jobs)
+        return {"state": "starting"}
+
+    monkeypatch.setattr("opendde_harness.plugin.protein_design.initial_round.automation.start_round", launch)
+    result = CliRunner().invoke(
+        commands.protein_design_app,
+        ["initial-round", "-c", str(source), "--detach", "--attach-job", "generate/ppiflow=known"],
+    )
+    assert result.exit_code == 0, result.output
+    assert seen == {"config": sentinel, "attach_jobs": {"generate/ppiflow": "known"}}
+
+
 def test_initial_round_cli_partial_result_is_nonzero(tmp_path, monkeypatch):
     from opendde_harness.plugin.protein_design.initial_round.config import InitialRoundConfig
     from opendde_harness.plugin.protein_design.initial_round.runner import InitialRoundRunner

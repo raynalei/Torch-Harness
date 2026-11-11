@@ -92,6 +92,27 @@ class SlurmService(ServiceConnection):
         super().__init__(config, transport=transport)
         self.checkpoint = checkpoint
 
+    async def reconcile(self, route: str, job: dict, payload: dict) -> bool:
+        """Only trust services that echo the persisted key and exact request hash."""
+        key = job.get("submission_key")
+        if not key or route != "/v1/designs":
+            return False
+        try:
+            response = await self.client.get(f"{route.lstrip('/')}/{key}")
+            response.raise_for_status()
+            value = response.json()
+        except (httpx.HTTPError, ValueError):
+            return False
+        if not isinstance(value, dict) or (
+            value.get("submission_key") != key
+            or value.get("design_id") != key
+            or value.get("request_hash") != fingerprint(payload)
+        ):
+            return False
+        job.update(id=key, state="submitted", submission=value)
+        self.checkpoint.save()
+        return True
+
     async def run(
         self,
         key: str,
@@ -105,6 +126,13 @@ class SlurmService(ServiceConnection):
         signature = fingerprint({"url": self.config.url, "route": route, "payload": payload})
         jobs = self.checkpoint.data["jobs"]
         job = jobs.get(key)
+        if attach_id:
+            if not re.fullmatch(r"[A-Za-z0-9_-]+", attach_id):
+                raise ValueError("invalid attached job ID")
+            if job is None:
+                raise ValueError(f"--attach-job key must exist in checkpoint: {key}")
+            if job.get("id") and job["id"] != attach_id:
+                raise ValueError(f"cannot replace existing job ID for {key}")
         if job and job["request_hash"] != signature:
             raise ValueError(f"job request changed: {key}")
         if job is None:
@@ -114,30 +142,38 @@ class SlurmService(ServiceConnection):
                 "state": "submission_uncertain",
                 "submitted_at": time.time(),
                 "api_url": str(self.client.base_url),
+                "submission_key": uuid4().hex,
             }
             self.checkpoint.save()
             # Checkpoint before POST: a crash in this window needs manual reconciliation.
             try:
-                response = await self.post(route, json=payload)
+                response = await self.post(route, json=payload, headers={"Idempotency-Key": job["submission_key"]})
                 response.raise_for_status()
                 job_id = response.json()[id_field]
                 if not isinstance(job_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", job_id):
                     raise ValueError("invalid task ID in submission response")
             except Exception as exc:
-                raise SubmissionUncertainError(
-                    f"{key}: inspect server tasks and resume with --attach-job {key}=ID"
-                ) from exc
-            job.update(id=job_id, state="submitted", submission=response.json())
-            self.checkpoint.save()
+                detail = f"{type(exc).__name__}: {exc}"
+                job["submission_error"] = detail
+                self.checkpoint.save()
+                if not await self.reconcile(route, job, payload):
+                    raise SubmissionUncertainError(
+                        f"{key}: submission response uncertain ({detail}); no automatic resubmission. "
+                        f"Inspect server tasks and resume with --attach-job {key}=ID "
+                        "using the API task ID, not the API allocation's Slurm job ID"
+                    ) from exc
+            else:
+                job.update(id=job_id, state="submitted", submission=response.json())
+                self.checkpoint.save()
         elif self.config.sbatch_script is not None and job.get("api_url"):
             self.attach_api(job["api_url"])
         if attach_id:
-            if not re.fullmatch(r"[A-Za-z0-9_-]+", attach_id):
-                raise ValueError("invalid attached job ID")
-            if job.get("id") and job["id"] != attach_id:
-                raise ValueError(f"cannot replace existing job ID for {key}")
-            job.update(id=attach_id, state="submitted")
+            job.update(id=attach_id)
+            if job["state"] == "submission_uncertain":
+                job["state"] = "submitted"
             self.checkpoint.save()
+        if not job.get("id"):
+            await self.reconcile(route, job, payload)
         if not job.get("id"):
             raise SubmissionUncertainError(f"{key}: reconcile uncertain submission using --attach-job {key}=ID")
         if job["state"] == "completed":
@@ -160,6 +196,12 @@ class SlurmService(ServiceConnection):
             state = states[0].rstrip("+") if states else "UNKNOWN"
             job.update(state="waiting", remote_status=state, status=status)
             self.checkpoint.save()
+            if state == "SUBMISSION_UNCERTAIN":
+                raise SubmissionUncertainError(
+                    f"{key}: API task {job['id']} exists, but its Slurm submission is uncertain: "
+                    f"{status.get('submission_error', 'inspect server metadata and scheduler')}; "
+                    "reconcile the existing server task before resuming; do not POST again"
+                )
             if state in {
                 "FAILED",
                 "CANCELLED",

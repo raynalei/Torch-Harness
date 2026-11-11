@@ -169,13 +169,39 @@ a later evolutionary workflow; this command does not automatically launch one.
 
 Job IDs and request hashes are persisted before consuming results. A dropped
 submission response is uncertain: the remote job may already exist. Automatic
-POST retries are deliberately disabled. Inspect the API/Slurm jobs and attach the
+POST retries are deliberately disabled. Each new submission persists an
+`Idempotency-Key` before POST. For `/v1/designs`, a service that echoes the same
+key as `submission_key` and `design_id`, plus the exact payload `request_hash`,
+allows recovery by GET, both after a lost response and on resume. Services without
+this protocol and older checkpoints still require manual reconciliation.
+Inspect the API/Slurm jobs and attach the
 verified existing ID using the exact key from `checkpoint.json`:
 
 ```bash
 uv run --frozen ddeharness protein-design initial-round -c initial.yaml \
-  --attach-job generate/ppiflow=VERIFIED_DESIGN_ID
+  --attach-job generate/ppiflow=VERIFIED_DESIGN_ID --detach
 ```
+
+Stop the previous worker before recovery. `--detach --attach-job` starts a new
+background worker with the verified IDs; omit `--detach` for foreground recovery.
+Use the same configuration and run directory. Unknown checkpoint keys, conflicting
+IDs and attachments to an active or completed worker are rejected. Attaching an
+existing task resumes polling without another POST. No manual checkpoint edit is needed.
+
+The ID must be the API's `design_id` (or the stage's `task_id`/`fold_id`), not a
+Slurm allocation ID. Files under `api-state` describe API server allocations;
+`submitted`/`PENDING` there does not prove that a design request reached the API.
+Submission exceptions are saved in the checkpoint as `submission_error`, and a
+detached worker reports `submission_uncertain` when its POST response was lost.
+
+`startup_timeout` (default 1800 seconds) bounds API allocation startup, before
+the design POST. `request_timeout` (default 30 seconds) applies to HTTP requests.
+If an external API blocks its POST while waiting for inference resources, choose
+a sufficient `request_timeout` before starting a new run. Changing configuration
+on an existing run is rejected. The preferred server contract is to persist the
+task and return 202 with its ID promptly, exposing queue/startup progress through
+GET status. Automatic lookup requires the explicit key/hash protocol above;
+the client never guesses from recent jobs or retries uncertain POSTs.
 
 Attachment is an operator assertion about the lost request's identity; compare
 its inputs and parameters on the service. Never attach an unrelated job. If no

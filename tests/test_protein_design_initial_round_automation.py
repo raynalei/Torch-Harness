@@ -101,6 +101,108 @@ def test_exited_worker_is_reported_as_interrupted(profile, monkeypatch):
     assert round_status(root)["state"] == "interrupted"
 
 
+def test_detached_recovery_passes_verified_ids_to_worker(profile, monkeypatch):
+    import runpy
+    import sys
+
+    from opendde_harness.plugin.protein_design.initial_round import worker
+
+    config = prepare_run(profile)
+    root = config.work_dir / config.name
+    root.mkdir()
+    write_json(root / "checkpoint.json", {"jobs": {"generate/ppiflow": {"state": "submission_uncertain"}}})
+    attachments = {"generate/ppiflow": "recovered"}
+    commands = []
+
+    class Process:
+        pid = 12345
+
+        def wait(self):
+            return 0
+
+    def popen(command, **kwargs):
+        commands.append(command)
+        return Process()
+
+    monkeypatch.setattr("opendde_harness.plugin.protein_design.initial_round.automation.subprocess.Popen", popen)
+    assert start_round(config, attach_jobs=attachments)["state"] == "starting"
+    command = commands[0]
+    assert json.loads(command[command.index("--attach-jobs") + 1]) == attachments
+    seen = {}
+
+    class Runner:
+        def __init__(self, value, *, attach_jobs):
+            seen.update(config=value, attach_jobs=attach_jobs)
+
+        async def run(self):
+            return {"status": "completed"}
+
+    monkeypatch.setattr(worker, "InitialRoundRunner", Runner)
+    worker.run(root, attach_jobs=attachments)
+    assert seen["attach_jobs"] == attachments
+    assert seen["config"] == config
+    assert json.loads((root / "worker-status.json").read_text())["state"] == "completed"
+
+    # Check the actual module entry point used by the detached subprocess, too.
+    monkeypatch.setattr("opendde_harness.plugin.protein_design.initial_round.runner.InitialRoundRunner", Runner)
+    monkeypatch.setattr(sys, "argv", ["worker", *command[3:]])
+    runpy.run_path(worker.__file__, run_name="__main__")
+    assert seen["attach_jobs"] == attachments
+
+
+@pytest.mark.parametrize("kind", ["unknown", "invalid", "conflicting", "active"])
+def test_detached_recovery_rejects_invalid_or_active_attachment(profile, monkeypatch, kind):
+    config = prepare_run(profile)
+    root = config.work_dir / config.name
+    root.mkdir()
+    job = {"state": "submission_uncertain"}
+    attachments = {"generate/ppiflow": "known"}
+    if kind == "unknown":
+        attachments = {"missing": "known"}
+    elif kind == "invalid":
+        attachments = {"generate/ppiflow": "../invalid"}
+    elif kind == "conflicting":
+        job["id"] = "other"
+    elif kind == "active":
+        write_json(root / "launch.json", {"pid": 123})
+        write_json(root / "worker-status.json", {"state": "running"})
+        monkeypatch.setattr("opendde_harness.plugin.protein_design.initial_round.automation._alive", lambda *_: True)
+    write_json(root / "checkpoint.json", {"jobs": {"generate/ppiflow": job}})
+
+    def unexpected_launch(*args, **kwargs):
+        pytest.fail("invalid recovery must not launch a worker")
+
+    monkeypatch.setattr(
+        "opendde_harness.plugin.protein_design.initial_round.automation.subprocess.Popen", unexpected_launch
+    )
+    with pytest.raises(ValueError):
+        start_round(config, attach_jobs=attachments)
+
+
+def test_worker_reports_uncertain_submission_as_recoverable(profile, monkeypatch):
+    from opendde_harness.plugin.protein_design.initial_round import worker
+    from opendde_harness.plugin.protein_design.initial_round.services import SubmissionUncertainError
+
+    config = prepare_run(profile)
+    root = config.work_dir / config.name
+    root.mkdir()
+    write_json(root / "worker-config.json", config.model_dump(mode="json"))
+
+    class Runner:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def run(self):
+            raise SubmissionUncertainError("generate/ppiflow: resume with --attach-job generate/ppiflow=ID")
+
+    monkeypatch.setattr(worker, "InitialRoundRunner", Runner)
+    with pytest.raises(SubmissionUncertainError):
+        worker.run(root)
+    state = json.loads((root / "worker-status.json").read_text())
+    assert state["state"] == "submission_uncertain"
+    assert "--attach-job generate/ppiflow=ID" in state["error"]
+
+
 async def test_qwen_pipeline_tool_launches_once_and_does_not_poll_apis(profile, tmp_path, monkeypatch):
     registry = active_registry()
     tool = registry.build_tool(

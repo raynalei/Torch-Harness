@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -92,7 +93,8 @@ def round_status(root: Path):
     }
 
 
-def start_round(config: InitialRoundConfig):
+def start_round(config: InitialRoundConfig, *, attach_jobs: dict[str, str] | None = None):
+    attach_jobs = dict(attach_jobs or {})
     root = (config.work_dir / config.name).resolve()
     SharedFiles(config.path_mappings).remote(root)
     root.mkdir(parents=True, exist_ok=True)
@@ -129,15 +131,30 @@ def start_round(config: InitialRoundConfig):
         if (root / "launch.json").exists():
             current = round_status(root)
             if current["state"] in {"starting", "running", "completed"}:
+                if attach_jobs:
+                    raise ValueError("cannot attach jobs to an active or completed worker; stop it before recovery")
                 return current
         # A foreground runner also holds this lock. Do not start a second one.
         with file_lock(root / "run.lock", blocking=False):
+            if attach_jobs:
+                checkpoint_path = root / "checkpoint.json"
+                jobs = json.loads(checkpoint_path.read_text()).get("jobs", {}) if checkpoint_path.exists() else {}
+                for key, job_id in attach_jobs.items():
+                    if key not in jobs:
+                        raise ValueError(f"--attach-job key must exist in checkpoint: {key}")
+                    if not re.fullmatch(r"[A-Za-z0-9_-]+", job_id):
+                        raise ValueError("invalid attached job ID")
+                    if jobs[key].get("id") and jobs[key]["id"] != job_id:
+                        raise ValueError(f"cannot replace existing job ID for {key}")
             write_json(snapshot, value)
             write_json(input_snapshot, inputs)
         (root / "worker-status.json").unlink(missing_ok=True)
+        command = [sys.executable, "-m", "opendde_harness.plugin.protein_design.initial_round.worker", str(root)]
+        if attach_jobs:
+            command.extend(["--attach-jobs", json.dumps(attach_jobs)])
         with (root / "worker.log").open("ab") as log:
             process = subprocess.Popen(
-                [sys.executable, "-m", "opendde_harness.plugin.protein_design.initial_round.worker", str(root)],
+                command,
                 stdin=subprocess.DEVNULL,
                 stdout=log,
                 stderr=log,

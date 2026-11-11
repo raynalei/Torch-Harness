@@ -160,6 +160,138 @@ async def test_submission_timeout_is_not_retried_and_can_be_reconciled(tmp_path)
         result = await service.run("generate/ppiflow", "/v1/designs", "design_id", {}, attach_id="recovered")
         assert result == {"files": []}
         assert len(posts) == 1
+        saved = json.loads(checkpoint.path.read_text())["jobs"]["generate/ppiflow"]
+        assert "ReadTimeout: lost response" in saved["submission_error"]
+        assert saved["id"] == "recovered"
+    finally:
+        await service.close()
+
+
+async def test_attach_without_checkpoint_never_submits(tmp_path):
+    requests = []
+    service = SlurmService(
+        Service(url="https://service.test"),
+        Checkpoint(tmp_path, {}),
+        transport=httpx.MockTransport(lambda request: requests.append(request)),
+    )
+    try:
+        with pytest.raises(ValueError, match="must exist in checkpoint"):
+            await service.run("generate/ppiflow", "/v1/designs", "design_id", {}, attach_id="known")
+        assert requests == []
+    finally:
+        await service.close()
+
+
+@pytest.mark.parametrize("recover_on_resume", [False, True])
+async def test_lost_response_reconciles_exact_submission_without_reposting(tmp_path, recover_on_resume):
+    from opendde_harness.plugin.protein_design.initial_round.storage import fingerprint
+
+    checkpoint = Checkpoint(tmp_path, {})
+    posts = []
+    available = not recover_on_resume
+
+    def handler(request):
+        if request.method == "POST":
+            posts.append(request)
+            raise httpx.ReadTimeout("lost after persistence", request=request)
+        if request.url.path.endswith("/results"):
+            return httpx.Response(200, json={"files": []})
+        if not available:
+            return httpx.Response(503)
+        key = posts[0].headers["Idempotency-Key"]
+        return httpx.Response(
+            200,
+            json={
+                "design_id": key,
+                "submission_key": key,
+                "request_hash": fingerprint({}),
+                "status": "COMPLETED",
+                "exit_code": "0:0",
+            },
+        )
+
+    service = SlurmService(Service(url="https://service.test"), checkpoint, transport=httpx.MockTransport(handler))
+    try:
+        if recover_on_resume:
+            with pytest.raises(SubmissionUncertainError):
+                await service.run("generate/ppiflow", "/v1/designs", "design_id", {})
+            await service.close()
+            checkpoint = Checkpoint(tmp_path, {})
+            service = SlurmService(
+                Service(url="https://service.test"), checkpoint, transport=httpx.MockTransport(handler)
+            )
+            available = True
+        assert await service.run("generate/ppiflow", "/v1/designs", "design_id", {}) == {"files": []}
+        assert len(posts) == 1
+        assert checkpoint.data["jobs"]["generate/ppiflow"]["id"] == posts[0].headers["Idempotency-Key"]
+    finally:
+        await service.close()
+
+
+async def test_reconciliation_rejects_mismatched_request_hash(tmp_path):
+    def handler(request):
+        if request.method == "POST":
+            raise httpx.ReadTimeout("lost", request=request)
+        key = request.url.path.rsplit("/", 1)[-1]
+        return httpx.Response(200, json={"design_id": key, "submission_key": key, "request_hash": "wrong"})
+
+    checkpoint = Checkpoint(tmp_path, {})
+    service = SlurmService(Service(url="https://service.test"), checkpoint, transport=httpx.MockTransport(handler))
+    try:
+        with pytest.raises(SubmissionUncertainError):
+            await service.run("generate/ppiflow", "/v1/designs", "design_id", {})
+        assert "id" not in checkpoint.data["jobs"]["generate/ppiflow"]
+    finally:
+        await service.close()
+
+
+async def test_server_submission_uncertainty_stops_polling_without_reposting(tmp_path):
+    posts = []
+
+    def handler(request):
+        if request.method == "POST":
+            posts.append(request)
+            return httpx.Response(202, json={"design_id": "known"})
+        return httpx.Response(200, json={"status": "SUBMISSION_UNCERTAIN", "submission_error": "sbatch timed out"})
+
+    checkpoint = Checkpoint(tmp_path, {})
+    service = SlurmService(Service(url="https://service.test"), checkpoint, transport=httpx.MockTransport(handler))
+    try:
+        for _ in range(2):
+            with pytest.raises(SubmissionUncertainError, match="Slurm submission is uncertain"):
+                await service.run("generate/ppiflow", "/v1/designs", "design_id", {})
+        assert len(posts) == 1
+        assert checkpoint.data["jobs"]["generate/ppiflow"]["id"] == "known"
+    finally:
+        await service.close()
+
+
+@pytest.mark.parametrize("state", ["completed", "failed"])
+async def test_attach_does_not_reset_terminal_job(tmp_path, state):
+    from opendde_harness.plugin.protein_design.initial_round.storage import fingerprint
+
+    checkpoint = Checkpoint(tmp_path, {})
+    checkpoint.data["jobs"]["generate/ppiflow"] = {
+        "request_hash": fingerprint({"url": "https://service.test", "route": "/v1/designs", "payload": {}}),
+        "id": "known",
+        "state": state,
+        "results": {"files": []},
+    }
+    requests = []
+    service = SlurmService(
+        Service(url="https://service.test"),
+        checkpoint,
+        transport=httpx.MockTransport(lambda request: requests.append(request)),
+    )
+    try:
+        if state == "failed":
+            with pytest.raises(RemoteJobFailedError, match="persisted failed"):
+                await service.run("generate/ppiflow", "/v1/designs", "design_id", {}, attach_id="known")
+        else:
+            assert await service.run("generate/ppiflow", "/v1/designs", "design_id", {}, attach_id="known") == {
+                "files": []
+            }
+        assert requests == []
     finally:
         await service.close()
 

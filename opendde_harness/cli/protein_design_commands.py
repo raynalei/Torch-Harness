@@ -69,9 +69,9 @@ def initial_round(
             else InitialRoundConfig.load(config)
         )
         if detach:
-            if check or attachments:
-                raise ValueError("--detach cannot be combined with --check or --attach-job")
-            result = start_round(workflow)
+            if check:
+                raise ValueError("--detach cannot be combined with --check")
+            result = start_round(workflow, attach_jobs=attachments) if attachments else start_round(workflow)
         else:
             result = asyncio.run(InitialRoundRunner(workflow, attach_jobs=attachments).run(check_only=check))
     except Exception as exc:
