@@ -29,15 +29,61 @@ async def slurm_command(config: Service, *args: str) -> str:
         *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
     )
     try:
-        stdout, _ = await asyncio.wait_for(process.communicate(), config.slurm_command_timeout)
+        stdout, stderr = await asyncio.wait_for(process.communicate(), config.slurm_command_timeout)
     except BaseException:
         if process.returncode is None:
             process.kill()
         await process.wait()
         raise
     if process.returncode:
-        raise ApiStartupError(f"{args[0]} failed; inspect Slurm permissions and API allocation logs")
+        log = config.sbatch_state_file.with_suffix(".slurm.log") if config.sbatch_state_file else None
+        if log is not None:
+            log.parent.mkdir(parents=True, exist_ok=True)
+            with log.open("ab") as output:
+                output.write((f"{args[0]} exit_code={process.returncode}\n").encode() + stdout + b"\n" + stderr + b"\n")
+        raise ApiStartupError(f"{args[0]} failed (exit {process.returncode}); inspect {log or 'Slurm logs'}")
     return stdout.decode().strip()
+
+
+async def allocation_status(config: Service, job_id: str, state: dict) -> tuple[str, str]:
+    """An empty live queue is unknown until accounting confirms the allocation state."""
+    try:
+        status = await slurm_command(config, "squeue", "--jobs", job_id, "--noheader", "--format=%T|%N")
+        rows = status.splitlines()
+        if len(rows) == 1 and "|" in rows[0] and rows[0].split("|", 1)[0].strip():
+            state.pop("query_error", None)
+            state["query_failures"] = 0
+            phase, nodes = rows[0].strip().split("|", 1)
+            return phase.split()[0].rstrip("+"), nodes.strip()
+        state["queue_observation"] = "not_visible"
+    except (ApiStartupError, OSError, TimeoutError) as exc:
+        state["query_error"] = str(exc)
+        state["query_failures"] = state.get("query_failures", 0) + 1
+    try:
+        accounting = await slurm_command(
+            config,
+            "sacct",
+            "--jobs",
+            job_id,
+            "--noheader",
+            "--parsable2",
+            "--format=JobIDRaw,State,ExitCode,NodeList",
+        )
+        for row in accounting.splitlines():
+            fields = row.strip().split("|")
+            # Ignore .batch/.extern and other steps: only the exact allocation counts.
+            if len(fields) >= 4 and fields[0] == job_id and fields[1].strip():
+                state["query_failures"] = 0
+                state["exit_code"] = fields[2]
+                return fields[1].split()[0].rstrip("+"), fields[3].strip()
+    except (ApiStartupError, OSError, TimeoutError) as exc:
+        state["accounting_error"] = str(exc)
+    if state.get("query_failures", 0) >= 3:
+        raise ApiStartupError(
+            f"API allocation {job_id}: Slurm queries failed 3 times; "
+            f"{state.get('query_error')}; accounting: {state.get('accounting_error', 'not yet visible')}"
+        )
+    return "UNKNOWN", ""
 
 
 async def healthy(client: httpx.AsyncClient, path: str) -> bool:
@@ -102,13 +148,11 @@ async def _ensure_locked(config, client, script: Path, state_path: Path, deadlin
             f"API submission uncertain; reconcile Slurm and record job_id in {state_path}; do not resubmit blindly"
         )
     while True:
-        status = await slurm_command(config, "squeue", "--jobs", job_id, "--noheader", "--format=%T|%N")
-        rows = status.splitlines()
-        if len(rows) != 1 or "|" not in rows[0]:
-            raise ApiStartupError(
-                f"API allocation {job_id} is no longer queued; inspect Slurm logs before resetting {state_path}"
-            )
-        phase, nodes = rows[0].strip().split("|", 1)
+        try:
+            phase, nodes = await allocation_status(config, job_id, state)
+        except ApiStartupError:
+            write_json(state_path, state)
+            raise
         state["slurm_state"] = phase
         if phase == "RUNNING":
             if config.sbatch_resolve_host:
@@ -120,11 +164,28 @@ async def _ensure_locked(config, client, script: Path, state_path: Path, deadlin
                 state.update(state="ready", resolved_url=str(client.base_url))
                 write_json(state_path, state)
                 return
-        elif phase not in {"PENDING", "CONFIGURING"}:
-            raise ApiStartupError(f"API allocation {job_id} is {phase}; inspect Slurm logs")
+        elif phase in {
+            "BOOT_FAIL",
+            "CANCELLED",
+            "COMPLETED",
+            "DEADLINE",
+            "FAILED",
+            "NODE_FAIL",
+            "OUT_OF_MEMORY",
+            "PREEMPTED",
+            "REVOKED",
+            "TIMEOUT",
+        }:
+            state["state"] = "terminated"
+            write_json(state_path, state)
+            raise ApiStartupError(
+                f"API allocation {job_id} is {phase} (exit_code={state.get('exit_code', 'unknown')}); "
+                f"inspect its sbatch output log; state file: {state_path}"
+            )
         write_json(state_path, state)
         if not start or asyncio.get_running_loop().time() >= deadline:
             raise ApiStartupTimeoutError(
-                f"API allocation {job_id} is not healthy yet; retry to reuse it (not resubmit)"
+                f"API allocation {job_id} is not healthy yet (Slurm state={phase}); "
+                f"inspect {state_path}; retry within this startup attempt to reuse its ID (not resubmit)"
             )
         await asyncio.sleep(config.startup_poll_interval)

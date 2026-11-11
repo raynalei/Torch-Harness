@@ -254,3 +254,111 @@ async def test_registry_polling_reconnects_to_own_task_not_new_allocation(api, t
     assert all(r.url.host == "gpu01" for r in requests)
     await registry.submit("ppi", "second", payload)
     assert sum(command[0] == "sbatch" for command in commands) == 2
+
+
+async def test_empty_squeue_and_accounting_lag_wait_without_resubmission(api, monkeypatch):
+    config, commands, requests, transport = api
+    queue = iter(["", "RUNNING|gpu01"])
+
+    async def command(config, *args):
+        commands.append(args)
+        if args[0] == "sbatch":
+            return "123"
+        if args[0] == "squeue":
+            return next(queue)
+        return "" if args[0] == "sacct" else "gpu01"
+
+    monkeypatch.setattr("opendde_harness.plugin.protein_design.initial_round.api_startup.slurm_command", command)
+    client = ServiceConnection(config, transport=transport)
+    try:
+        assert (await client.post("v1/designs", json={})).status_code == 202
+        assert sum(c[0] == "sbatch" for c in commands) == 1
+        assert sum(c[0] == "sacct" for c in commands) == 1
+        assert all(r.url.host == "gpu01" for r in requests)
+    finally:
+        await client.close()
+
+
+async def test_accounting_confirms_api_exited_instead_of_assuming_queue_delay(api, monkeypatch):
+    config, commands, requests, transport = api
+
+    async def command(config, *args):
+        commands.append(args)
+        return {"sbatch": "123", "squeue": "", "sacct": "123.batch|RUNNING|0:0|gpu01\n123|FAILED|1:0|gpu01"}[args[0]]
+
+    monkeypatch.setattr("opendde_harness.plugin.protein_design.initial_round.api_startup.slurm_command", command)
+    client = ServiceConnection(config, transport=transport)
+    try:
+        with pytest.raises(RuntimeError, match="FAILED.*1:0"):
+            await client.post("v1/designs", json={})
+        assert not requests
+        state = json.loads(client.config.sbatch_state_file.read_text())
+        assert state["state"] == "terminated"
+    finally:
+        await client.close()
+
+
+async def test_slurm_query_errors_have_bounded_retries(api, monkeypatch):
+    from opendde_harness.plugin.protein_design.initial_round.api_startup import ApiStartupError
+
+    config, commands, requests, transport = api
+
+    async def command(config, *args):
+        commands.append(args)
+        if args[0] == "sbatch":
+            return "123"
+        raise ApiStartupError("controller unavailable; inspect command log")
+
+    monkeypatch.setattr("opendde_harness.plugin.protein_design.initial_round.api_startup.slurm_command", command)
+    client = ServiceConnection(config, transport=transport)
+    try:
+        with pytest.raises(RuntimeError, match="failed 3 times"):
+            await client.post("v1/designs", json={})
+        assert sum(c[0] == "squeue" for c in commands) == 3
+        assert sum(c[0] == "sbatch" for c in commands) == 1
+        assert not requests
+    finally:
+        await client.close()
+
+
+async def test_empty_slurm_visibility_remains_bounded_by_startup_timeout(api, monkeypatch):
+    config, commands, requests, transport = api
+    config.startup_timeout = 0.002
+
+    async def command(config, *args):
+        commands.append(args)
+        return "123" if args[0] == "sbatch" else ""
+
+    monkeypatch.setattr("opendde_harness.plugin.protein_design.initial_round.api_startup.slurm_command", command)
+    client = ServiceConnection(config, transport=transport)
+    try:
+        with pytest.raises(TimeoutError, match="UNKNOWN"):
+            await client.post("v1/designs", json={})
+        assert sum(c[0] == "sbatch" for c in commands) == 1
+        assert not requests
+    finally:
+        await client.close()
+
+
+async def test_failed_slurm_command_preserves_stderr_in_local_log(tmp_path, monkeypatch):
+    from opendde_harness.plugin.protein_design.initial_round.api_startup import ApiStartupError, slurm_command
+
+    config = Service(
+        url="http://localhost:8010", sbatch_script=tmp_path / "api.sbatch", sbatch_state_file=tmp_path / "api.json"
+    )
+
+    async def process(*args, **kwargs):
+        class Failed:
+            returncode = 1
+
+            async def communicate(self):
+                return b"", b"slurm_load_jobs error: Unable to contact slurm controller"
+
+        return Failed()
+
+    monkeypatch.setattr(
+        "opendde_harness.plugin.protein_design.initial_round.api_startup.asyncio.create_subprocess_exec", process
+    )
+    with pytest.raises(ApiStartupError, match="slurm.log"):
+        await slurm_command(config, "squeue", "--jobs", "123")
+    assert "Unable to contact slurm controller" in config.sbatch_state_file.with_suffix(".slurm.log").read_text()

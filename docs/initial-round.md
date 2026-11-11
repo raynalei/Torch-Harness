@@ -281,3 +281,16 @@ relative to the intended PPIFlow code directory, not the Harness working directo
 No untracked healthy API is used as a fallback: an API with sbatch configured
 gets a new allocation for each new task. Health is checked
 only after resolving that allocation, as a readiness gate before task submission.
+
+### Slurm visibility after API submission
+
+A single empty `squeue` result does not mean a newly submitted API allocation has
+terminated. Harness queries `sacct` for the exact allocation ID (excluding batch
+and extern steps). Confirmed terminal states stop startup and report the exit
+code; queue/accounting visibility lag remains UNKNOWN and is polled within
+`startup_timeout`. Queue command failures are retried up to three consecutive
+unconfirmed failures. A successful queue/accounting observation clears that
+counter. Failed Slurm commands save stdout/stderr beside that task's state file
+in `<state-name>.slurm.log`. Startup retries never submit a second sbatch for the
+same attempt. If Slurm confirms the server exited, inspect its configured
+`#SBATCH --output` file for the underlying environment, port or resource error.
