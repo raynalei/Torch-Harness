@@ -40,13 +40,22 @@ def _section(data, *, create=False):
 
 
 def local_defaults():
-    ports = {"ppiflow": 8010, "torchcraft": 8020, "rosetta": 8030, "af3score": 8040, "torchfold": 8050}
+    ports = {
+        "ppiflow": 8010,
+        "torchcraft": 8020,
+        "rosetta": 8030,
+        "af3score": 8040,
+        "torchfold": 8050,
+        "torchscore": 8060,
+        "torchopt": 8061,
+    }
     return {
         kind: {
             "kind": kind,
             "service": {
                 "url": f"http://127.0.0.1:{port}",
                 "health_path": "/openapi.json" if kind in {"ppiflow", "torchcraft"} else "/health",
+                **({"status_field": "state"} if kind == "torchopt" else {}),
             },
             "max_samples": 20,
         }
@@ -104,7 +113,7 @@ def register_models(
     local_defaults_flag: bool = typer.Option(
         False,
         "--local-defaults",
-        help="Explicitly register same-host ports 8010/8020/8030/8040/8050 for all five services.",
+        help="Register all seven same-host service profiles (ports 8010 through 8061); verify deployment ports first.",
     ),
     services_file: Path | None = typer.Option(
         None,

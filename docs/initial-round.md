@@ -320,3 +320,45 @@ counter. Failed Slurm commands save stdout/stderr beside that task's state file
 in `<state-name>.slurm.log`. Startup retries never submit a second sbatch for the
 same attempt. If Slurm confirms the server exited, inspect its configured
 `#SBATCH --output` file for the underlying environment, port or resource error.
+
+
+## Choose AF3Score or TorchScore
+
+`evaluation.scoring_backend` selects one scoring service; default is `af3score`.
+AF3Score profiles remain valid, including existing default-profile checkpoint hashes.
+Both services may be configured, but only the selected scorer is contacted during
+preflight/scoring. TorchScore has separate options, selection threshold and metric names:
+
+```yaml
+evaluation:
+  scoring_backend: torchscore
+  torchscore:
+    url: http://TORCHSCORE_NODE:8060
+    status_field: status
+    exit_code_field: exit_code
+    metrics_field: metrics
+    metric_fields:
+      iptm: iptm
+  torchscore_options:
+    run_data_pipeline: false
+    run_inference: true
+    init_guess: true
+    num_samples: 1
+    num_workers: 4
+    seed: 10
+    write_fold_input_json_file: false
+  min_torchscore_iptm: 0.5
+  # Retain your configured torchfold, rosetta and dockq_python fields.
+```
+
+This is a fragment to merge with an existing valid workflow. The selected scorer's
+service is required; the unused one is optional. To start TorchScore via Slurm,
+configure its `sbatch_script` just as for other services.
+The worker uses `torchscore_input/`, `torchscore-metrics.json`, `torchscore_results`
+and `metrics.torchscore_iptm`; AF3Score keeps its original field names. Thresholding
+is strictly greater than the selected threshold, then per-source sequence deduplication
+and refold limits apply. TorchFold/DockQ/Rosetta stages are unchanged. Do not assume
+TorchScore ipTM is calibrated identically to AF3Score. Use a new run name/directory
+when switching models; a submitted checkpoint cannot be resumed under another scorer.
+Torch Optimization is separately registered as `torchopt`, not an automatic scoring
+or refold step; see [its action protocol](protein-model-tools.md#torch-optimization-structure-optimization).

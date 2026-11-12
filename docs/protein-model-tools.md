@@ -1,6 +1,6 @@
 # Registered protein models in Qwen conversations
 
-The protein-design plugin contributes five individually named model tools and
+The protein-design plugin contributes seven individually named model tools and
 shared task-management tools to the main assistant:
 
 | Tool | Purpose |
@@ -8,6 +8,8 @@ shared task-management tools to the main assistant:
 | `protein_model_ppiflow` | Submit PPIFlow requests with its own validated argument schema |
 | `protein_model_torchcraft` | Submit TorchCraft VHH/minibinder requests |
 | `protein_model_torchfold` | Submit TorchFold predictions/refolds |
+| `protein_model_torchscore` | Submit TorchScore PDB scoring or metrics extraction |
+| `protein_model_torchopt` | Submit Torch Optimization pipeline actions |
 | `protein_model_af3score` | Submit AF3Score scoring, preprocessing or metrics tasks |
 | `protein_model_rosetta` | Submit any of the six documented Rosetta operations |
 | `protein_model_list` | Discover configured model aliases, request schemas, sample limits and optional HTTP health |
@@ -28,7 +30,7 @@ into `plugins.config.protein-design` in the active Harness configuration, usuall
 `~/.opendde_harness/config.json`. Preserve existing provider, memory, workspace,
 compute and other plugin settings. Restart Harness after editing.
 
-Alternatively, register all five services on the same host using the explicit
+Alternatively, register all seven services on the same host using the explicit
 default ports, without manually editing the JSON:
 
 ```bash
@@ -45,7 +47,7 @@ be installed while its service registry is still empty; these are different stat
 
 Each alias is an operator-chosen name with:
 
-- `kind`: `ppiflow`, `torchcraft`, `af3score`, `torchfold` or `rosetta`.
+- `kind`: `ppiflow`, `torchcraft`, `af3score`, `torchscore`, `torchopt`, `torchfold` or `rosetta`.
 - `service.url`: the actual API endpoint reachable from Harness, not a model name.
 - `service.health_path`: defaults to `/health`; the generator example uses
   `/openapi.json` because their supplied READMEs do not promise `/health`.
@@ -84,10 +86,10 @@ Start by asking:
 Qwen can call `protein_model_list(check_health=true)` and read each model's
 request schema. This proves HTTP reachability only; no inference has been tested.
 There are no registered model aliases until the operator configures them.
-The five named tools each advertise their own model-specific request schema.
+The seven named tools each advertise their own model-specific request schema.
 When exactly one alias of that kind is registered, its `model` argument can be
 omitted. With multiple aliases, Qwen must choose one explicitly. The generic
-submit tool also supports all five kinds and supplies the Rosetta operation selector.
+submit tool also supports all seven kinds and supplies the Rosetta operation selector.
 
 ### AF3Score fast scoring
 
@@ -229,8 +231,7 @@ old IDs; response-field profiles and rotated credential bindings can be correcte
 for the same endpoint without resubmitting.
 
 AF3Score supports `POST /v1/tasks/{id}/cancel`. Cancellation returns **requested**,
-not “job cancelled”; status must confirm termination later. The other four supplied
-READMEs do not establish cancellation support, so the cancel tool rejects them.
+not “job cancelled”; status must confirm termination later. The other services do not establish cancellation support, so the cancel tool rejects them.
 
 ## Relationship to initial-round CLI
 
@@ -247,3 +248,60 @@ AF3Score controls, but deliberately requires `mode=pdb`, `num_samples=1` and
 Use the conversational model tools for pipeline-only preprocessing, prepared
 inference, metrics extraction or multiple AF3Score samples. Do not mix fast and
 MSA-mode selection scores silently.
+
+
+## TorchScore as an independent scorer
+
+Register `kind: torchscore` rather than an AF3Score alias. The named tool is
+`protein_model_torchscore`; it uses POST `/v1/tasks`, GET `/v1/tasks/{task_id}`,
+`/results` and `/metrics`. Its schema is independent from AF3Score and preserves
+`write_fold_input_json_file=false`. Supported modes are `pdb` and `metrics`;
+seed=10, num_samples=1, init_guess=true and run_data_pipeline=false reflect the
+TorchX pipeline's actual single-sample scoring protocol. Prepared/MSA-search and
+pipeline-only requests are rejected. For metrics-only extraction, the compatibility
+field `af3score_output_dir` must contain **TorchScore** raw outputs.
+
+Same-host defaults reserve port 8060 for TorchScore. These are proposed deployment
+ports, not a claim that a service already runs there. Cancellation is not supported.
+See [initial-round selection](initial-round.md#choose-af3score-or-torchscore) to choose
+it for the autonomous workflow. Metrics are model-specific; thresholds need validation.
+
+## Torch Optimization structure optimization
+
+Register the uploaded multi-target API as `kind: torchopt` and call
+`protein_model_torchopt`. Its request mirrors the supplied API:
+
+```json
+{"action":"import","target":"1BVK","source":"/shared/pdbs"}
+```
+
+After import/check, submit a separately authorized optimization action:
+
+```json
+{"action":"submit","target":"1BVK"}
+```
+
+The complete action set is `import`, `check`, `smoke`, `submit`, `status`, `resume`,
+`collect`, `export`. Import requires `source`; export requires a fresh `export`
+path inside the server's project. Other actions reject those paths. Group values
+are `latest` or `group_<digits>`. Targets must already be deployed on the server;
+Harness does not run deployment scripts or invent target configuration.
+
+The adapter POSTs `/v1/jobs`, reads API `job_id` (not Slurm job ID), polls
+`/v1/jobs/{job_id}` and retrieves the **singular** `/v1/jobs/{job_id}/result`.
+The uploaded API reports `state` without an exit code; this protocol is handled
+explicitly. A completed outer action is reported as `action_completed`, with
+`completion_scope: pipeline_action` and `optimization_verified: false`. It is
+not a verified completed optimization: submit/smoke/resume may enqueue child jobs.
+Use explicit `status`, `collect`, and `export` actions and inspect their logs/artifacts.
+`protein_model_results` returns these action logs, not invented scores or optimized
+structure paths. No optimization is inserted automatically into initial-round.
+Cancellation and automatic discovery of final child-job outputs are unsupported.
+
+The uploaded sbatch uses port 8060, which conflicts with TorchScore on the same
+node. The registration example and local defaults reserve **8061** for Torch
+Optimization. Change its uvicorn startup to `--port 8061`, or supply the actual
+node/port in a custom service file. A different-node deployment may reuse 8060.
+The supplied API's synchronous sbatch has a 30-second timeout; configure an
+adequate request_timeout for that deployment. Unknown submission outcomes must
+be reconciled before retrying with a new request_id.

@@ -24,7 +24,7 @@ from opendde_harness.utils.portable_lock import file_lock
 
 
 class ModelRegistration(ContractModel):
-    kind: Literal["ppiflow", "torchcraft", "af3score", "torchfold", "rosetta"]
+    kind: Literal["ppiflow", "torchcraft", "af3score", "torchscore", "torchopt", "torchfold", "rosetta"]
     service: Service
     max_samples: int = Field(default=20, ge=1)
     allowed_input_roots: list[str] = Field(default_factory=list)
@@ -67,8 +67,12 @@ class ProteinModelRegistry:
                     "request_schema": REQUEST_TYPES[model.kind].model_json_schema(),
                     "cancel_supported": model.kind == "af3score",
                     "notes": (
-                        "Pipeline-only AF3Score jobs produce prepared input artifacts, not metrics. Prepared mode returns raw outputs."
+                        "AF3Score prepared mode returns raw outputs without automatic per-PDB metrics."
                         if model.kind == "af3score"
+                        else "TorchScore scoring is independent of AF3Score; supports pdb/metrics, seed=10, one sample."
+                        if model.kind == "torchscore"
+                        else "Torch Optimization returns pipeline action logs; action completion is not optimization completion."
+                        if model.kind == "torchopt"
                         else "Returns a remote job immediately; use status/results tools later."
                     ),
                 }
@@ -138,6 +142,8 @@ class ProteinModelRegistry:
             return "/v1/folds", "/v1/folds", "fold_id"
         if kind == "rosetta":
             return f"/v1/tools/{operation}", "/v1/tasks", "task_id"
+        if kind == "torchopt":
+            return "/v1/jobs", "/v1/jobs", "job_id"
         return "/v1/tasks", "/v1/tasks", "task_id"
 
     @staticmethod
@@ -159,6 +165,8 @@ class ProteinModelRegistry:
                 "target_full_seq",
                 "framework_cif_path",
                 "json_path",
+                "source",
+                "export",
             }:
                 continue
             path = PurePosixPath(value)
@@ -222,7 +230,7 @@ class ProteinModelRegistry:
                 "state": "submission_uncertain",
                 "metrics_expected": AF3ScoreRequest.model_validate(payload).produces_metrics
                 if model.kind == "af3score"
-                else False,
+                else model.kind == "torchscore",
             }
             client = self.client(model)
             try:
@@ -262,17 +270,21 @@ class ProteinModelRegistry:
             status = await client.get(f"{record['status_base']}/{record['remote_id']}")
         finally:
             await client.close()
-        raw = str(select(status, model.service.status_field, "UNKNOWN")).upper().split()
+        default_state = status.get("state", "UNKNOWN") if model.kind == "torchopt" else "UNKNOWN"
+        raw = str(select(status, model.service.status_field, default_state)).upper().split()
         raw_state = raw[0].rstrip("+") if raw else "UNKNOWN"
         exit_code = select(status, model.service.exit_code_field)
         if raw_state in {"COMPLETED", "SUCCEEDED", "SUCCESS"}:
-            state = (
-                "succeeded"
-                if str(exit_code) in {"0", "0:0"} or (exit_code is None and not model.service.require_exit_code)
-                else "unverified"
-                if exit_code is None
-                else "failed"
-            )
+            if model.kind == "torchopt":
+                state = "action_completed" if exit_code is None or str(exit_code) in {"0", "0:0"} else "failed"
+            else:
+                state = (
+                    "succeeded"
+                    if str(exit_code) in {"0", "0:0"} or (exit_code is None and not model.service.require_exit_code)
+                    else "unverified"
+                    if exit_code is None
+                    else "failed"
+                )
         elif raw_state in {"CANCELLED", "CANCELED"}:
             state = "cancelled"
         elif raw_state in {
@@ -292,7 +304,10 @@ class ProteinModelRegistry:
             state = "running"
         else:
             state = "unknown"
-        return {**self.public_record(record), "state": state, "remote_state": raw_state, "exit_code": exit_code}
+        current = {**self.public_record(record), "state": state, "remote_state": raw_state, "exit_code": exit_code}
+        if model.kind == "torchopt":
+            current.update(completion_scope="pipeline_action", optimization_verified=False)
+        return current
 
     async def status(self, request_id):
         path, lock = self.paths(request_id)
@@ -307,20 +322,22 @@ class ProteinModelRegistry:
         path, lock = self.paths(request_id)
         with file_lock(lock, blocking=False):
             current = await self.refresh(request_id)
-            if current["state"] != "succeeded":
-                return {**current, "results_available": False}
             record, model = self.read(request_id)
+            if current["state"] != "succeeded" and not (
+                model.kind == "torchopt" and current["state"] == "action_completed"
+            ):
+                return {**current, "results_available": False}
             client = self.client(model, record)
             try:
                 base = f"{record['status_base']}/{record['remote_id']}"
-                results = await client.get(base + "/results")
+                results = await client.get(base + ("/result" if model.kind == "torchopt" else "/results"))
                 metrics = await client.get(base + "/metrics") if record["metrics_expected"] else None
             finally:
                 await client.close()
             # Raw artifacts stay on disk and are untrusted data, not prompt instructions.
             artifact = self.root / f"{request_id}.results.json"
             write_json(artifact, {"results": results, "metrics": metrics})
-            record.update(state="succeeded", results_path=str(artifact))
+            record.update(state=current["state"], results_path=str(artifact))
             write_json(path, record)
             return {
                 **current,
@@ -328,7 +345,9 @@ class ProteinModelRegistry:
                 "results_path": str(artifact),
                 "results": results,
                 "metrics": metrics,
-                "interpretation": "AF3Score pipeline-only/prepared tasks do not provide per-PDB metrics automatically."
+                "interpretation": "Torch Optimization action finished; submit/smoke/resume may have queued child jobs. Use status/collect/export actions to inspect them. These logs do not verify optimized structures."
+                if model.kind == "torchopt"
+                else "AF3Score prepared tasks do not provide per-PDB metrics automatically."
                 if model.kind == "af3score" and not record["metrics_expected"]
                 else "Model outputs are predictions, not experimental validation.",
             }

@@ -7,10 +7,14 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import ConfigDict, Field, model_validator
+from pydantic import ConfigDict, Field, model_serializer, model_validator
 
 from opendde_harness.plugin.protein_design.core.contracts import ContractModel
-from opendde_harness.plugin.protein_design.core.model_requests import AF3ScoreControls, validate_request
+from opendde_harness.plugin.protein_design.core.model_requests import (
+    AF3ScoreControls,
+    TorchScoreControls,
+    validate_request,
+)
 
 
 class RoundModel(ContractModel):
@@ -96,13 +100,17 @@ class Generator(RoundModel):
 
 
 class Evaluation(RoundModel):
-    af3score: Service
+    scoring_backend: Literal["af3score", "torchscore"] = "af3score"
+    af3score: Service | None = None
+    torchscore: Service | None = None
     torchfold: Service
     rosetta: Service | None = None
     af3score_options: dict[str, Any] = Field(default_factory=dict)
+    torchscore_options: dict[str, Any] = Field(default_factory=dict)
     torchfold_options: dict[str, Any] = Field(default_factory=lambda: {"run_data_pipeline": False})
     rosetta_options: dict[str, Any] = Field(default_factory=lambda: {"pack_input": False, "pack_separated": True})
     min_af3score_iptm: float = Field(default=0.5, ge=0, le=1)
+    min_torchscore_iptm: float = Field(default=0.5, ge=0, le=1)
     min_refold_iptm: float = Field(default=0.8, ge=0, le=1)
     min_dockq: float = Field(default=0.49, ge=0, le=1)
     dockq_python: Path
@@ -111,14 +119,43 @@ class Evaluation(RoundModel):
     fold_confidence_glob: str = "*summary_confidences*.json"
     rosetta_scores_glob: str = "*.sc"
 
+    @property
+    def score_options(self):
+        return getattr(self, f"{self.scoring_backend}_options")
+
+    @property
+    def score_metric(self):
+        return f"{self.scoring_backend}_iptm"
+
+    @property
+    def score_threshold(self):
+        return getattr(self, f"min_{self.scoring_backend}_iptm")
+
+    @model_serializer(mode="wrap")
+    def serialize(self, handler):
+        value = handler(self)
+        # Preserve the historical config hash for unchanged AF3Score runs.
+        if (
+            self.scoring_backend == "af3score"
+            and self.torchscore is None
+            and not self.torchscore_options
+            and self.min_torchscore_iptm == 0.5
+        ):
+            for key in ("scoring_backend", "torchscore", "torchscore_options", "min_torchscore_iptm"):
+                value.pop(key, None)
+        return value
+
     @model_validator(mode="after")
     def fixed_scoring_protocol(self):
-        if self.af3score_options.get("num_samples", 1) != 1 or self.af3score_options.get("mode", "pdb") != "pdb":
-            raise ValueError("initial round AF3Score uses mode=pdb and num_samples=1")
-        controls = AF3ScoreControls.model_validate({k: v for k, v in self.af3score_options.items() if k != "mode"})
+        if getattr(self, self.scoring_backend) is None:
+            raise ValueError(f"evaluation.{self.scoring_backend} service is required for the selected scoring_backend")
+        if self.score_options.get("num_samples", 1) != 1 or self.score_options.get("mode", "pdb") != "pdb":
+            raise ValueError(f"initial round {self.scoring_backend} uses mode=pdb and num_samples=1")
+        schema = AF3ScoreControls if self.scoring_backend == "af3score" else TorchScoreControls
+        controls = schema.model_validate({k: v for k, v in self.score_options.items() if k != "mode"})
         if not controls.run_inference:
             raise ValueError(
-                "initial round requires AF3Score run_inference=true to produce selection metrics; use protein_model_submit for pipeline-only tasks"
+                f"initial round requires {'AF3Score' if self.scoring_backend == 'af3score' else 'TorchScore'} run_inference=true to produce selection metrics; use protein_model_submit for pipeline-only tasks"
             )
         if (
             "run_data_pipeline" in self.torchfold_options

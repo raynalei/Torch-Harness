@@ -23,7 +23,7 @@ def test_registration_merges_five_services_preserving_provider_and_workspace(tmp
     result = invoke(path, "register", "--local-defaults")
     assert result.exit_code == 0, result.output
     summary = json.loads(result.output)
-    assert len(summary["registered_aliases"]) == 5
+    assert len(summary["registered_aliases"]) == 7
     data = json.loads(path.read_text())
     assert data["providers"] == original["providers"]
     assert data["agents"] == original["agents"]
@@ -31,6 +31,10 @@ def test_registration_merges_five_services_preserving_provider_and_workspace(tmp
     assert data["plugins"]["config"]["protein-design"]["compute_url"] == "http://compute.test"
     models = data["plugins"]["config"]["protein-design"]["model_services"]
     assert models["torchfold"]["service"]["url"].endswith(":8050")
+    assert models["torchscore"]["kind"] == "torchscore"
+    assert models["torchscore"]["service"]["url"].endswith(":8060")
+    assert models["torchopt"]["service"]["url"].endswith(":8061")
+    assert models["torchopt"]["service"]["status_field"] == "state"
     assert "synthetic-key" not in result.output
     backup = Path(summary["backup_path"])
     assert json.loads(backup.read_text()) == original
@@ -49,7 +53,7 @@ def test_repeated_default_registration_keeps_custom_alias_and_endpoint(tmp_path)
     assert json.loads(repeated.output)["changed_aliases"] == []
     assert path.read_bytes() == before
     models = json.loads(before)["plugins"]["config"]["protein-design"]["model_services"]
-    assert len(models) == 5 and "torchcraft" not in models and models["mycraft"] == custom
+    assert len(models) == 7 and "torchcraft" not in models and models["mycraft"] == custom
 
 
 def test_register_requires_explicit_endpoint_source(tmp_path):
@@ -67,7 +71,7 @@ def test_import_documented_fragment_and_list_active_file(tmp_path):
     assert listing.exit_code == 0, listing.output
     payload = json.loads(listing.output)
     assert payload["active_config_path"] == str(path.resolve())
-    assert len(payload["models"]) == 5 and payload["unconfigured_model_kinds"] == []
+    assert len(payload["models"]) == 7 and payload["unconfigured_model_kinds"] == []
     assert not payload["models"][0]["inference_verified"]
 
 
@@ -77,7 +81,15 @@ def test_empty_registry_identifies_config_and_missing_models(tmp_path):
     assert result.exit_code == 0
     value = json.loads(result.output)
     assert value["models"] == []
-    assert set(value["unconfigured_model_kinds"]) == {"af3score", "torchfold", "torchcraft", "ppiflow", "rosetta"}
+    assert set(value["unconfigured_model_kinds"]) == {
+        "af3score",
+        "torchscore",
+        "torchopt",
+        "torchfold",
+        "torchcraft",
+        "ppiflow",
+        "rosetta",
+    }
     assert value["active_config_path"] == str(path)
     assert not path.exists()
 

@@ -851,3 +851,48 @@ async def test_dockq_preflight_uses_configured_python_and_preserves_actual_error
     assert commands[0][1].endswith("/initial_round/dockq.py") and commands[0][2] == "--check"
     log = tmp_path / round_config.name / "dockq-check.log"
     assert "No module named 'numpy'" in log.read_text()
+
+
+@pytest.mark.parametrize("threshold,expected", [(0.85, 2), (0.9, 0)])
+async def test_torchscore_is_an_independent_initial_round_selection_backend(
+    round_config, fake_services, threshold, expected
+):
+    transport, calls = fake_services
+    evaluation = round_config.evaluation
+    evaluation.scoring_backend = "torchscore"
+    evaluation.torchscore = Service(url="https://torchscore.test")
+    evaluation.af3score = None
+    evaluation.min_torchscore_iptm = threshold
+    result = await InitialRoundRunner(round_config, transport=transport).run()
+    assert result["accepted"] == expected
+    assert calls[("torchscore", "POST")] == 2
+    assert calls[("af3score", "POST")] == 0
+    assert calls[("torchfold", "POST")] == expected
+    root = round_config.work_dir / round_config.name
+    candidates = json.loads((root / "candidates.json").read_text())
+    assert all(c["metrics"]["torchscore_iptm"] == 0.9 and "af3score_iptm" not in c["metrics"] for c in candidates)
+    assert "torchscore_iptm" in (root / "ranking.csv").read_text().splitlines()[0]
+    before = dict(calls)
+    assert (await InitialRoundRunner(round_config, transport=transport).run())["accepted"] == expected
+    assert all(calls[key] == value for key, value in before.items() if key[1] == "POST")
+
+
+def test_default_af3score_serialization_preserves_existing_checkpoint_shape(round_config):
+    dumped = round_config.model_dump(mode="json")["evaluation"]
+    assert "scoring_backend" not in dumped
+    assert not any(key in dumped for key in ("torchscore", "torchscore_options", "min_torchscore_iptm"))
+    from opendde_harness.plugin.protein_design.initial_round.config import Evaluation
+
+    assert Evaluation.model_validate(dumped).model_dump(mode="json") == dumped
+    with pytest.raises(ValueError, match="torchscore.*required"):
+        Evaluation.model_validate({**dumped, "scoring_backend": "torchscore"})
+
+
+def test_torchscore_round_rejects_msa_search_and_requires_inference(round_config):
+    from opendde_harness.plugin.protein_design.initial_round.config import Evaluation
+
+    value = round_config.model_dump(mode="json")["evaluation"]
+    value.update(scoring_backend="torchscore", torchscore={"url": "https://score.test"})
+    for options in ({"run_data_pipeline": True}, {"run_inference": False}, {"seed": 11}, {"mode": "metrics"}):
+        with pytest.raises(ValueError):
+            Evaluation.model_validate({**value, "torchscore_options": options})

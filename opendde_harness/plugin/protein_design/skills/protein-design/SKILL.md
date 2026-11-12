@@ -1,6 +1,6 @@
 ---
 name: protein-design
-description: Prepare, run and interpret antibody or minibinder workflows, including registered PPIFlow, TorchCraft, AF3Score, TorchFold and Rosetta model tools.
+description: Prepare, run and interpret antibody or minibinder workflows, including registered PPIFlow, TorchCraft, AF3Score, TorchScore, Torch Optimization, TorchFold and Rosetta model tools.
 metadata:
   opendde:
     always: false
@@ -36,9 +36,9 @@ script/input files, but do not claim sbatch-managed services must be running
 before launch. These instructions apply before the legacy workflow below.
 
 
-For a complete authorized PPIFlow initial round, prefer `protein_initial_round_start` with the configured `initial_round_config` profile and mounted PDB path. The detached Python worker handles generation, GET polling, AF3Score threshold filtering, refold-input construction, TorchFold and design/reference DockQ without further model calls. Report its run directory concisely; query saved progress with `protein_initial_round_status` when asked. Do not manually poll the five model APIs from repeated chat turns. PPIFlow-only profiles support paired VH/VL antibodies with `mode: antibody`, both heavy/light chains in `chains.binder`, and a complete `refold_map`; TorchCraft cannot be paired with this mode. A profile is prepared once with the appropriate framework, chains, hotspots, shared paths and service configuration; do not invent these scientific inputs from a PDB alone.
+For a complete authorized PPIFlow initial round, prefer `protein_initial_round_start` with the configured `initial_round_config` profile and mounted PDB path. The detached Python worker handles generation, GET polling, the configured AF3Score or TorchScore threshold filtering, refold-input construction, TorchFold and design/reference DockQ without further model calls. Report its run directory concisely; query saved progress with `protein_initial_round_status` when asked. Do not manually poll model APIs from repeated chat turns. PPIFlow-only profiles support paired VH/VL antibodies with `mode: antibody`, both heavy/light chains in `chains.binder`, and a complete `refold_map`; TorchCraft cannot be paired with this mode. A profile is prepared once with the appropriate framework, chains, hotspots, shared paths and service configuration; do not invent these scientific inputs from a PDB alone.
 
-Call `protein_model_list` to discover configured aliases, the active config path and request schemas. An empty models list means tool code is installed but no external API endpoints are configured in that instance; it does not mean the tools are missing. The five named tools are `protein_model_ppiflow`, `protein_model_torchcraft`, `protein_model_torchfold`, `protein_model_af3score` and `protein_model_rosetta`; each exposes its own request schema. Use the documented `protein-design models register` command to register operator-supplied endpoints in the correct config, then restart Harness. Never invent a working endpoint. Registration is independent of chat-provider configuration and the legacy compute URL. Use only the operations the registry advertises. A configured endpoint or health response is not evidence of successful model inference.
+Call `protein_model_list` to discover configured aliases, the active config path and request schemas. An empty models list means tool code is installed but no external API endpoints are configured in that instance; it does not mean the tools are missing. The named tools are `protein_model_ppiflow`, `protein_model_torchcraft`, `protein_model_torchfold`, `protein_model_af3score`, `protein_model_torchscore`, `protein_model_torchopt` and `protein_model_rosetta`; each exposes its own request schema. Use the documented `protein-design models register` command to register operator-supplied endpoints in the correct config, then restart Harness. Never invent a working endpoint. Registration is independent of chat-provider configuration and the legacy compute URL. Use only the operations the registry advertises. A configured endpoint or health response is not evidence of successful model inference.
 
 TorchCraft `monomer_unconditional` requires an existing remote `json_path` and a `design_length`; it does not require a target, hotspots or framework. TorchCraft `mini_binder` and `vhh` do require their target inputs, and `target_full_seq` is the remote sequence CSV path, not the sequence text. Do not apply target-binding or legacy minibinder requirements to unconditional monomer generation.
 
@@ -123,3 +123,17 @@ running task.
 Use `protein_design_candidates` to inspect ranked candidates. Before recommending experimental sequences, require canonical amino acids, preserved framework residues, successful structure prediction, gate compliance, and metric provenance. Prefer a diverse shortlist over near-duplicate sequences with indistinguishable scores.
 
 Use `protein_design_stop` when the user asks to stop or continuing would violate an explicit resource or safety constraint. The stop is cooperative and takes effect at a safe cycle boundary.
+
+
+TorchScore is an independent `torchscore` model kind, not an AF3Score alias. For
+initial-round choose `evaluation.scoring_backend: torchscore`, provide the
+`torchscore` service, `torchscore_options`, and `min_torchscore_iptm`; do not change
+an existing run to another scorer. It supports PDB scoring and metrics extraction
+with seed=10/one sample, not AF3Score's full preprocessing protocol.
+Torch Optimization (`torchopt`) exposes explicit import/check/smoke/submit/status/
+resume/collect/export actions. A returned `action_completed` describes only the
+outer action; `optimization_verified: false` means child optimization results have
+not been verified. Request status/collect/export actions only within the user's
+authorized scope. Do not claim optimized structures based on submit logs or invent
+their paths. Uploaded optimization API port 8060 conflicts with same-node TorchScore;
+use the configured deployment address (local registration default for torchopt is 8061).

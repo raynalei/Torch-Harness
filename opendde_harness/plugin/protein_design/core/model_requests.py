@@ -55,7 +55,63 @@ class AF3ScoreRequest(AF3ScoreControls):
 
     @property
     def produces_metrics(self) -> bool:
-        return (self.mode == "pdb" and self.run_inference) or (self.mode == "metrics" and self.af3score_output_dir)
+        return bool(
+            (self.mode == "pdb" and self.run_inference) or (self.mode == "metrics" and self.af3score_output_dir)
+        )
+
+
+class TorchScoreControls(ContractModel):
+    run_data_pipeline: StrictBool = False
+    run_inference: StrictBool = True
+    init_guess: StrictBool = True
+    num_samples: Literal[1] = 1
+    num_workers: int = Field(default=4, ge=1, le=64)
+    seed: Literal[10] = 10
+    write_fold_input_json_file: StrictBool = False
+
+    @model_validator(mode="after")
+    def supported_controls(self):
+        if self.run_data_pipeline or not self.init_guess or self.write_fold_input_json_file:
+            raise ValueError(
+                "TorchScore requires run_data_pipeline=false, init_guess=true and write_fold_input_json_file=false"
+            )
+        return self
+
+
+class TorchScoreRequest(TorchScoreControls):
+    mode: Literal["pdb", "metrics"] = "pdb"
+    input_pdb_dir: str
+    af3score_output_dir: str | None = Field(
+        default=None, description="Compatibility API field: existing TorchScore raw outputs, not AF3Score outputs."
+    )
+
+    @model_validator(mode="after")
+    def scoring_mode(self):
+        if self.mode == "pdb" and (not self.run_inference or self.af3score_output_dir is not None):
+            raise ValueError("TorchScore pdb mode requires inference and no existing output directory")
+        if self.mode == "metrics":
+            if not self.af3score_output_dir:
+                raise ValueError("TorchScore metrics mode requires af3score_output_dir containing TorchScore outputs")
+            self.run_inference = False
+        return self
+
+
+class TorchOptimizationRequest(ContractModel):
+    action: Literal["import", "check", "smoke", "submit", "status", "resume", "collect", "export"]
+    target: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+    source: str | None = None
+    group: str = Field(default="latest", pattern=r"^(latest|group_[0-9]+)$")
+    export: str | None = None
+
+    @model_validator(mode="after")
+    def action_arguments(self):
+        if (self.action == "import") != (self.source is not None):
+            raise ValueError("source is required only for Torch Optimization import")
+        if (self.action == "export") != (self.export is not None):
+            raise ValueError("export is required only for Torch Optimization export")
+        if self.source == "" or self.export == "":
+            raise ValueError("Torch Optimization paths must not be empty")
+        return self
 
 
 class PPIFlowRequest(ContractModel):
@@ -178,6 +234,8 @@ class RosettaRequest(ContractModel):
 
 REQUEST_TYPES = {
     "af3score": AF3ScoreRequest,
+    "torchscore": TorchScoreRequest,
+    "torchopt": TorchOptimizationRequest,
     "ppiflow": PPIFlowRequest,
     "torchcraft": TorchCraftRequest,
     "torchfold": TorchFoldRequest,

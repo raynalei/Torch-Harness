@@ -9,7 +9,7 @@ import importlib.util
 import json
 from pathlib import Path
 
-from opendde_harness.plugin.protein_design.core.model_requests import AF3ScoreRequest
+from opendde_harness.plugin.protein_design.core.model_requests import validate_request
 from opendde_harness.utils.portable_lock import file_lock
 
 from .artifacts import (
@@ -125,7 +125,7 @@ class InitialRoundRunner:
         configs.update(
             {
                 name: getattr(self.config.evaluation, name)
-                for name in ("af3score", "torchfold", "rosetta")
+                for name in (self.config.evaluation.scoring_backend, "torchfold", "rosetta")
                 if getattr(self.config.evaluation, name) is not None
             }
         )
@@ -225,7 +225,9 @@ class InitialRoundRunner:
         key = candidate["candidate_id"]
         directory = self.root / key
         directory.mkdir(exist_ok=True)
-        input_dir = directory / "af3score_input"
+        scorer = evaluation.scoring_backend
+        metric = evaluation.score_metric
+        input_dir = directory / f"{scorer}_input"
         model = input_dir / f"{key}.pdb"
         original = self.files.local(candidate["generated_structure"])
         if digest(original) != candidate["generated_sha256"]:
@@ -235,32 +237,31 @@ class InitialRoundRunner:
             and digest(self.files.local(candidate["refold_structure"])) != candidate["refold_sha256"]
         ):
             raise ValueError(f"refold artifact changed: {key}")
-        if "af3score_iptm" in candidate["metrics"]:
+        if metric in candidate["metrics"]:
             return
         write_pdb(original, model)
         result = await self.job(
-            "af3score",
+            scorer,
             f"score/{key}",
             "/v1/tasks",
             "task_id",
-            AF3ScoreRequest.model_validate(
+            validate_request(
+                scorer,
                 {
-                    **evaluation.af3score_options,
+                    **evaluation.score_options,
                     "mode": "pdb",
                     "input_pdb_dir": self.files.remote(input_dir),
                     "num_samples": 1,
-                }
-            ).model_dump(exclude_none=True),
+                },
+            ),
         )
-        service = self.services["af3score"]
+        service = self.services[scorer]
         job = self.checkpoint.data["jobs"][f"score/{key}"]
         metrics = await service.get(f"/v1/tasks/{job['id']}/metrics")
-        write_json(directory / "af3score-metrics.json", metrics)
-        field = evaluation.af3score.metric_fields.get("iptm", "iptm")
-        candidate["metrics"]["af3score_iptm"] = measured(
-            metric_records(metrics, evaluation.af3score), field, confidence=True
-        )
-        candidate["af3score_results"] = result
+        write_json(directory / f"{scorer}-metrics.json", metrics)
+        field = service.config.metric_fields.get("iptm", "iptm")
+        candidate["metrics"][metric] = measured(metric_records(metrics, service.config), field, confidence=True)
+        candidate[f"{scorer}_results"] = result
         candidate["status"] = "scored"
         self.save_candidates()
 
@@ -424,7 +425,7 @@ class InitialRoundRunner:
                     "source",
                     "status",
                     "rank",
-                    "af3score_iptm",
+                    self.config.evaluation.score_metric,
                     "torchfold_iptm",
                     "design_refold_dockq",
                     "rosetta_interface_dg",
@@ -469,10 +470,10 @@ class InitialRoundRunner:
                     selected = 0
                     ordered = sorted(
                         (c for c in candidates if c["source"] == source and "error" not in c),
-                        key=lambda c: (-c["metrics"]["af3score_iptm"], c["candidate_id"]),
+                        key=lambda c: (-c["metrics"][self.config.evaluation.score_metric], c["candidate_id"]),
                     )
                     for c in ordered:
-                        if c["metrics"]["af3score_iptm"] <= self.config.evaluation.min_af3score_iptm:
+                        if c["metrics"][self.config.evaluation.score_metric] <= self.config.evaluation.score_threshold:
                             c["status"] = "filtered"
                         elif generator.deduplicate_sequences and c["sequence"] in seen:
                             c["status"] = "duplicate"

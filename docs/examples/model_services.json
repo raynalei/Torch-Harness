@@ -38,6 +38,20 @@
             "service": {"url": "http://127.0.0.1:8050"},
             "max_samples": 5,
             "allowed_input_roots": ["/lustre/project"]
+          },
+          "torchscore": {
+            "kind": "torchscore",
+            "service": {"url": "http://127.0.0.1:8060"},
+            "max_samples": 1,
+            "allowed_input_roots": ["/lustre/project"]
+          },
+          "torchopt": {
+            "kind": "torchopt",
+            "service": {
+              "url": "http://127.0.0.1:8061",
+              "status_field": "state"
+            },
+            "allowed_input_roots": ["/lustre/project"]
           }
         }
       }

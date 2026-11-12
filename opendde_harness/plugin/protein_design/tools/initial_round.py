@@ -23,7 +23,7 @@ class InitialRoundTool(Tool):
     def description(self):
         if self.action == "status":
             return "Read saved automatic initial-round progress once. The background Python worker already polls Slurm via GET and advances stages; do not use repeated LLM calls to poll."
-        return "Start an authorized autonomous PPIFlow (nanobody, binder or paired-chain antibody) -> AF3Score threshold -> TorchFold refold -> DockQ pipeline in a background worker. Use a configured pipeline profile plus the mounted input PDB; no per-stage LLM decisions are needed. Return run_dir immediately. The worker polls remote GET status and continues automatically after successful exit codes. Reuse the same profile/PDB/run name on retries. Framework, chain/hotspot policy and service paths must be prepared in the profile."
+        return "Start an authorized autonomous PPIFlow (nanobody, binder or paired-chain antibody) -> selected AF3Score/TorchScore threshold -> TorchFold refold -> DockQ pipeline in a background worker. Use a configured pipeline profile plus the mounted input PDB; no per-stage LLM decisions are needed. Return run_dir immediately. The worker polls remote GET status and continues automatically after successful exit codes. Reuse the same profile/PDB/run name on retries. Framework, chain/hotspot policy and service paths must be prepared in the profile."
 
     @property
     def parameters(self):

@@ -50,7 +50,11 @@ def api():
     [
         ("pdb", {}, True),
         ("pdb", {"run_data_pipeline": True, "run_inference": True}, True),
-        ("prepared", {"json_dir": "/shared/json", "h5_dir": "/shared/h5", "run_data_pipeline": True, "run_inference": True}, False),
+        (
+            "prepared",
+            {"json_dir": "/shared/json", "h5_dir": "/shared/h5", "run_data_pipeline": True, "run_inference": True},
+            False,
+        ),
         ("metrics", {"af3score_output_dir": "/shared/out", "run_data_pipeline": False, "run_inference": False}, True),
     ],
 )
@@ -109,7 +113,12 @@ def test_af3score_pipeline_only_is_rejected_outside_metrics():
 def test_af3score_no_pipeline_fast_scoring_always_writes_fold_json():
     """false/true 快速评分模式也强制写 fold JSON(每种模式都输出 TorchFold fold JSON)。"""
     value = AF3ScoreRequest.model_validate(
-        {"input_pdb_dir": "/shared/pdbs", "run_data_pipeline": False, "run_inference": True, "write_fold_input_json_file": False}
+        {
+            "input_pdb_dir": "/shared/pdbs",
+            "run_data_pipeline": False,
+            "run_inference": True,
+            "write_fold_input_json_file": False,
+        }
     )
     assert value.write_fold_input_json_file is True
 
@@ -128,18 +137,12 @@ async def test_fast_scoring_submits_controls_and_returns_without_polling(registr
 
 
 async def test_pipeline_only_results_never_request_nonexistent_metrics(registration, api, tmp_path):
-    transport, requests, remote = api
-    registry = ProteinModelRegistry(registration, tmp_path, transport=transport)
-    await registry.submit(
-        "af3", "pipeline", {"input_pdb_dir": "/shared/pdbs", "run_data_pipeline": True, "run_inference": False}
-    )
-    body = json.loads(requests[0].content)
-    assert body["write_fold_input_json_file"] is True
-    remote.update(status="COMPLETED", exit_code="0:0")
-    result = await registry.results("pipeline")
-    assert result["results_available"] and result["metrics"] is None
-    assert not any(r.url.path.endswith("/metrics") for r in requests)
-    assert (tmp_path / "pipeline.results.json").exists()
+    registry = ProteinModelRegistry(registration, tmp_path, transport=api[0])
+    with pytest.raises(ValueError, match="run_inference=true"):
+        await registry.submit(
+            "af3", "pipeline", {"input_pdb_dir": "/shared/pdbs", "run_data_pipeline": True, "run_inference": False}
+        )
+    assert api[1] == []
 
 
 async def test_prepared_inference_does_not_claim_automatic_metrics(registration, api, tmp_path):
@@ -351,7 +354,7 @@ def test_initial_round_rejects_pipeline_only_without_selection_metrics():
 
 async def test_four_named_models_have_independent_schemas_and_chat_dispatch(api, tmp_path):
     definitions = {
-        "af3score": {"input_pdb_dir": "/shared/pdbs", "run_data_pipeline": True, "run_inference": False},
+        "af3score": {"input_pdb_dir": "/shared/pdbs", "run_data_pipeline": True, "run_inference": True},
         "ppiflow": {
             "mode": "nanobody",
             "name": "n",
@@ -444,6 +447,8 @@ def test_documented_registration_fragment_has_all_five_models():
     registry = ProteinModelRegistry(models, Path("/unused"))
     assert {row["kind"] for row in registry.catalogue()["models"]} == {
         "af3score",
+        "torchscore",
+        "torchopt",
         "ppiflow",
         "torchcraft",
         "torchfold",
@@ -469,6 +474,8 @@ def test_cli_bootstrap_exposes_named_models_to_existing_qwen_provider(registrati
         "protein_model_torchcraft",
         "protein_model_torchfold",
         "protein_model_af3score",
+        "protein_model_torchscore",
+        "protein_model_torchopt",
         "protein_model_status",
         "protein_model_results",
     } <= names
@@ -580,3 +587,178 @@ async def test_ppiflow_antibody_accepts_cli_paths_and_rejects_paths_outside_root
     for field in ("config", "model_weights", "output_dir"):
         with pytest.raises(ValueError, match="input roots"):
             await registry.submit("ppi", "bad_" + field, {**payload, field: "/outside/file"})
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"mode": "prepared"},
+        {"seed": 11},
+        {"num_samples": 2},
+        {"run_data_pipeline": True},
+        {"init_guess": False},
+        {"write_fold_input_json_file": True},
+        {"run_inference": False},
+    ],
+)
+def test_torchscore_rejects_unsupported_controls(changes):
+    from opendde_harness.plugin.protein_design.core.model_requests import validate_request
+
+    with pytest.raises(ValueError):
+        validate_request("torchscore", {"input_pdb_dir": "/shared/pdbs", **changes})
+
+
+@pytest.mark.parametrize("mode", ["pdb", "metrics"])
+async def test_torchscore_registered_independently_with_metrics(registration, api, tmp_path, mode):
+    registration["score"] = {"kind": "torchscore", "service": {"url": "https://score.test"}}
+    registry = ProteinModelRegistry(registration, tmp_path, transport=api[0])
+    payload = {"mode": mode, "input_pdb_dir": "/shared/pdbs"}
+    if mode == "metrics":
+        payload["af3score_output_dir"] = "/shared/torchscore_outputs"
+    submitted = await registry.submit("score", "score_task", payload)
+    assert submitted["kind"] == "torchscore" and submitted["metrics_expected"] is True
+    request = api[1][0]
+    assert request.url.path == "/v1/tasks" and request.url.host == "score.test"
+    body = json.loads(request.content)
+    assert body["write_fold_input_json_file"] is False
+    assert body["run_inference"] is (mode == "pdb")
+    api[2].update(status="COMPLETED", exit_code="0:0")
+    result = await registry.results("score_task")
+    assert result["metrics"]["metrics"][0]["iptm"] == 0.85
+    assert any(r.url.path.endswith("/metrics") for r in api[1])
+    with pytest.raises(ValueError, match="cancellation"):
+        await registry.cancel("score_task")
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"action": "import", "target": "1BVK"},
+        {"action": "submit", "target": "1BVK", "source": "/shared/pdbs"},
+        {"action": "export", "target": "1BVK"},
+        {"action": "check", "target": "../escape"},
+        {"action": "status", "target": "1BVK", "group": "group_invalid"},
+    ],
+)
+def test_torchopt_validates_action_arguments(payload):
+    from opendde_harness.plugin.protein_design.core.model_requests import validate_request
+
+    with pytest.raises(ValueError):
+        validate_request("torchopt", payload)
+
+
+@pytest.mark.parametrize(
+    "action,extra",
+    [
+        ("import", {"source": "/shared/pdbs"}),
+        ("check", {}),
+        ("smoke", {}),
+        ("submit", {}),
+        ("status", {"group": "group_1"}),
+        ("resume", {}),
+        ("collect", {}),
+        ("export", {"export": "/shared/new_export"}),
+    ],
+)
+async def test_torchopt_actions_use_uploaded_job_protocol(tmp_path, action, extra):
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        if request.method == "POST":
+            return httpx.Response(202, json={"job_id": "opt123", "slurm_job_id": "789", "state": "PENDING"})
+        if request.url.path.endswith("/result"):
+            return httpx.Response(
+                200,
+                json={
+                    "job_id": "opt123",
+                    "state": "COMPLETED",
+                    "action": action,
+                    "target": "1BVK",
+                    "output": {"stdout": "child jobs submitted"},
+                },
+            )
+        return httpx.Response(200, json={"state": "COMPLETED"})
+
+    registry = ProteinModelRegistry(
+        {"opt": {"kind": "torchopt", "service": {"url": "https://opt.test"}, "allowed_input_roots": ["/shared"]}},
+        tmp_path,
+        transport=httpx.MockTransport(handler),
+    )
+    payload = {"action": action, "target": "1BVK", **extra}
+    submitted = await registry.submit("opt", "opt_request", payload)
+    assert submitted["remote_id"] == "opt123"
+    assert requests[0].url.path == "/v1/jobs"
+    body = json.loads(requests[0].content)
+    assert body["action"] == action and body["target"] == "1BVK"
+    assert (await registry.status("opt_request"))["state"] == "action_completed"
+    result = await registry.results("opt_request")
+    assert result["state"] == "action_completed" and result["results_available"]
+    assert result["optimization_verified"] is False and result["completion_scope"] == "pipeline_action"
+    assert result["metrics"] is None
+    assert requests[-1].url.path == "/v1/jobs/opt123/result"
+    assert not any(r.url.path.endswith(("/results", "/metrics")) for r in requests)
+    await registry.submit("opt", "opt_request", payload)
+    assert len([r for r in requests if r.method == "POST"]) == 1
+
+
+async def test_torchopt_rejects_outside_source_before_post(tmp_path):
+    registry = ProteinModelRegistry(
+        {"opt": {"kind": "torchopt", "service": {"url": "https://opt.test"}, "allowed_input_roots": ["/shared"]}},
+        tmp_path,
+    )
+    with pytest.raises(ValueError, match="outside"):
+        await registry.submit("opt", "bad", {"action": "import", "target": "1BVK", "source": "/private/pdbs"})
+
+
+@pytest.mark.parametrize(
+    "kind,payload",
+    [
+        ("torchscore", {"input_pdb_dir": "/shared/pdbs"}),
+        ("torchopt", {"action": "check", "target": "1BVK"}),
+    ],
+)
+async def test_new_named_tools_are_discovered_and_dispatch_independently(kind, payload, tmp_path):
+    registration = {kind: {"kind": kind, "service": {"url": f"https://{kind}.test"}}}
+    tool = active_registry().build_tool(
+        f"protein_model_{kind}",
+        config={"model_services": registration, "model_jobs_dir": str(tmp_path)},
+        services=ServiceLocator(workspace=tmp_path, user_id="test", agent_id="test"),
+    )
+
+    def handler(request):
+        return httpx.Response(202, json={"task_id": "score123", "job_id": "opt123"})
+
+    tool.registry.transport = httpx.MockTransport(handler)
+    result = json.loads((await tool.execute(request_id="named", request=payload, user_confirmed=True)).model_text)
+    assert result["kind"] == kind and result["state"] == "submitted"
+
+
+@pytest.mark.parametrize(
+    "remote",
+    [
+        {"state": "PENDING"},
+        {"state": "FAILED"},
+        {"state": "UNKNOWN"},
+        {"state": "COMPLETED", "exit_code": "1:0"},
+    ],
+)
+async def test_torchopt_does_not_read_results_for_failed_or_unfinished_actions(tmp_path, remote):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        if request.method == "POST":
+            return httpx.Response(202, json={"job_id": "opt123"})
+        assert not request.url.path.endswith("/result")
+        return httpx.Response(200, json=remote)
+
+    registry = ProteinModelRegistry(
+        {"opt": {"kind": "torchopt", "service": {"url": "https://opt.test"}}},
+        tmp_path,
+        transport=httpx.MockTransport(handler),
+    )
+    await registry.submit("opt", "request", {"action": "submit", "target": "1BVK"})
+    result = await registry.results("request")
+    assert result["results_available"] is False
+    assert result["optimization_verified"] is False
