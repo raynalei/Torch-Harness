@@ -38,18 +38,24 @@ class AF3ScoreRequest(AF3ScoreControls):
             raise ValueError(f"AF3Score {self.mode} requires {', '.join(sorted(required))}")
         if any(getattr(self, field) is not None for field in paths - required):
             raise ValueError("AF3Score input paths do not match the selected mode")
-        if self.mode != "metrics" and not (self.run_data_pipeline or self.run_inference):
-            raise ValueError("run_data_pipeline and run_inference cannot both be false outside metrics mode")
+        # Every run writes the TorchFold fold input JSON so a refold stage can
+        # reuse it; (true, true) therefore yields both AF3Score metrics and fold JSON.
+        self.write_fold_input_json_file = True
         if self.mode == "metrics":
+            # Only metrics extraction may skip both the pipeline and inference.
             self.run_data_pipeline = False
             self.run_inference = False
-        if self.mode != "metrics" and self.run_data_pipeline and not self.run_inference:
-            self.write_fold_input_json_file = True
+        elif self.run_inference is not True:
+            # pdb/prepared are regular inference runs: the model must actually run.
+            raise ValueError(
+                "run_inference=true is required for pdb/prepared mode; "
+                "run_data_pipeline=false with run_inference=false is only valid in metrics mode"
+            )
         return self
 
     @property
     def produces_metrics(self) -> bool:
-        return self.mode == "metrics" or (self.mode == "pdb" and self.run_inference)
+        return (self.mode == "pdb" and self.run_inference) or (self.mode == "metrics" and self.af3score_output_dir)
 
 
 class PPIFlowRequest(ContractModel):

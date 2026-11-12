@@ -49,8 +49,8 @@ def api():
     "mode,extra,expected",
     [
         ("pdb", {}, True),
-        ("pdb", {"run_data_pipeline": True, "run_inference": False}, False),
-        ("prepared", {"json_dir": "/shared/json", "h5_dir": "/shared/h5"}, False),
+        ("pdb", {"run_data_pipeline": True, "run_inference": True}, True),
+        ("prepared", {"json_dir": "/shared/json", "h5_dir": "/shared/h5", "run_data_pipeline": True, "run_inference": True}, False),
         ("metrics", {"af3score_output_dir": "/shared/out", "run_data_pipeline": False, "run_inference": False}, True),
     ],
 )
@@ -60,8 +60,8 @@ def test_af3score_modes_distinguish_artifacts_and_metrics(mode, extra, expected)
         request["input_pdb_dir"] = "/shared/pdbs"
     value = AF3ScoreRequest.model_validate(request)
     assert value.produces_metrics is expected
-    if mode == "pdb" and not value.run_inference:
-        assert value.write_fold_input_json_file
+    # Every supported mode writes the TorchFold fold input JSON.
+    assert value.write_fold_input_json_file is True
 
 
 @pytest.mark.parametrize(
@@ -78,6 +78,40 @@ def test_af3score_modes_distinguish_artifacts_and_metrics(mode, extra, expected)
 def test_invalid_af3score_controls_fail_before_submission(changes):
     with pytest.raises(ValueError):
         AF3ScoreRequest.model_validate({"input_pdb_dir": "/shared/pdbs", **changes})
+
+
+@pytest.mark.parametrize("run_inference", [True])
+def test_af3score_pipeline_always_writes_fold_json(run_inference):
+    """run_data_pipeline=true 必须强制写 fold JSON，与 run_inference 独立。
+
+    这样 pdb 推理模式(pipeline=true, inference=true)能同时拿到分数 + fold 输入，
+    供后续 TorchFold refold 使用；用户显式传 write_fold_input_json_file=False 也被覆盖。
+    """
+    value = AF3ScoreRequest.model_validate(
+        {
+            "input_pdb_dir": "/shared/pdbs",
+            "run_data_pipeline": run_inference,
+            "run_inference": run_inference,
+            "write_fold_input_json_file": False,
+        }
+    )
+    assert value.write_fold_input_json_file is True
+
+
+def test_af3score_pipeline_only_is_rejected_outside_metrics():
+    """pdb/prepared 模式下 run_data_pipeline=true + run_inference=false 不再允许(仅 metrics 可)。"""
+    with pytest.raises(ValueError, match="run_inference=true is required"):
+        AF3ScoreRequest.model_validate(
+            {"input_pdb_dir": "/shared/pdbs", "run_data_pipeline": True, "run_inference": False}
+        )
+
+
+def test_af3score_no_pipeline_fast_scoring_always_writes_fold_json():
+    """false/true 快速评分模式也强制写 fold JSON(每种模式都输出 TorchFold fold JSON)。"""
+    value = AF3ScoreRequest.model_validate(
+        {"input_pdb_dir": "/shared/pdbs", "run_data_pipeline": False, "run_inference": True, "write_fold_input_json_file": False}
+    )
+    assert value.write_fold_input_json_file is True
 
 
 async def test_fast_scoring_submits_controls_and_returns_without_polling(registration, api, tmp_path):

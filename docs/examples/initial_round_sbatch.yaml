@@ -34,7 +34,7 @@ generators:
       samples_per_target: 5
       num_timesteps: 200
       model_weights: /lustre/grp/cmclab/share/changdr/model/20260618_distill/model_214.ckpt.enc
-      output_dir: /lustre/grp/cmclab/guoly/pjt/sample_code_api/test_api_samples/sample_antibody/3/
+      output_dir: /lustre/grp/cmclab/leiy/test/
     chains:
       target:
       - C
@@ -51,7 +51,7 @@ generators:
     deduplicate_sequences: false
 evaluation:
   af3score_options:
-    run_data_pipeline: false
+    run_data_pipeline: True
     run_inference: true
     init_guess: true
     num_workers: 4
@@ -81,7 +81,7 @@ evaluation:
     metrics_field: metrics
     metric_fields:
       interface_dg: dG_separated
-    sbatch_script: /lustre/grp/cmclab/leiy/rosetta_api/rosetta-api.sbatch
+    sbatch_script: /lustre/grp/cmclab/leiy/rosetta_biotools_api/rosetta-api.sbatch
     sbatch_state_file: /lustre/grp/cmclab/leiy/rosetta_api/api-state/rosetta.json
     sbatch_resolve_host: true
     startup_timeout: 1800
