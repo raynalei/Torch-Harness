@@ -337,7 +337,7 @@ preflight/scoring. TorchScore has separate options, selection threshold and metr
 evaluation:
   scoring_backend: torchscore
   torchscore:
-    url: http://TORCHSCORE_NODE:8060
+    url: http://TORCHSCORE_NODE:8070
     status_field: status
     exit_code_field: exit_code
     metrics_field: metrics

@@ -46,7 +46,7 @@ def local_defaults():
         "rosetta": 8030,
         "af3score": 8040,
         "torchfold": 8050,
-        "torchscore": 8060,
+        "torchscore": 8070,
         "torchopt": 8060,
     }
     return {
@@ -113,7 +113,7 @@ def register_models(
     local_defaults_flag: bool = typer.Option(
         False,
         "--local-defaults",
-        help="Register example service profiles; TorchOpt and TorchScore both default to 8060 and require distinct hosts or endpoints.",
+        help="Register example service profiles (TorchOpt 8060, TorchScore 8070); verify deployment addresses first.",
     ),
     services_file: Path | None = typer.Option(
         None,

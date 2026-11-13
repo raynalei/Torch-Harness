@@ -2,7 +2,7 @@
 
 This prototype extends `protein-design initial-round` with automatic geometry
 checks and a bounded feedback loop. It uses the existing PPIFlow, optional
-TorchCraft, AF3Score, TorchFold and Rosetta services. The original single-round
+TorchCraft, parallel AF3Score/TorchScore scoring tools, TorchFold and Rosetta services. The original single-round
 workflow is unchanged unless the profile includes `autonomous`.
 
 Copy a working initial-round profile, use a new run name, configure explicit
@@ -15,8 +15,8 @@ autonomous:
   batch_size: 5
   max_batch_size: 20
   patience: 2
-  rescue_limit: 3       # Low-AF3Score candidates refolded per batch for diagnosis.
-  min_af3score: 0.8
+  rescue_limit: 3       # Low-score candidates refolded per batch for diagnosis.
+  min_score: 0.8
   min_dockq: 0.49
   decision_policy: agent  # Uses the already configured default chat provider.
   decision_timeout: 120
@@ -36,21 +36,73 @@ service contracts, not chat credentials, scientific validity or live inference.
 
 ## Evaluation and decisions
 
-A candidate qualifies when **AF3Score API ipTM > 0.8 and design/refold DockQ >
-0.49**, using the configurable thresholds above. In addition, at least one
-specified hotspot must be contacted for automatic expansion. Qualified candidates
-rank by `100 * af3score_iptm - rosetta_interface_dg`, descending. AF3Score and
-Rosetta are required in this mode. Missing scores are failures, never zero.
+AF3Score and TorchScore are independent, parallel scoring tools. Select one
+backend for a run; do not rename TorchScore outputs as AF3Score or combine their
+scores. Explicit `evaluation.scoring_backend` takes precedence. Chat launch
+reuses an existing configured scorer, or chooses the only registered scorer kind.
+When both kinds are registered with no preference/configuration, AF3Score remains
+the default. A unique registered alias supplies that kind's actual service settings.
+The selection is fixed in the run snapshot; an API failure never switches scorers.
+
+Let **S** be `af3score_iptm` or `torchscore_iptm` from the selected API.
+A candidate qualifies when **S > 0.8 and design/refold DockQ > 0.49**, using
+`autonomous.min_score` and `min_dockq`. At least one specified hotspot must also
+be contacted. Rank by **100 * S - rosetta_interface_dg**, descending. Rosetta and
+the selected scoring service are required. Missing scores are failures, never
+zero. The default 0.8 is a prototype policy threshold, not evidence that the two
+models' scores have identical calibration. Use separate runs for comparisons.
+
 TorchFold ipTM remains available but is not an extra acceptance gate. The legacy
 `min_refold_iptm`, scorer threshold and per-source refold limit do not override
 feedback evaluation; the bounded rescue quota preserves some low-score candidates.
+
+```mermaid
+flowchart TD
+    A[Initial generation: configured PPIFlow / TorchCraft] --> B{Choose registered scoring tool once}
+    B -->|Explicit choice or sole available kind| C[AF3Score or TorchScore: S = its own ipTM]
+    B -->|Both available, no preference| C
+    C --> D[TorchFold + DockQ + Rosetta + Python geometry]
+    D --> E{Round / sample / stagnation limit reached?}
+    E -->|Yes| Z[Export historical best and saved decisions]
+    E -->|No| F{Hotspot contact below 5 Angstrom?}
+    F -->|No| R[Regenerate: preserve target/hotspots, use a new request]
+    F -->|Unknown mapping| U[Small trials of compatible available generators]
+    F -->|Yes| G{S > 0.8 and DockQ > 0.49?}
+    G -->|Yes: verified hit| H{Python hotspot-neighborhood evidence}
+    H -->|Loop fraction < 0.3 and local RMSD < 2 Angstrom| P[Prefer PPIFlow expansion]
+    H -->|Loop fraction >= 0.5 and local RMSD > 2 Angstrom| T[Prefer TorchCraft expansion if compatible]
+    H -->|Insufficient / mixed evidence| U
+    G -->|No| I{DockQ <= 0.49?}
+    I -->|Yes| J{Stable binder core and one displaced mutable loop?}
+    J -->|Core RMSD < 2; one region > 3; valid mask; repair eligible| L[Partial flow: compatible PPIFlow antibody/VHH; freeze other residues]
+    J -->|No valid local repair| R
+    I -->|No: pose retained, S <= 0.8| K{Registered TorchOpt and supported single-chain format?}
+    K -->|Yes and repair eligible| O[TorchOptimization: verify child jobs and final PDB]
+    K -->|No| R
+    R --> C
+    U --> C
+    P --> C
+    T --> C
+    L --> C
+    O --> C
+```
+
+The both-available/no-preference branch selects AF3Score. This is a legal-menu
+policy, not a claim that its scores are superior. Expansion proposals are based
+on existing hits; TorchCraft is omitted if not configured or incompatible.
+Repair eligibility requires a candidate not previously repaired and with no
+`parent_id`; current prototype descendants are not repaired again. The agent
+chooses one legal option per round and may use other offered options; the edges
+show proposal/default-rule grounds, not a free-form ability to invent requests.
+Failed/missing candidate evaluations are recorded and excluded from the usable
+pool. Uncertain submissions pause for recovery rather than issuing another POST.
 
 | Evidence | Diagnosis | Legal next experiments |
 | --- | --- | --- |
 | Qualifying scores, hotspot contacted | Hit | Expand a compatible generator |
 | No hotspot contacted | Off epitope | Regenerate |
 | Low DockQ, stable framework, one changed design region | Local change | Partial flow if its exact request is available; otherwise regenerate |
-| High DockQ but low AF3Score | Low confidence | TorchOptimization for supported single-chain VHH/minibinders when registered; otherwise regenerate |
+| High DockQ but low selected-scorer ipTM | Low confidence | TorchOptimization for supported single-chain VHH/minibinders when registered; otherwise regenerate |
 | Low DockQ without a localized repair region | Pose change | Regenerate |
 | Missing hotspot mapping/geometry evidence | Uncertain | Bounded generator trials |
 | Failed API/invalid structures | Evaluation failure | Record failure; never treat it as a biological low score |
@@ -87,7 +139,7 @@ poll scientific services themselves, without repeated model calls.
 
 ## Automatic partial-flow parameters
 
-No extra human input, generator annotations, repair template or candidate manifest
+No extra human region input, generator annotations, repair template or candidate manifest
 fields are required. Each candidate retains its validated `generation_request`.
 Decisions use only registered tool arguments, existing API results and local
 Python calculations. Arbitrary `design_regions` or `partial_requests` fields in
@@ -114,7 +166,7 @@ generator responses are not used.
    otherwise the prototype uses `0.01`. The worker sets the current candidate's
    `complex_pdb`, a fresh name/output directory and a one-sample repair budget.
 5. Validate the resulting `partial_antibody` / `partial_nanobody` request using
-   the existing registered schema, submit, then repeat AF3Score, TorchFold, DockQ
+   the existing registered schema, submit, then repeat the selected scorer, TorchFold, DockQ
    and Rosetta evaluation. Check that target sequences and all binder residues
    outside the selected region remain unchanged.
 

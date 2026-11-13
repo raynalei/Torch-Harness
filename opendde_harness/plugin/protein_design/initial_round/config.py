@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import ConfigDict, Field, model_serializer, model_validator
+from pydantic import AliasChoices, ConfigDict, Field, model_serializer, model_validator
 
 from opendde_harness.plugin.protein_design.core.contracts import ContractModel
 from opendde_harness.plugin.protein_design.core.model_requests import (
@@ -179,7 +179,7 @@ class AutonomousRound(RoundModel):
     max_batch_size: int = Field(default=20, ge=1, le=1000)
     patience: int = Field(default=2, ge=1)
     rescue_limit: int = Field(default=3, ge=0, le=100)
-    min_af3score: float = Field(default=0.8, ge=0, le=1)
+    min_score: float = Field(default=0.8, ge=0, le=1, validation_alias=AliasChoices("min_score", "min_af3score"))
     min_dockq: float = Field(default=0.49, ge=0, le=1)
     contact_distance: float = Field(default=5.0, gt=0)
     framework_rmsd: float = Field(default=2.0, gt=0)
@@ -206,8 +206,8 @@ class InitialRoundConfig(RoundModel):
     @model_validator(mode="after")
     def check_workflow(self):
         if self.autonomous is not None:
-            if self.evaluation.scoring_backend != "af3score" or self.evaluation.rosetta is None:
-                raise ValueError("autonomous rounds require AF3Score and Rosetta for the ranking formula")
+            if self.evaluation.rosetta is None:
+                raise ValueError("autonomous rounds require a scoring backend and Rosetta for the ranking formula")
             for source, generator in self.generators.items():
                 validate_request(source, {"name": self.name, **generator.request})
             initial_samples = sum(

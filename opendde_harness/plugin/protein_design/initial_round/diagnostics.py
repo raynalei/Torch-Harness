@@ -44,8 +44,8 @@ def _rmsd(displacements):
     return float(np.sqrt(np.mean(np.square(displacements))))
 
 
-def classify(metrics, evidence, options):
-    required = ("af3score_iptm", "design_refold_dockq", "rosetta_interface_dg")
+def classify(metrics, evidence, options, score_metric="af3score_iptm"):
+    required = (score_metric, "design_refold_dockq", "rosetta_interface_dg")
     if any(
         isinstance(metrics.get(k), bool)
         or not isinstance(metrics.get(k), (int, float))
@@ -57,7 +57,7 @@ def classify(metrics, evidence, options):
         return "off_epitope"
     if evidence.get("epitope_hit") is not True:
         return "uncertain"
-    if metrics["af3score_iptm"] > options.min_af3score and metrics["design_refold_dockq"] > options.min_dockq:
+    if metrics[score_metric] > options.min_score and metrics["design_refold_dockq"] > options.min_dockq:
         return "hit"
     if metrics["design_refold_dockq"] <= options.min_dockq:
         if evidence.get("local_region"):
@@ -212,5 +212,5 @@ def analyze(runner, candidate):
     except (ValueError, KeyError, TypeError, np.linalg.LinAlgError) as exc:
         evidence["local_region"] = None
         evidence["notes"].append(str(exc))
-    evidence["diagnosis"] = classify(candidate["metrics"], evidence, options)
+    evidence["diagnosis"] = classify(candidate["metrics"], evidence, options, runner.config.evaluation.score_metric)
     return evidence

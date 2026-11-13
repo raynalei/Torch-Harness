@@ -41,7 +41,7 @@
           },
           "torchscore": {
             "kind": "torchscore",
-            "service": {"url": "http://127.0.0.1:8060"},
+            "service": {"url": "http://127.0.0.1:8070"},
             "max_samples": 1,
             "allowed_input_roots": ["/lustre/project"]
           },

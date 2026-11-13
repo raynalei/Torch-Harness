@@ -142,3 +142,14 @@ completion. Paired VH/VL is unsupported. The bundled deployment uses port 8060;
 reuse the registered deployment and its model environment rather than inventing
 new paths or asking for extra workflow annotations. Autonomous feedback can use
 this registered service for low-confidence candidates without per-round approval.
+
+
+AF3Score and TorchScore are independent parallel scoring tools. For feedback,
+select one from the registered services and keep that choice throughout the run.
+Honor an explicit user/backend choice; otherwise reuse the configured scorer or
+sole registered scorer kind. Both available without a preference retains the
+AF3Score default. Never reinterpret TorchScore ipTM as AF3Score or silently switch
+after a service failure. Candidate metrics, diagnostics and ranking use the chosen
+scorer's own field. `autonomous.min_score` is the generic feedback threshold; its
+0.8 default is a prototype policy, not a claim of equal model calibration.
+The supplied TorchScore sbatch uses 8070; TorchOptimization remains 8060.

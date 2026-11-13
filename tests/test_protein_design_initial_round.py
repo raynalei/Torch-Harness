@@ -1085,7 +1085,7 @@ def test_default_config_hash_shape_is_preserved(round_config):
     value = round_config.model_dump(mode="json")
     value["evaluation"]["rosetta"] = None
     value["autonomous"] = {}
-    with pytest.raises(ValueError, match="require AF3Score and Rosetta"):
+    with pytest.raises(ValueError, match="require a scoring backend and Rosetta"):
         InitialRoundConfig.model_validate(value)
 
 
@@ -1420,3 +1420,96 @@ def test_registered_optimization_service_is_reused_without_new_scientific_inputs
     assert result.generators == config.generators
     registrations["other_opt"] = {"kind": "torchopt", "service": {"url": "https://other.test"}}
     assert prepare_run(config.model_dump(mode="json"), registrations=registrations).evaluation.torchopt is None
+
+
+async def test_torchscore_feedback_uses_registered_scorer_for_ranking_and_resume(round_config, fake_services):
+    transport, calls = fake_services
+    base = transport.handler
+    score_requests = []
+    config = autonomous_config(round_config, max_rounds=1, max_samples=3)
+    config.evaluation.scoring_backend = "torchscore"
+    config.evaluation.torchscore = Service(url="https://torchscore.test")
+    config.evaluation.af3score = None
+
+    def handler(request):
+        assert request.url.host != "af3score.test"
+        if request.url.host == "torchscore.test" and request.method == "POST":
+            score_requests.append(json.loads(request.content))
+        return base(request)
+
+    runner = InitialRoundRunner(config, transport=httpx.MockTransport(handler))
+    result = await runner.run()
+    assert result["scoring_backend"] == "torchscore"
+    assert result["ranking_policy"] == "100*torchscore_iptm-rosetta_interface_dg_desc"
+    assert result["accepted"] == 3
+    assert calls[("af3score", "POST")] == 0
+    assert calls[("torchscore", "POST")] == 3
+    for request in score_requests:
+        assert request["run_data_pipeline"] is False and request["write_fold_input_json_file"] is False
+        assert request["num_samples"] == 1 and request["seed"] == 10
+    for candidate in runner.checkpoint.data["candidates"]:
+        assert candidate["scoring_backend"] == "torchscore"
+        assert candidate["metrics"]["torchscore_iptm"] == 0.9
+        assert candidate["metrics"]["ranking_score"] == 102
+        assert "af3score_iptm" not in candidate["metrics"]
+    csv_header = (runner.root / "ranking.csv").read_text().splitlines()[0]
+    assert "torchscore_iptm" in csv_header and "af3score_iptm" not in csv_header
+    count = calls[("torchscore", "POST")]
+    assert await InitialRoundRunner(config, transport=httpx.MockTransport(handler)).run() == result
+    assert calls[("torchscore", "POST")] == count
+
+
+async def test_selected_torchscore_failure_does_not_fall_back_to_af3score(round_config, fake_services):
+    config = autonomous_config(round_config)
+    config.evaluation.scoring_backend = "torchscore"
+    config.evaluation.torchscore = Service(url="https://torchscore.test")
+    base = fake_services[0].handler
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        assert request.url.host != "af3score.test"
+        if request.url.host == "torchscore.test" and request.method == "POST":
+            return httpx.Response(500, json={"error": "unavailable"})
+        return base(request)
+
+    with pytest.raises(SubmissionUncertainError):
+        await InitialRoundRunner(config, transport=httpx.MockTransport(handler)).run()
+    assert any(request.url.host == "torchscore.test" for request in seen)
+
+
+def test_feedback_diagnosis_and_ranking_never_mix_scorers():
+    from opendde_harness.plugin.protein_design.initial_round.autonomous import rank_score
+    from opendde_harness.plugin.protein_design.initial_round.config import AutonomousRound
+    from opendde_harness.plugin.protein_design.initial_round.diagnostics import classify
+
+    metrics = {"af3score_iptm": 0.99, "torchscore_iptm": 0.7, "design_refold_dockq": 0.9, "rosetta_interface_dg": -12}
+    assert classify(metrics, {"epitope_hit": True}, AutonomousRound(), "torchscore_iptm") == "low_confidence"
+    assert rank_score({"metrics": metrics}, "torchscore_iptm") == 82
+    assert rank_score({"metrics": metrics}, "af3score_iptm") == 111
+
+
+def test_scorer_choice_uses_explicit_configuration_then_registered_kind(round_config):
+    import copy
+
+    from opendde_harness.plugin.protein_design.initial_round.automation import prepare_run
+
+    value = autonomous_config(round_config).model_dump(mode="json")
+    evaluation = value["evaluation"]
+    evaluation.pop("scoring_backend", None)
+    evaluation["af3score"] = None
+    evaluation.pop("torchscore", None)
+    registrations = {"score_alias": {"kind": "torchscore", "service": {"url": "http://torchscore.test:8070"}}}
+    before = copy.deepcopy(value)
+    selected = prepare_run(value, registrations=registrations)
+    assert selected.evaluation.scoring_backend == "torchscore"
+    assert selected.evaluation.torchscore.url == "http://torchscore.test:8070"
+    assert value == before
+    registrations["af3_alias"] = {"kind": "af3score", "service": {"url": "https://af3.test"}}
+    assert prepare_run(value, registrations=registrations).evaluation.scoring_backend == "af3score"
+    evaluation["scoring_backend"] = "torchscore"
+    assert prepare_run(value, registrations=registrations).evaluation.scoring_backend == "torchscore"
+    evaluation["scoring_backend"] = "af3score"
+    registrations.pop("af3_alias")
+    with pytest.raises(ValueError, match="af3score service is required"):
+        prepare_run(value, registrations=registrations)

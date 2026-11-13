@@ -386,6 +386,7 @@ class InitialRoundRunner:
         write_json(directory / f"{scorer}-metrics.json", metrics)
         field = service.config.metric_fields.get("iptm", "iptm")
         candidate["metrics"][metric] = measured(metric_records(metrics, service.config), field, confidence=True)
+        candidate["scoring_backend"] = scorer
         candidate[f"{scorer}_results"] = result
         candidate["status"] = "scored"
         self.save_candidates()
@@ -534,7 +535,8 @@ class InitialRoundRunner:
         if self.config.autonomous is not None:
             state = self.checkpoint.data["autonomous"]
             result.update(
-                ranking_policy="100*af3score_iptm-rosetta_interface_dg_desc",
+                scoring_backend=self.config.evaluation.scoring_backend,
+                ranking_policy=f"100*{self.config.evaluation.score_metric}-rosetta_interface_dg_desc",
                 stop_reason=state.get("stop_reason"),
                 used_samples=state["used_samples"],
                 followup_rounds=len(state["decisions"]),

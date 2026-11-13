@@ -53,9 +53,9 @@ def sample_count(source, request):
     return int(request.get("samples_per_target" if source == "ppiflow" else "num_designs", 1))
 
 
-def rank_score(candidate):
+def rank_score(candidate, score_metric):
     metrics = candidate["metrics"]
-    return 100 * metrics["af3score_iptm"] - metrics["rosetta_interface_dg"]
+    return 100 * metrics[score_metric] - metrics["rosetta_interface_dg"]
 
 
 def _partial_request(runner, candidate, region_name, name):
@@ -117,7 +117,7 @@ def options_for(runner, candidates, index, remaining, repaired):
     config = runner.config.autonomous
     usable = [c for c in candidates if "diagnostics" in c and c["status"] != "failed"]
     hits = [c for c in usable if c["diagnostics"]["diagnosis"] == "hit"]
-    hits.sort(key=lambda c: (-rank_score(c), c["candidate_id"]))
+    hits.sort(key=lambda c: (-rank_score(c, runner.config.evaluation.score_metric), c["candidate_id"]))
     options = []
     for candidate in sorted(usable, key=lambda c: c["candidate_id"]):
         if candidate["candidate_id"] in repaired or candidate.get("parent_id"):
@@ -230,7 +230,7 @@ async def evaluate(runner, candidates):
             runner.save_candidates()
     valid = sorted(
         [c for c in candidates if "error" not in c],
-        key=lambda c: (-c["metrics"]["af3score_iptm"], c["candidate_id"]),
+        key=lambda c: (-c["metrics"][runner.config.evaluation.score_metric], c["candidate_id"]),
     )
     rescued = 0
     seen = set()
@@ -240,7 +240,7 @@ async def evaluate(runner, candidates):
             candidate["status"] = "duplicate"
             continue
         seen.add(sequence)
-        if candidate["metrics"]["af3score_iptm"] <= options.min_af3score:
+        if candidate["metrics"][runner.config.evaluation.score_metric] <= options.min_score:
             if rescued >= options.rescue_limit:
                 candidate["status"] = "filtered"
                 continue
@@ -249,7 +249,7 @@ async def evaluate(runner, candidates):
             await runner.refold(candidate)
             candidate["diagnostics"] = analyze(runner, candidate)
             candidate["status"] = "accepted" if candidate["diagnostics"]["diagnosis"] == "hit" else "rejected"
-            candidate["metrics"]["ranking_score"] = rank_score(candidate)
+            candidate["metrics"]["ranking_score"] = rank_score(candidate, runner.config.evaluation.score_metric)
         except SubmissionUncertainError:
             raise
         except Exception as exc:
@@ -258,11 +258,11 @@ async def evaluate(runner, candidates):
     runner.save_candidates()
 
 
-def progress(candidates):
+def progress(candidates, score_metric):
     accepted = [c for c in candidates if c["status"] == "accepted"]
     return {
         "sequences": sorted({c["sequence"] for c in accepted}),
-        "best": max((rank_score(c) for c in accepted), default=None),
+        "best": max((rank_score(c, score_metric) for c in accepted), default=None),
     }
 
 
@@ -282,7 +282,7 @@ async def run_autonomous(runner):
     candidates = runner.checkpoint.data["candidates"]
     if "progress" not in state:
         await evaluate(runner, [c for c in candidates if not c.get("round_index")])
-        state["progress"] = progress(candidates)
+        state["progress"] = progress(candidates, runner.config.evaluation.score_metric)
         runner.save_candidates()
     for index in range(1, config.max_rounds + 1):
         decisions = state["decisions"]
@@ -297,6 +297,7 @@ async def run_autonomous(runner):
             options = options_for(runner, candidates, index, remaining, state["repaired"])
             context = {
                 "round": index,
+                "scoring_backend": runner.config.evaluation.scoring_backend,
                 "remaining_samples": remaining,
                 "candidates": [
                     {"candidate_id": c["candidate_id"], "metrics": c["metrics"], "diagnostics": c.get("diagnostics")}
@@ -344,7 +345,7 @@ async def run_autonomous(runner):
                 parent_id=decision.get("parent_id"),
             )
         await evaluate(runner, batch)
-        current = progress(candidates)
+        current = progress(candidates, runner.config.evaluation.score_metric)
         previous = state["progress"]
         improved = bool(set(current["sequences"]) - set(previous["sequences"])) or (
             current["best"] is not None and (previous["best"] is None or current["best"] > previous["best"])

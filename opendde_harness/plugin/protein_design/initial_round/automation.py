@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
@@ -12,6 +13,8 @@ import sys
 import threading
 from collections import Counter
 from pathlib import Path
+
+import yaml
 
 from opendde_harness.plugin.protein_design.initial_round.config import InitialRoundConfig
 from opendde_harness.plugin.protein_design.initial_round.storage import SharedFiles, write_json
@@ -25,16 +28,28 @@ def prepare_run(
     name: str | None = None,
     registrations: dict | None = None,
 ):
-    config = (
-        InitialRoundConfig.model_validate(config_path)
-        if isinstance(config_path, dict)
-        else InitialRoundConfig.load(config_path)
-    )
+    value = copy.deepcopy(config_path) if isinstance(config_path, dict) else yaml.safe_load(config_path.read_text())
+    if not isinstance(value, dict):
+        raise ValueError("workflow configuration must be an object")
+    evaluation = value.setdefault("evaluation", {})
+    if not isinstance(evaluation, dict):
+        raise ValueError("evaluation must be an object")
+    known = registrations or {}
+    configured = {kind for kind in ("af3score", "torchscore") if evaluation.get(kind) is not None}
+    registered = {item.get("kind") for item in known.values() if item.get("kind") in {"af3score", "torchscore"}}
+    if "scoring_backend" not in evaluation:
+        available = configured or registered
+        evaluation["scoring_backend"] = "torchscore" if available == {"torchscore"} else "af3score"
+    selected = evaluation["scoring_backend"]
+    for kind in (selected, "torchopt"):
+        if kind == "torchopt" and value.get("autonomous") is None:
+            continue
+        if evaluation.get(kind) is None:
+            matches = [item for item in known.values() if item.get("kind") == kind]
+            if len(matches) == 1:
+                evaluation[kind] = copy.deepcopy(matches[0]["service"])
+    config = InitialRoundConfig.model_validate(value)
     value = config.model_dump(mode="json")
-    if config.autonomous is not None and config.evaluation.torchopt is None:
-        registered = [item for item in (registrations or {}).values() if item.get("kind") == "torchopt"]
-        if len(registered) == 1:
-            value["evaluation"]["torchopt"] = registered[0]["service"]
     if name:
         value["name"] = name
     if pdb_path is not None:

@@ -261,7 +261,7 @@ TorchX pipeline's actual single-sample scoring protocol. Prepared/MSA-search and
 pipeline-only requests are rejected. For metrics-only extraction, the compatibility
 field `af3score_output_dir` must contain **TorchScore** raw outputs.
 
-Same-host defaults reserve port 8060 for TorchScore. These are proposed deployment
+Same-host defaults reserve port 8070 for TorchScore, matching the uploaded sbatch. These are proposed deployment
 ports, not a claim that a service already runs there. Cancellation is not supported.
 See [initial-round selection](initial-round.md#choose-af3score-or-torchscore) to choose
 it for the autonomous workflow. Metrics are model-specific; thresholds need validation.
@@ -318,12 +318,11 @@ The request schema matches the uploaded backend: `binder_type` is `vhh` or
 and GPUs are registered request fields. Ordinary standalone calls use the native
 5-round/5-proposal defaults; automatic feedback uses one round/proposal, one
 shard/GPU and imports at most one final structure per reserved repair slot.
-It re-runs AF3Score, TorchFold, DockQ and Rosetta rather than trusting optimizer
+It re-runs the selected AF3Score/TorchScore tool, TorchFold, DockQ and Rosetta rather than trusting optimizer
 metrics as equivalent scores. Explicit fixed-residue/CDR constraints are checked
 before admitting the optimized structure.
 
-TorchOptimization defaults to port **8060**. TorchScore also defaults to 8060;
-use different nodes or explicitly configured endpoints when running both.
-Use the actual deployed node/port in registration. Native
+TorchOptimization defaults to port **8060**. TorchScore defaults to 8070.
+Use the actual deployed node/port in registration for each tool. Native
 model Python/weights remain configured in that service's environment, never in
 new user-supplied workflow annotations.
