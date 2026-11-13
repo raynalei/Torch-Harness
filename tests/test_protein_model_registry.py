@@ -861,3 +861,142 @@ async def test_torchopt_submission_diagnostics_survive_status_and_retry(tmp_path
     assert (await registry.submit("opt", "diagnostic-opt", request))["submission_diagnostic"] == diagnostic
     assert (await registry.status("diagnostic-opt"))["submission_diagnostic"] == diagnostic
     assert sum(r.method == "POST" for r in calls) == 1
+
+
+async def test_model_monitor_collects_and_releases_without_agent_polling(registration, api, tmp_path, monkeypatch):
+    from opendde_harness.plugin.protein_design.core.model_monitor import watch
+    from opendde_harness.plugin.protein_design.initial_round import api_startup
+
+    transport, requests, remote = api
+    registry = ProteinModelRegistry(registration, tmp_path, transport=transport)
+    value = await registry.submit("af3", "watched", {"input_pdb_dir": "/shared/pdbs"})
+    assert value["request_record"] == str(tmp_path / "watched.json")
+    commands = []
+    original = api_startup.slurm_command
+
+    async def command(config, *args):
+        commands.append(args)
+        return await original(config, *args)
+
+    async def complete(_):
+        remote.update(status="COMPLETED", exit_code="0:0")
+
+    monkeypatch.setattr(api_startup, "slurm_command", command)
+    monkeypatch.setattr("opendde_harness.plugin.protein_design.core.model_monitor.asyncio.sleep", complete)
+    await watch(registry, "watched")
+    record, _ = registry.read("watched")
+    assert record["state"] == "succeeded"
+    assert record["api_cleanup"][0]["state"] == "cancel_requested"
+    assert (tmp_path / "watched.results.json").is_file()
+    assert sum(args[0] == "scancel" for args in commands) == 1
+    assert json.loads((tmp_path / "watched.monitor-status.json").read_text())["state"] == "completed"
+    assert sum(r.method == "POST" for r in requests) == 1
+    # A restarted reader serves saved results without starting a new API allocation.
+    requests.clear()
+    restored = ProteinModelRegistry(registration, tmp_path, transport=transport)
+    assert (await restored.results("watched"))["results_available"]
+    assert not requests
+    assert sum(args[0] == "scancel" for args in commands) == 1
+
+
+async def test_failed_results_also_release_owned_api(registration, api, tmp_path):
+    transport, _, remote = api
+    registry = ProteinModelRegistry(registration, tmp_path, transport=transport)
+    await registry.submit("af3", "failed-result", {"input_pdb_dir": "/shared/pdbs"})
+    remote.update(status="FAILED", exit_code="1:0")
+    result = await registry.results("failed-result")
+    assert not result["results_available"]
+    assert result["api_cleanup"][0]["state"] == "cancel_requested"
+
+
+async def test_model_request_discovery_distinguishes_local_and_remote_ids(registration, api, tmp_path):
+    transport, _, _ = api
+    registry = ProteinModelRegistry(registration, tmp_path, transport=transport)
+    result = await registry.submit("af3", "local-task", {"input_pdb_dir": "/shared/pdbs"})
+    restored = ProteinModelRegistry(registration, tmp_path, transport=transport)
+    catalogue = restored.catalogue()
+    assert catalogue["jobs_dir"] == str(tmp_path)
+    assert catalogue["recent_requests"][0]["request_id"] == "local-task"
+    assert catalogue["recent_requests"][0]["remote_id"] == result["remote_id"]
+    with pytest.raises(ValueError, match="unknown local request_id.*recent_requests"):
+        restored.read(result["remote_id"])
+    assert (await restored.status("local-task"))["request_id"] == "local-task"
+
+
+async def test_monitor_launcher_saves_registration_and_reuses_live_process(registration, api, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from opendde_harness.plugin.protein_design.core import model_monitor
+
+    registry = ProteinModelRegistry(registration, tmp_path, transport=api[0])
+    await registry.submit("af3", "launch-watch", {"input_pdb_dir": "/shared/pdbs"})
+    commands = []
+
+    def popen(command, **kwargs):
+        commands.append((command, kwargs))
+        return SimpleNamespace(pid=12345, wait=lambda: None)
+
+    monkeypatch.setattr(model_monitor.subprocess, "Popen", popen)
+    first = model_monitor.start_monitor(registry, "launch-watch")
+    monkeypatch.setattr(model_monitor, "_alive", lambda _: True)
+    assert model_monitor.start_monitor(registry, "launch-watch") == first
+    assert len(commands) == 1
+    assert commands[0][0][1:] == ["-m", model_monitor.MODULE, str(tmp_path), "launch-watch"]
+    assert commands[0][1]["start_new_session"]
+    snapshot = json.loads((tmp_path / "launch-watch.monitor-config.json").read_text())
+    assert snapshot["af3"]["kind"] == "af3score"
+    assert snapshot["af3"]["service"]["url"] == "https://af3.test"
+
+
+async def test_monitor_retries_deferred_cleanup_and_keeps_unknown_jobs(registration, api, tmp_path, monkeypatch):
+    from opendde_harness.plugin.protein_design.core import model_monitor
+
+    registry = ProteinModelRegistry(registration, tmp_path, transport=api[0])
+    await registry.submit("af3", "cleanup-retry", {"input_pdb_dir": "/shared/pdbs"})
+    attempts = []
+
+    async def release(record, model):
+        attempts.append(True)
+        record["api_cleanup"] = [{"state": "cleanup_deferred" if len(attempts) == 1 else "cancel_requested"}]
+
+    async def no_wait(_):
+        return
+
+    api[2].update(status="COMPLETED", exit_code="0:0")
+    monkeypatch.setattr(registry, "_release", release)
+    monkeypatch.setattr(model_monitor.asyncio, "sleep", no_wait)
+    await model_monitor.watch(registry, "cleanup-retry")
+    assert len(attempts) == 2
+    assert json.loads((tmp_path / "cleanup-retry.monitor-status.json").read_text())["state"] == "completed"
+
+    await registry.submit("af3", "unknown-watch", {"input_pdb_dir": "/shared/pdbs"})
+    api[2].update(status="UNKNOWN", exit_code=None)
+    clock = iter([0, 0, 999999])
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(model_monitor, "time", SimpleNamespace(monotonic=lambda: next(clock, 999999)))
+    await model_monitor.watch(registry, "unknown-watch")
+    assert len(attempts) == 2
+    assert json.loads((tmp_path / "unknown-watch.monitor-status.json").read_text())["state"] == "monitor_timeout"
+
+
+async def test_model_tools_start_monitor_after_durable_submission(registration, api, tmp_path, monkeypatch):
+    from opendde_harness.plugin.protein_design.core import model_monitor
+    from opendde_harness.plugin.protein_design.tools.models import ProteinModelSubmitTool
+
+    registry = ProteinModelRegistry(registration, tmp_path, transport=api[0], auto_monitor=True)
+    observed = []
+
+    def start(registered, request_id):
+        record, _ = registered.read(request_id)
+        observed.append(record["remote_id"])
+        return {"state": "starting"}
+
+    monkeypatch.setattr(model_monitor, "start_monitor", start)
+    result = await ProteinModelSubmitTool(registry, "af3score").execute(
+        request_id="tool-watch",
+        request={"input_pdb_dir": "/shared/pdbs"},
+        user_confirmed=True,
+    )
+    assert json.loads(result.model_text)["monitor"]["state"] == "starting"
+    assert observed == ["job123"]

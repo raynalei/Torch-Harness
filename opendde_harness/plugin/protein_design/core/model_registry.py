@@ -34,7 +34,15 @@ class ModelRegistration(ContractModel):
 
 
 class ProteinModelRegistry:
-    def __init__(self, registrations: dict, root: Path, *, transport=None, config_path: Path | None = None):
+    def __init__(
+        self,
+        registrations: dict,
+        root: Path,
+        *,
+        transport=None,
+        config_path: Path | None = None,
+        auto_monitor: bool = False,
+    ):
         self.models = {}
         for name, value in registrations.items():
             self.valid_id(name)
@@ -42,6 +50,7 @@ class ProteinModelRegistry:
         self.root = root
         self.transport = transport
         self.config_path = config_path
+        self.auto_monitor = auto_monitor
 
     @staticmethod
     def valid_id(value: str):
@@ -55,6 +64,8 @@ class ProteinModelRegistry:
 
     def catalogue(self):
         return {
+            "jobs_dir": str(self.root.resolve()),
+            "recent_requests": self.recent_requests(),
             "active_config_path": str(self.config_path) if self.config_path else None,
             "available_model_kinds": sorted(REQUEST_TYPES),
             "unconfigured_model_kinds": sorted(set(REQUEST_TYPES) - {model.kind for model in self.models.values()}),
@@ -110,6 +121,20 @@ class ProteinModelRegistry:
             )
         return catalogue
 
+    def recent_requests(self):
+        records = []
+        for path in self.root.glob("*.json"):
+            try:
+                value = json.loads(path.read_text())
+                if value.get("request_id") != path.stem or "registration_hash" not in value:
+                    continue
+                records.append(
+                    (path.stat().st_mtime, {**self.public_record(value), "request_record": str(path.resolve())})
+                )
+            except (OSError, ValueError, AttributeError):
+                continue
+        return [value for _, value in sorted(records, key=lambda item: item[0], reverse=True)[:20]]
+
     @staticmethod
     def registration_identity(model):
         # Response profiles and rotated credentials can be corrected without
@@ -123,8 +148,13 @@ class ProteinModelRegistry:
     def read(self, request_id):
         path, _ = self.paths(request_id)
         if not path.is_file():
-            raise ValueError(f"unknown request_id {request_id!r}")
+            raise ValueError(
+                f"unknown local request_id {request_id!r} in {self.root.resolve()}; "
+                "use protein_model_list to find recent_requests and jobs_dir. "
+                "An API remote ID or an initial-round worker job ID is not a standalone model request_id."
+            )
         record = json.loads(path.read_text())
+        record.setdefault("request_record", str(path.resolve()))
         model = self.model(record["model"])
         if record["registration_hash"] != self.registration_identity(model):
             raise ValueError(
@@ -192,6 +222,7 @@ class ProteinModelRegistry:
                 "slurm_job_id",
                 "metrics_expected",
                 "submission_diagnostic",
+                "request_record",
                 "cancel_state",
             )
             if key in record
@@ -228,6 +259,7 @@ class ProteinModelRegistry:
                 return self.public_record(record)
             record = {
                 "request_id": request_id,
+                "request_record": str(path.resolve()),
                 "model": name,
                 "kind": model.kind,
                 "registration_hash": self.registration_identity(model),
@@ -443,9 +475,9 @@ class ProteinModelRegistry:
         }
 
     async def results(self, request_id):
+        current = await self.status(request_id)
         path, lock = self.paths(request_id)
         with file_lock(lock, blocking=False):
-            current = await self.refresh(request_id)
             record, model = self.read(request_id)
             if current["state"] not in {"succeeded", "prepared"}:
                 return {**current, "results_available": False}
