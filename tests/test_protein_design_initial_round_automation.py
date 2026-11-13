@@ -288,3 +288,58 @@ async def test_inline_launch_still_validates_inputs_and_authorization(profile, m
     assert "error" in json.loads(result.model_text) and not launched
     result = await tool.execute(run_config=value, config_path=str(profile), user_confirmed=True)
     assert "not both" in json.loads(result.model_text)["error"]
+
+
+def test_registered_autonomous_example_resolves_for_yaml_and_run_config(tmp_path, monkeypatch):
+    import copy
+    from types import SimpleNamespace
+
+    import yaml
+
+    from opendde_harness.plugin.protein_design.initial_round.config import InitialRoundConfig
+
+    examples = Path(__file__).parents[1] / "docs/examples"
+    path = examples / "autonomous_round_registered.yaml"
+    value = yaml.safe_load(path.read_text())
+    original = copy.deepcopy(value)
+    registrations = json.loads((examples / "model_services.json").read_text())["plugins"]["config"]["protein-design"][
+        "model_services"
+    ]
+    monkeypatch.setattr(
+        "opendde_harness.config.loader.load_config",
+        lambda: SimpleNamespace(plugins=SimpleNamespace(config={"protein-design": {"model_services": registrations}})),
+    )
+    config = prepare_run(value, registrations=registrations)
+    assert value == original
+    assert InitialRoundConfig.load(path) == config
+    assert prepare_run(value) == config
+    assert config.evaluation.scoring_backend == "torchscore"
+    assert config.evaluation.af3score is None
+    assert config.evaluation.torchopt.url.endswith(":8060")
+    assert config.evaluation.rosetta.sbatch_script == Path("/lustre/project/apis/rosetta/rosetta-api.sbatch")
+    assert config.generators["torchcraft"].service == config.generators["torchcraft"].service.model_validate(
+        registrations["torchcraft"]["service"]
+    )
+    for kind in ("ppiflow", "torchcraft"):
+        assert config.generators[kind].request == original["generators"][kind]["request"]
+    # A saved, resolved configuration needs no global service metadata to validate.
+    snapshot = config.model_dump(mode="json")
+    registrations.clear()
+    assert InitialRoundConfig.model_validate(snapshot) == config
+
+
+def test_explicit_service_wins_and_ambiguous_registration_is_rejected(profile):
+    import yaml
+
+    value = yaml.safe_load(profile.read_text())
+    explicit = value["generators"]["ppiflow"]["service"]
+    registrations = {
+        "one": {"kind": "ppiflow", "service": {"url": "http://slurm-api.invalid:9999"}},
+        "two": {"kind": "ppiflow", "service": {"url": "http://slurm-api.invalid:9998"}},
+    }
+    assert prepare_run(value, registrations=registrations).generators["ppiflow"].service.url == explicit["url"]
+    del value["generators"]["ppiflow"]["service"]
+    with pytest.raises(ValueError, match="multiple registered ppiflow"):
+        prepare_run(value, registrations=registrations)
+    with pytest.raises(ValueError, match="generator services"):
+        prepare_run(value, registrations={})

@@ -230,3 +230,5 @@ saves the structured run configuration automatically. See the
 [natural-language launch and API cleanup guide](automatic-initial-round.md#natural-language-launch-without-a-yaml-file).
 Owned sbatch APIs are released after the complete feedback workflow finishes and
 all inference jobs are terminal; they remain available between follow-up rounds.
+
+See [workflow configuration](workflow-configuration.md) for the relationship between global service registrations, task YAML/run_config and resolved run snapshots. The [registered VHH example](examples/autonomous_round_registered.yaml) declares both generators and selects TorchScore.

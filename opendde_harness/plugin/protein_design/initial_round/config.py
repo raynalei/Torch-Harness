@@ -6,7 +6,6 @@ import math
 from pathlib import Path
 from typing import Any, Literal
 
-import yaml
 from pydantic import AliasChoices, ConfigDict, Field, model_serializer, model_validator
 
 from opendde_harness.plugin.protein_design.core.contracts import ContractModel
@@ -87,7 +86,7 @@ class Chains(RoundModel):
 
 
 class Generator(RoundModel):
-    service: Service
+    service: Service | None = None
     request: dict[str, Any]
     chains: Chains
     fold_template: Path | None = None
@@ -103,7 +102,7 @@ class Evaluation(RoundModel):
     scoring_backend: Literal["af3score", "torchscore"] = "af3score"
     af3score: Service | None = None
     torchscore: Service | None = None
-    torchfold: Service
+    torchfold: Service | None = None
     rosetta: Service | None = None
     torchopt: Service | None = None
     torchopt_options: dict[str, Any] = Field(default_factory=dict)
@@ -205,6 +204,10 @@ class InitialRoundConfig(RoundModel):
 
     @model_validator(mode="after")
     def check_workflow(self):
+        if self.evaluation.torchfold is None:
+            raise ValueError("torchfold service must be configured or uniquely registered")
+        if any(g.service is None for g in self.generators.values()):
+            raise ValueError("generator services must be configured or uniquely registered")
         if self.autonomous is not None:
             if self.evaluation.rosetta is None:
                 raise ValueError("autonomous rounds require a scoring backend and Rosetta for the ranking formula")
@@ -263,4 +266,6 @@ class InitialRoundConfig(RoundModel):
 
     @classmethod
     def load(cls, path: Path):
-        return cls.model_validate(yaml.safe_load(path.read_text()))
+        from opendde_harness.plugin.protein_design.initial_round.automation import prepare_run
+
+        return prepare_run(path)

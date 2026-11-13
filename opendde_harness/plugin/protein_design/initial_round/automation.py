@@ -35,18 +35,31 @@ def prepare_run(
     evaluation = value.setdefault("evaluation", {})
     if not isinstance(evaluation, dict):
         raise ValueError("evaluation must be an object")
-    known = registrations or {}
+    if registrations is None:
+        from opendde_harness.config.loader import load_config
+
+        registrations = load_config().plugins.config.get("protein-design", {}).get("model_services", {})
+    known = registrations
+
+    def registered_service(kind):
+        matches = [item for item in known.values() if item.get("kind") == kind]
+        if len(matches) > 1:
+            raise ValueError(f"multiple registered {kind} services; specify an explicit task service")
+        return copy.deepcopy(matches[0]["service"]) if matches else None
+
+    for kind, generator in value.get("generators", {}).items():
+        if generator.get("service") is None:
+            generator["service"] = registered_service(kind)
     configured = {kind for kind in ("af3score", "torchscore") if evaluation.get(kind) is not None}
     registered = {item.get("kind") for item in known.values() if item.get("kind") in {"af3score", "torchscore"}}
     evaluation["scoring_backend"] = choose_scorer(evaluation.get("scoring_backend"), configured, registered)
     selected = evaluation["scoring_backend"]
-    for kind in (selected, "torchopt"):
-        if kind == "torchopt" and value.get("autonomous") is None:
-            continue
+    kinds = [selected, "torchfold"]
+    if value.get("autonomous") is not None:
+        kinds.extend(["rosetta", "torchopt"])
+    for kind in kinds:
         if evaluation.get(kind) is None:
-            matches = [item for item in known.values() if item.get("kind") == kind]
-            if len(matches) == 1:
-                evaluation[kind] = copy.deepcopy(matches[0]["service"])
+            evaluation[kind] = registered_service(kind)
     config = InitialRoundConfig.model_validate(value)
     value = config.model_dump(mode="json")
     if name:

@@ -7,51 +7,87 @@
             "kind": "ppiflow",
             "service": {
               "url": "http://slurm-api.invalid:8010",
-              "health_path": "/openapi.json"
+              "health_path": "/openapi.json",
+              "sbatch_script": "/lustre/project/apis/ppiflow/ppiflow-api.sbatch",
+              "sbatch_resolve_host": true
             },
             "max_samples": 10,
-            "allowed_input_roots": ["/lustre/project"]
+            "allowed_input_roots": [
+              "/lustre/project"
+            ]
           },
           "torchcraft": {
             "kind": "torchcraft",
             "service": {
               "url": "http://slurm-api.invalid:8020",
-              "health_path": "/openapi.json"
+              "health_path": "/openapi.json",
+              "sbatch_script": "/lustre/project/apis/torchcraft/torchcraft-api.sbatch",
+              "sbatch_resolve_host": true
             },
             "max_samples": 10,
-            "allowed_input_roots": ["/lustre/project"]
+            "allowed_input_roots": [
+              "/lustre/project"
+            ]
           },
           "rosetta": {
             "kind": "rosetta",
-            "service": {"url": "http://slurm-api.invalid:8030"},
+            "service": {
+              "url": "http://slurm-api.invalid:8030",
+              "sbatch_script": "/lustre/project/apis/rosetta/rosetta-api.sbatch",
+              "sbatch_resolve_host": true
+            },
             "max_samples": 5,
-            "allowed_input_roots": ["/lustre/project"]
+            "allowed_input_roots": [
+              "/lustre/project"
+            ]
           },
           "af3score": {
             "kind": "af3score",
-            "service": {"url": "http://slurm-api.invalid:8040"},
+            "service": {
+              "url": "http://slurm-api.invalid:8040",
+              "sbatch_script": "/lustre/project/apis/af3score/af3score-api.sbatch",
+              "sbatch_resolve_host": true
+            },
             "max_samples": 5,
-            "allowed_input_roots": ["/lustre/project"]
+            "allowed_input_roots": [
+              "/lustre/project"
+            ]
           },
           "torchfold": {
             "kind": "torchfold",
-            "service": {"url": "http://slurm-api.invalid:8050"},
+            "service": {
+              "url": "http://slurm-api.invalid:8050",
+              "sbatch_script": "/lustre/project/apis/torchfold/torchfold-api.sbatch",
+              "sbatch_resolve_host": true
+            },
             "max_samples": 5,
-            "allowed_input_roots": ["/lustre/project"]
+            "allowed_input_roots": [
+              "/lustre/project"
+            ]
           },
           "torchscore": {
             "kind": "torchscore",
-            "service": {"url": "http://slurm-api.invalid:8070"},
+            "service": {
+              "url": "http://slurm-api.invalid:8070",
+              "sbatch_script": "/lustre/project/apis/torchscore/torchscore-api.sbatch",
+              "sbatch_resolve_host": true
+            },
             "max_samples": 1,
-            "allowed_input_roots": ["/lustre/project"]
+            "allowed_input_roots": [
+              "/lustre/project"
+            ]
           },
           "torchopt": {
             "kind": "torchopt",
             "service": {
               "url": "http://slurm-api.invalid:8060",
-              "status_field": "state"
+              "status_field": "state",
+              "sbatch_script": "/lustre/project/apis/torchopt/torchopt-api.sbatch",
+              "sbatch_resolve_host": true
             },
-            "allowed_input_roots": ["/lustre/project"]
+            "allowed_input_roots": [
+              "/lustre/project"
+            ]
           }
         }
       }

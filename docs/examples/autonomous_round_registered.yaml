@@ -1,0 +1,46 @@
+# Template: replace scientific input paths with existing shared-filesystem inputs.
+# Service connections come from plugins.config.protein-design.model_services in config.json.
+# All registered services require real sbatch_script paths; no direct/local API fallback.
+name: autonomous_vhh
+work_dir: /lustre/project/runs
+path_mappings:
+  - local: /lustre/project
+    remote: /lustre/project
+generators:
+  ppiflow:
+    request:
+      mode: nanobody
+      antigen_pdb: /lustre/project/inputs/target.pdb
+      antigen_chain: C
+      heavy_chain: A
+      framework_dir: /lustre/project/inputs/frameworks
+      specified_hotspots: C29,C73,C97
+      samples_per_target: 5
+    chains:
+      target: [C]
+      binder: [A]
+      refold_map: {C: C, A: A}
+  torchcraft:
+    request:
+      mode: vhh
+      pdb_path: /lustre/project/inputs/target.pdb
+      # Illustrative API indices: use the generator's indexing for the same target sites.
+      hotspot_indices: '29,73,97'
+      target_full_seq: /lustre/project/inputs/target.csv
+      framework_cif_path: /lustre/project/inputs/framework.cif.pdb
+      num_designs: 5
+    chains:
+      target: [C]
+      binder: [A]
+      refold_map: {C: C, A: A}
+evaluation:
+  # Choose one scorer for the whole run; change to af3score to use AF3Score.
+  scoring_backend: torchscore
+  dockq_python: /lustre/project/envs/dockq/bin/python
+  torchopt_options:
+    method: mcmc-ddg
+autonomous:
+  max_rounds: 3
+  max_samples: 100
+  min_score: 0.8
+  min_dockq: 0.49

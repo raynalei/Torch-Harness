@@ -1423,7 +1423,8 @@ def test_registered_optimization_service_is_reused_without_new_scientific_inputs
     assert result.evaluation.torchopt.url == "https://torchopt.test"
     assert result.generators == config.generators
     registrations["other_opt"] = {"kind": "torchopt", "service": {"url": "https://other.test"}}
-    assert prepare_run(config.model_dump(mode="json"), registrations=registrations).evaluation.torchopt is None
+    with pytest.raises(ValueError, match="multiple registered torchopt"):
+        prepare_run(config.model_dump(mode="json"), registrations=registrations)
 
 
 async def test_torchscore_feedback_uses_registered_scorer_for_ranking_and_resume(round_config, fake_services):

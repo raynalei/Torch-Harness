@@ -1,3 +1,5 @@
+# Paired VH/VL single-round example with embedded service deployment settings.
+# For the registered-service autonomous VHH workflow see autonomous_round_registered.yaml.
 # 7n0a paired VH/VL initial round. API servers are started exclusively through sbatch.
 # Paths are deployment-specific. Confirm scripts, shared storage and DockQ before launch.
 # PPIFlow API must accept config/model_weights/output_dir and forward them to sample_antibody.
