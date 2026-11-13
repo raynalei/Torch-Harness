@@ -631,91 +631,10 @@ async def test_torchscore_registered_independently_with_metrics(registration, ap
 
 
 @pytest.mark.parametrize(
-    "payload",
-    [
-        {"action": "import", "target": "1BVK"},
-        {"action": "submit", "target": "1BVK", "source": "/shared/pdbs"},
-        {"action": "export", "target": "1BVK"},
-        {"action": "check", "target": "../escape"},
-        {"action": "status", "target": "1BVK", "group": "group_invalid"},
-    ],
-)
-def test_torchopt_validates_action_arguments(payload):
-    from opendde_harness.plugin.protein_design.core.model_requests import validate_request
-
-    with pytest.raises(ValueError):
-        validate_request("torchopt", payload)
-
-
-@pytest.mark.parametrize(
-    "action,extra",
-    [
-        ("import", {"source": "/shared/pdbs"}),
-        ("check", {}),
-        ("smoke", {}),
-        ("submit", {}),
-        ("status", {"group": "group_1"}),
-        ("resume", {}),
-        ("collect", {}),
-        ("export", {"export": "/shared/new_export"}),
-    ],
-)
-async def test_torchopt_actions_use_uploaded_job_protocol(tmp_path, action, extra):
-    requests = []
-
-    def handler(request):
-        requests.append(request)
-        if request.method == "POST":
-            return httpx.Response(202, json={"job_id": "opt123", "slurm_job_id": "789", "state": "PENDING"})
-        if request.url.path.endswith("/result"):
-            return httpx.Response(
-                200,
-                json={
-                    "job_id": "opt123",
-                    "state": "COMPLETED",
-                    "action": action,
-                    "target": "1BVK",
-                    "output": {"stdout": "child jobs submitted"},
-                },
-            )
-        return httpx.Response(200, json={"state": "COMPLETED"})
-
-    registry = ProteinModelRegistry(
-        {"opt": {"kind": "torchopt", "service": {"url": "https://opt.test"}, "allowed_input_roots": ["/shared"]}},
-        tmp_path,
-        transport=httpx.MockTransport(handler),
-    )
-    payload = {"action": action, "target": "1BVK", **extra}
-    submitted = await registry.submit("opt", "opt_request", payload)
-    assert submitted["remote_id"] == "opt123"
-    assert requests[0].url.path == "/v1/jobs"
-    body = json.loads(requests[0].content)
-    assert body["action"] == action and body["target"] == "1BVK"
-    assert (await registry.status("opt_request"))["state"] == "action_completed"
-    result = await registry.results("opt_request")
-    assert result["state"] == "action_completed" and result["results_available"]
-    assert result["optimization_verified"] is False and result["completion_scope"] == "pipeline_action"
-    assert result["metrics"] is None
-    assert requests[-1].url.path == "/v1/jobs/opt123/result"
-    assert not any(r.url.path.endswith(("/results", "/metrics")) for r in requests)
-    await registry.submit("opt", "opt_request", payload)
-    assert len([r for r in requests if r.method == "POST"]) == 1
-
-
-async def test_torchopt_rejects_outside_source_before_post(tmp_path):
-    registry = ProteinModelRegistry(
-        {"opt": {"kind": "torchopt", "service": {"url": "https://opt.test"}, "allowed_input_roots": ["/shared"]}},
-        tmp_path,
-    )
-    with pytest.raises(ValueError, match="outside"):
-        await registry.submit("opt", "bad", {"action": "import", "target": "1BVK", "source": "/private/pdbs"})
-
-
-@pytest.mark.parametrize(
     "kind,payload",
     [
         ("torchscore", {"input_pdb_dir": "/shared/pdbs"}),
-        ("torchopt", {"action": "check", "target": "1BVK"}),
+        ("torchopt", {"pdb_paths": ["/shared/input.pdb"]}),
     ],
 )
 async def test_new_named_tools_are_discovered_and_dispatch_independently(kind, payload, tmp_path):
@@ -727,38 +646,160 @@ async def test_new_named_tools_are_discovered_and_dispatch_independently(kind, p
     )
 
     def handler(request):
-        return httpx.Response(202, json={"task_id": "score123", "job_id": "opt123"})
+        return httpx.Response(202, json={"task_id": "score123", "optimization_id": "a" * 32})
 
     tool.registry.transport = httpx.MockTransport(handler)
     result = json.loads((await tool.execute(request_id="named", request=payload, user_confirmed=True)).model_text)
     assert result["kind"] == kind and result["state"] == "submitted"
 
 
+async def test_registered_status_caches_results_before_releasing_api(registration, api, tmp_path, monkeypatch):
+    transport, requests, remote = api
+    script = tmp_path / "api.sbatch"
+    script.write_text("#!/bin/bash\nsleep infinity\n")
+    registration["af3"]["service"].update(sbatch_script=str(script), sbatch_resolve_host=False)
+    names, cancelled = {}, []
+
+    async def command(config, *args):
+        if args[0] == "sbatch":
+            names["555"] = args[2].split("=", 1)[1]
+            return "555"
+        if args[0] == "squeue":
+            return "RUNNING|" + (names["555"] if args[-1] == "--format=%T|%j" else "gpu01")
+        if args[0] == "scancel":
+            # Metrics and artifacts must already be retained when the API is cancelled.
+            cached = json.loads((tmp_path / "task.results.json").read_text())
+            assert cached["metrics"]["metrics"][0]["iptm"] == 0.85
+            cancelled.append(args[1])
+        return ""
+
+    monkeypatch.setattr("opendde_harness.plugin.protein_design.initial_round.api_startup.slurm_command", command)
+    registry = ProteinModelRegistry(registration, tmp_path, transport=transport)
+    await registry.submit("af3", "task", {"input_pdb_dir": "/shared/pdbs"})
+    assert not cancelled  # Closing the submission HTTP client must not stop inference.
+    remote.update(status="COMPLETED", exit_code="0:0")
+    assert (await registry.status("task"))["state"] == "succeeded"
+    assert cancelled == ["555"]
+    before = len(requests)
+    results = await registry.results("task")
+    assert results["metrics"]["metrics"][0]["iptm"] == 0.85
+    assert len(requests) == before and cancelled == ["555"]
+
+
 @pytest.mark.parametrize(
-    "remote",
+    "changes",
     [
-        {"state": "PENDING"},
-        {"state": "FAILED"},
-        {"state": "UNKNOWN"},
-        {"state": "COMPLETED", "exit_code": "1:0"},
+        {"binder_chain": "C", "target_chain": "C"},
+        {"binder_type": "antibody"},
+        {"full_jobs": 0},
+        {"mcmc_rounds": 0},
+        {"prepare_only": "false"},
+        {"action": "submit", "target": "old_api"},
     ],
 )
-async def test_torchopt_does_not_read_results_for_failed_or_unfinished_actions(tmp_path, remote):
-    calls = []
+def test_torchopt_accepts_only_optimization_job_arguments(changes):
+    from opendde_harness.plugin.protein_design.core.model_requests import validate_request
+
+    with pytest.raises(ValueError):
+        validate_request("torchopt", {"pdb_paths": ["/shared/input.pdb"], **changes})
+
+
+@pytest.fixture
+def optimization_api(tmp_path):
+    calls, submitted = [], {}
+    state = {"value": "RUNNING", "exit": None}
+    identifier = "a" * 32
 
     def handler(request):
         calls.append(request)
         if request.method == "POST":
-            return httpx.Response(202, json={"job_id": "opt123"})
-        assert not request.url.path.endswith("/result")
-        return httpx.Response(200, json=remote)
+            submitted.update(json.loads(request.content))
+            assert request.url.path == "/v1/optimizations"
+            assert request.headers.get("Idempotency-Key")
+            return httpx.Response(201, json={"optimization_id": identifier, "state": "PREPARING"})
+        if request.url.path.endswith("/results"):
+            assert state["value"] in {"SUCCEEDED", "PREPARED"}
+            return httpx.Response(
+                200,
+                json={
+                    "optimization_id": identifier,
+                    "results": ["/shared/results.csv"],
+                    "structures": ["/shared/final.pdb"],
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "optimization_id": identifier,
+                "request": {**submitted, "partition": None},
+                "state": state["value"],
+                "returncode": 0,
+                "runs": {"runs/cohort": {"native": True}},
+                "submissions": {"receipt.json": {"job_ids": ["123"]}},
+                "scheduler_jobs": {
+                    "123": {
+                        "state": "COMPLETED" if state["value"] == "SUCCEEDED" else "RUNNING",
+                        "exit_code": state["exit"],
+                    }
+                },
+            },
+        )
+
+    registry = ProteinModelRegistry(
+        {"opt": {"kind": "torchopt", "service": {"url": "https://opt.test"}, "allowed_input_roots": ["/shared"]}},
+        tmp_path,
+        transport=httpx.MockTransport(handler),
+    )
+    return registry, state, calls, submitted
+
+
+async def test_torchopt_requires_scheduler_completion_and_reads_native_artifacts(optimization_api):
+    registry, state, calls, submitted = optimization_api
+    result = await registry.submit("opt", "optimization", {"pdb_paths": ["/shared/input.pdb"], "binder_type": "vhh"})
+    assert result["remote_id"] == "a" * 32
+    assert (await registry.results("optimization"))["results_available"] is False
+    state["value"] = "SUCCEEDED"
+    assert (await registry.results("optimization"))["results_available"] is False  # Exit code is still missing.
+    state["exit"] = "0:0"
+    result = await registry.results("optimization")
+    assert result["optimization_verified"] is True
+    assert result["results"]["structures"] == ["/shared/final.pdb"]
+    assert result["metrics"] is None
+    assert not any(c.url.path.endswith(("/metrics", "/result")) for c in calls)
+    await registry.submit("opt", "optimization", {"pdb_paths": ["/shared/input.pdb"], "binder_type": "vhh"})
+    assert sum(c.method == "POST" for c in calls) == 1
+
+
+async def test_torchopt_prepare_only_and_path_limits(optimization_api):
+    registry, state, calls, _ = optimization_api
+    with pytest.raises(ValueError, match="outside"):
+        await registry.submit("opt", "outside", {"pdb_paths": ["/private/input.pdb"]})
+    with pytest.raises(ValueError, match="PDB"):
+        await registry.submit("opt", "cif", {"pdb_paths": ["/shared/input.cif"]})
+    assert not calls
+    await registry.submit("opt", "prepared", {"pdb_paths": ["/shared/input.pdb"], "prepare_only": True})
+    state["value"] = "PREPARED"
+    result = await registry.status("prepared")
+    assert result["state"] == "prepared" and result["optimization_verified"] is False
+
+
+async def test_torchopt_recovers_lost_post_response_by_key_without_resubmitting(tmp_path):
+    calls, submitted = [], {}
+
+    def handler(request):
+        calls.append(request)
+        if request.method == "POST":
+            submitted.update(json.loads(request.content))
+            raise httpx.ReadTimeout("response lost", request=request)
+        assert "/by-key/" in request.url.path
+        return httpx.Response(200, json={"optimization_id": "b" * 32, "request": submitted})
 
     registry = ProteinModelRegistry(
         {"opt": {"kind": "torchopt", "service": {"url": "https://opt.test"}}},
         tmp_path,
         transport=httpx.MockTransport(handler),
     )
-    await registry.submit("opt", "request", {"action": "submit", "target": "1BVK"})
-    result = await registry.results("request")
-    assert result["results_available"] is False
-    assert result["optimization_verified"] is False
+    result = await registry.submit("opt", "stable", {"pdb_paths": ["/shared/input.pdb"]})
+    assert result["state"] == "submitted" and result["remote_id"] == "b" * 32
+    await registry.submit("opt", "stable", {"pdb_paths": ["/shared/input.pdb"]})
+    assert sum(c.method == "POST" for c in calls) == 1

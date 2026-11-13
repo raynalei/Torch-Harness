@@ -7,6 +7,7 @@ import csv
 import hashlib
 import importlib.util
 import json
+import shutil
 from pathlib import Path
 
 from opendde_harness.plugin.protein_design.core.model_requests import validate_request
@@ -125,13 +126,18 @@ class InitialRoundRunner:
         configs.update(
             {
                 name: getattr(self.config.evaluation, name)
-                for name in (self.config.evaluation.scoring_backend, "torchfold", "rosetta")
+                for name in (self.config.evaluation.scoring_backend, "torchfold", "rosetta", "torchopt")
                 if getattr(self.config.evaluation, name) is not None
             }
         )
         result = {}
         for name, config in configs.items():
-            service = SlurmService(config, self.checkpoint, transport=self.transport)
+            if name == "torchopt":
+                from .torchopt import TorchOptimizationService
+
+                service = TorchOptimizationService(config, self.checkpoint, transport=self.transport)
+            else:
+                service = SlurmService(config, self.checkpoint, transport=self.transport)
             self.services[name] = service
             if config.sbatch_script is not None:
                 # Preflight never probes placeholder/loopback URLs or queues API jobs.
@@ -141,6 +147,7 @@ class InitialRoundRunner:
             health = await service.get(config.health_path, start_service=start_services)
             if (
                 not isinstance(health, dict)
+                or health.get("backend_available") is False
                 or health.get("ok") is False
                 or str(health.get("status", "ok")).lower() in {"error", "failed", "unhealthy"}
             ):
@@ -162,15 +169,24 @@ class InitialRoundRunner:
         self.checkpoint.save()
         write_json(self.root / "candidates.json", self.checkpoint.data.get("candidates", []))
 
-    async def generate(self):
+    async def generate(self, *, source_requests=None, round_index=0, parent_id=None):
         candidates = self.checkpoint.data.setdefault("candidates", [])
         sources = self.checkpoint.data.setdefault("generated_sources", [])
         errors = {}
-        for source, generator in self.config.generators.items():
-            if source in sources:
+        batch = []
+        requests = source_requests or {s: g.request for s, g in self.config.generators.items()}
+        for source, request in requests.items():
+            generator = self.config.generators[source]
+            stage = source if round_index == 0 else f"round-{round_index}/{source}"
+            if stage in sources:
+                batch.extend(c for c in candidates if c.get("generation_stage", c["source"]) == stage)
                 continue
             try:
-                result = await self.job(source, f"generate/{source}", "/v1/designs", "design_id", generator.request)
+                if self.config.autonomous is not None:
+                    request = validate_request(source, {"name": self.config.name, **request})
+                if self.config.autonomous is not None and round_index:
+                    (self.root / f"round-{round_index}" / source).mkdir(parents=True, exist_ok=True)
+                result = await self.job(source, f"generate/{stage}", "/v1/designs", "design_id", request)
                 manifest = select(result, generator.candidates_field)
                 if manifest is None:
                     paths = [
@@ -184,6 +200,11 @@ class InitialRoundRunner:
                     paths = [self.files.local(item["structure_path"]) for item in manifest]
                 if not paths:
                     raise ValueError("generator produced no candidate structures")
+                if self.config.autonomous is not None:
+                    from .autonomous import sample_count
+
+                    if len(set(paths)) > sample_count(source, request):
+                        raise ValueError("generator returned more candidates than the reserved sample budget")
                 added = []
                 for path in sorted(set(paths)):
                     sequences = chain_sequences(path)
@@ -192,22 +213,56 @@ class InitialRoundRunner:
                         raise ValueError(
                             f"{source}: structure chain IDs {sorted(sequences)} do not match {sorted(required)}"
                         )
+                    if self.config.autonomous is not None and round_index:
+                        initial = next(c for c in candidates if c["source"] == source and not c.get("round_index"))
+                        if any(sequences[c] != initial["chains"][c] for c in generator.chains.target):
+                            raise ValueError("follow-up generation changed a target sequence")
+                        if request.get("mode", "").startswith("partial_"):
+                            from .diagnostics import DesignRegion
+
+                            parent = next(c for c in candidates if c["candidate_id"] == parent_id)
+                            decision = self.checkpoint.data["autonomous"]["decisions"][round_index - 1]
+                            region = DesignRegion.model_validate(decision["repair_region"])
+                            for chain in generator.chains.binder:
+                                before, after = parent["chains"][chain], sequences[chain]
+                                mutable = set(region.positions) if chain == region.chain else set()
+                                if len(before) != len(after) or any(
+                                    a != b and position not in mutable
+                                    for position, (a, b) in enumerate(zip(before, after), 1)
+                                ):
+                                    raise ValueError("partial flow changed residues outside the selected region")
                     remote = self.files.remote(path)
-                    candidate_id = source + "-" + hashlib.sha256(remote.encode()).hexdigest()[:16]
+                    identity = remote if round_index == 0 else f"{stage}/{remote}"
+                    candidate_id = source + "-" + hashlib.sha256(identity.encode()).hexdigest()[:16]
+                    generated = path
+                    if self.config.autonomous is not None:
+                        generated = self.root / candidate_id / ("generated" + path.suffix)
+                        generated.parent.mkdir(parents=True, exist_ok=True)
+                        if generated.exists() and digest(generated) != digest(path):
+                            raise ValueError("generator artifact changed while resuming a batch")
+                        if not generated.exists():
+                            shutil.copy2(path, generated)
                     added.append(
                         {
                             "candidate_id": candidate_id,
                             "source": source,
                             "sequence": "|".join(sequences[c] for c in generator.chains.binder),
                             "chains": sequences,
-                            "generated_structure": remote,
-                            "generated_sha256": digest(path),
+                            "generated_structure": self.files.remote(generated),
+                            "generated_sha256": digest(generated),
                             "metrics": {},
                             "status": "generated",
+                            **(
+                                {"generation_stage": stage, "round_index": round_index, "parent_id": parent_id}
+                                if self.config.autonomous is not None
+                                else {}
+                            ),
+                            **({"generation_request": request} if self.config.autonomous is not None else {}),
                         }
                     )
                 candidates.extend(added)
-                sources.append(source)
+                batch.extend(added)
+                sources.append(stage)
                 self.checkpoint.data.pop("generation_errors", None)
                 self.save_candidates()
             except SubmissionUncertainError:
@@ -218,7 +273,77 @@ class InitialRoundRunner:
             self.checkpoint.data["generation_errors"] = errors
             self.checkpoint.save()
             raise RuntimeError(f"all configured generators are required; generation failures: {errors}")
-        return candidates
+        return batch if round_index else candidates
+
+    async def optimize(self, decision, round_index):
+        """Import one native final PDB as a new candidate, then use normal evaluation."""
+        from .artifacts import structure
+        from .regions import selection_positions
+
+        candidates = self.checkpoint.data["candidates"]
+        stage = f"round-{round_index}/torchopt"
+        retained = [c for c in candidates if c.get("generation_stage") == stage]
+        if retained:
+            return retained
+        key = f"optimize/{stage}"
+        results = await self.services["torchopt"].run_optimization(
+            key, decision["request"], attach_id=self.attach_jobs.get(key)
+        )
+        paths = [self.files.local(path) for path in results["structures"]]
+        tables = [self.files.local(path) for path in results["results"]]
+        if any(not p.is_file() for p in paths + tables) or any(p.suffix.lower() != ".pdb" for p in paths):
+            raise ValueError("native optimization artifacts are not readable on the shared filesystem")
+        parent = next(c for c in candidates if c["candidate_id"] == decision["parent_id"])
+        generator = self.config.generators[parent["source"]]
+        before_atoms = structure(self.files.local(parent["generated_structure"]))
+        original_request = parent.get("generation_request", generator.request)
+        fixed = selection_positions(original_request.get("fixed_positions"), before_atoms, generator.chains.binder)
+        allowed = selection_positions(original_request.get("cdr_position"), before_atoms, generator.chains.binder)
+        admitted = []
+        for path in sorted(set(paths)):
+            sequences = chain_sequences(path)
+            if set(sequences) != set(parent["chains"]):
+                continue
+            if any(sequences[c] != parent["chains"][c] for c in generator.chains.target):
+                continue
+            valid = True
+            for chain in generator.chains.binder:
+                before, after = parent["chains"][chain], sequences[chain]
+                if len(before) != len(after) or any(
+                    a != b
+                    and (position in fixed.get(chain, set()) or (allowed and position not in allowed.get(chain, set())))
+                    for position, (a, b) in enumerate(zip(before, after), 1)
+                ):
+                    valid = False
+            if valid:
+                admitted.append((path, sequences))
+        if not admitted:
+            raise ValueError("no final optimization structure preserves target and registered residue constraints")
+        # One admitted structure per reserved slot; all native paths remain in the job record.
+        path, sequences = admitted[0]
+        identity = f"{stage}/{self.files.remote(path)}"
+        candidate_id = "torchopt-" + hashlib.sha256(identity.encode()).hexdigest()[:16]
+        snapshot = self.root / candidate_id / "generated.pdb"
+        snapshot.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, snapshot)
+        child = {
+            "candidate_id": candidate_id,
+            "source": parent["source"],
+            "optimized_by": "torchopt",
+            "parent_id": parent["candidate_id"],
+            "round_index": round_index,
+            "generation_stage": stage,
+            "generation_request": original_request,
+            "chains": sequences,
+            "sequence": "|".join(sequences[c] for c in generator.chains.binder),
+            "generated_structure": self.files.remote(snapshot),
+            "generated_sha256": digest(snapshot),
+            "metrics": {},
+            "status": "generated",
+        }
+        candidates.append(child)
+        self.save_candidates()
+        return [child]
 
     async def score(self, candidate: dict):
         evaluation = self.config.evaluation
@@ -298,6 +423,13 @@ class InitialRoundRunner:
                 if sequences.get(folded) != candidate["chains"][original]:
                     raise ValueError(f"refold chain {folded} does not match generated chain {original}")
             candidate.update(refold_structure=self.files.remote(path), refold_sha256=digest(path))
+            if self.config.autonomous is not None:
+                snapshot = directory / ("refold-snapshot" + path.suffix)
+                if snapshot.exists() and digest(snapshot) != digest(path):
+                    raise ValueError("refold output changed while resuming")
+                if not snapshot.exists():
+                    shutil.copy2(path, snapshot)
+                candidate.update(refold_structure=self.files.remote(snapshot), refold_sha256=digest(snapshot))
             candidate["metrics"]["torchfold_iptm"] = iptm
             self.save_candidates()
         if "design_refold_dockq" not in candidate["metrics"]:
@@ -383,6 +515,8 @@ class InitialRoundRunner:
                 c["candidate_id"],
             ),
         )
+        if self.config.autonomous is not None:
+            accepted.sort(key=lambda c: (-c["metrics"]["ranking_score"], c["candidate_id"]))
         for rank, candidate in enumerate(accepted, 1):
             candidate["rank"] = rank
         failed = [c["candidate_id"] for c in candidates if c["status"] == "failed"]
@@ -397,6 +531,19 @@ class InitialRoundRunner:
             "ranking_policy": "refold_iptm_desc,dockq_desc"
             + (",interface_dg_asc" if self.config.evaluation.rosetta else ""),
         }
+        if self.config.autonomous is not None:
+            state = self.checkpoint.data["autonomous"]
+            result.update(
+                ranking_policy="100*af3score_iptm-rosetta_interface_dg_desc",
+                stop_reason=state.get("stop_reason"),
+                used_samples=state["used_samples"],
+                followup_rounds=len(state["decisions"]),
+                unavailable_actions={}
+                if self.config.evaluation.torchopt
+                else {"torchopt": "no registered optimization service"},
+            )
+        if self.checkpoint.data.get("api_cleanup"):
+            result["api_cleanup"] = self.checkpoint.data["api_cleanup"]
         write_json(self.root / "summary.json", result)
         write_json(
             self.root / "initial_candidates.json",
@@ -404,7 +551,9 @@ class InitialRoundRunner:
                 {
                     "candidate_id": c["candidate_id"],
                     "sequence": c["sequence"],
-                    "objective": c["metrics"]["torchfold_iptm"],
+                    "objective": c["metrics"][
+                        "ranking_score" if self.config.autonomous is not None else "torchfold_iptm"
+                    ],
                     "metrics": {**c["metrics"], "iptm": c["metrics"]["torchfold_iptm"]},
                     "structure_path": c["refold_structure"],
                     "metadata": {
@@ -429,6 +578,7 @@ class InitialRoundRunner:
                     "torchfold_iptm",
                     "design_refold_dockq",
                     "rosetta_interface_dg",
+                    *(["ranking_score"] if self.config.autonomous is not None else []),
                     "error",
                 ],
             )
@@ -436,6 +586,7 @@ class InitialRoundRunner:
             for c in sorted(candidates, key=lambda c: (c.get("rank", float("inf")), c["candidate_id"])):
                 writer.writerow({k: c.get(k, c["metrics"].get(k)) for k in writer.fieldnames})
         self.save_candidates()
+        self._summary = result
         return result
 
     async def run(self, *, check_only=False):
@@ -455,6 +606,19 @@ class InitialRoundRunner:
                 if check_only:
                     return {"status": "checked", "services": health, "inference_verified": False}
                 candidates = await self.generate()
+                if self.config.autonomous is not None:
+                    from .autonomous import run_autonomous
+
+                    for candidate in candidates:
+                        for kind in ("generated", "refold"):
+                            if (
+                                candidate.get(f"{kind}_structure")
+                                and digest(self.files.local(candidate[f"{kind}_structure"]))
+                                != candidate[f"{kind}_sha256"]
+                            ):
+                                raise ValueError(f"{kind} artifact changed: {candidate['candidate_id']}")
+                    await run_autonomous(self)
+                    return self.export(candidates)
                 for c in candidates:
                     try:
                         c.pop("error", None)
@@ -494,5 +658,20 @@ class InitialRoundRunner:
                         self.save_candidates()
                 return self.export(candidates)
             finally:
+                cleanup = {}
+                pending = any(
+                    job.get("state") not in {"completed", "failed"} for job in self.checkpoint.data["jobs"].values()
+                )
+                for name, service in self.services.items():
+                    if service.allocations:
+                        cleanup[name] = (
+                            [{"state": "retained_active_jobs"}] if pending else await service.release_allocations()
+                        )
+                if cleanup:
+                    self.checkpoint.data["api_cleanup"] = cleanup
+                    self.checkpoint.save()
+                    if hasattr(self, "_summary"):
+                        self._summary["api_cleanup"] = cleanup
+                        write_json(self.root / "summary.json", self._summary)
                 for service in self.services.values():
                     await service.close()

@@ -12,7 +12,7 @@ from uuid import uuid4
 import httpx
 from loguru import logger
 
-from .api_startup import ensure_api
+from .api_startup import allocation_record, allocation_was_released, ensure_api, release_allocation
 from .config import Service
 from .storage import Checkpoint, fingerprint, select
 
@@ -37,6 +37,7 @@ class ServiceConnection:
                 update={"sbatch_state_file": prefix.with_name(f"{prefix.stem}-{uuid4().hex}{prefix.suffix or '.json'}")}
             )
         self._api_ready = False
+        self.allocations = []
         headers = {}
         if config.token_env:
             token = os.environ.get(config.token_env)
@@ -73,8 +74,22 @@ class ServiceConnection:
         if not self._api_ready:
             if start and self.config.sbatch_script is not None:
                 logger.info("Starting this task's API allocation; state file: {}", self.config.sbatch_state_file)
-            await ensure_api(self.config, self.client, start=start)
+            try:
+                await ensure_api(self.config, self.client, start=start)
+            finally:
+                record = allocation_record(self.config)
+                if record and record not in self.allocations:
+                    self.allocations.append(record)
             self._api_ready = True
+
+    async def release_allocations(self):
+        results = []
+        for record in self.allocations:
+            try:
+                results.append(await release_allocation(self.config, record))
+            except Exception as exc:
+                results.append({"state": "cleanup_failed", "job_id": record["job_id"], "error": str(exc)})
+        return results
 
     async def post(self, path: str, **kwargs):
         await self.ensure_ready()
@@ -91,6 +106,15 @@ class SlurmService(ServiceConnection):
     def __init__(self, config: Service, checkpoint: Checkpoint, *, transport=None):
         super().__init__(config, transport=transport)
         self.checkpoint = checkpoint
+        self.allocations.extend(checkpoint.data.get("api_allocations", {}).get(config.url, []))
+
+    async def ensure_ready(self, *, start: bool = True):
+        try:
+            await super().ensure_ready(start=start)
+        finally:
+            if self.allocations:
+                self.checkpoint.data.setdefault("api_allocations", {})[self.config.url] = self.allocations
+                self.checkpoint.save()
 
     async def reconcile(self, route: str, job: dict, payload: dict) -> bool:
         """Only trust services that echo the persisted key and exact request hash."""
@@ -126,6 +150,8 @@ class SlurmService(ServiceConnection):
         signature = fingerprint({"url": self.config.url, "route": route, "payload": payload})
         jobs = self.checkpoint.data["jobs"]
         job = jobs.get(key)
+        if job and job.get("api_allocation") and job["api_allocation"] not in self.allocations:
+            self.allocations.append(job["api_allocation"])
         if attach_id:
             if not re.fullmatch(r"[A-Za-z0-9_-]+", attach_id):
                 raise ValueError("invalid attached job ID")
@@ -143,6 +169,7 @@ class SlurmService(ServiceConnection):
                 "submitted_at": time.time(),
                 "api_url": str(self.client.base_url),
                 "submission_key": uuid4().hex,
+                "api_allocation": allocation_record(self.config),
             }
             self.checkpoint.save()
             # Checkpoint before POST: a crash in this window needs manual reconciliation.
@@ -165,7 +192,11 @@ class SlurmService(ServiceConnection):
             else:
                 job.update(id=job_id, state="submitted", submission=response.json())
                 self.checkpoint.save()
-        elif self.config.sbatch_script is not None and job.get("api_url"):
+        elif (
+            self.config.sbatch_script is not None
+            and job.get("api_url")
+            and not allocation_was_released(job.get("api_allocation"))
+        ):
             self.attach_api(job["api_url"])
         if attach_id:
             job.update(id=attach_id)

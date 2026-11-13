@@ -97,20 +97,27 @@ class TorchScoreRequest(TorchScoreControls):
 
 
 class TorchOptimizationRequest(ContractModel):
-    action: Literal["import", "check", "smoke", "submit", "status", "resume", "collect", "export"]
-    target: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
-    source: str | None = None
-    group: str = Field(default="latest", pattern=r"^(latest|group_[0-9]+)$")
-    export: str | None = None
+    name: str = Field(default="target", pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$")
+    pdb_paths: list[str] = Field(min_length=1)
+    binder_type: Literal["mini-binder", "vhh"] = "mini-binder"
+    method: Literal["mcmc", "ddg", "mcmc-ddg"] = "mcmc-ddg"
+    binder_chain: str = Field(default="A", min_length=1, max_length=1)
+    target_chain: str = Field(default="C", min_length=1, max_length=1)
+    interface_cutoff: float = Field(default=5, gt=0)
+    mcmc_rounds: int = Field(default=5, ge=1)
+    mcmc_proposals: int = Field(default=5, ge=1)
+    ddg_rounds: int = Field(default=5, ge=1)
+    rescue_iptm_cutoff: float = Field(default=0.8, ge=0, le=1)
+    rescue_bottom_percent: float = Field(default=25, ge=0, le=100)
+    partition: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_,.-]+$")
+    full_jobs: int = Field(default=1, ge=1)
+    full_gpus: int = Field(default=1, ge=1)
+    prepare_only: StrictBool = False
 
     @model_validator(mode="after")
-    def action_arguments(self):
-        if (self.action == "import") != (self.source is not None):
-            raise ValueError("source is required only for Torch Optimization import")
-        if (self.action == "export") != (self.export is not None):
-            raise ValueError("export is required only for Torch Optimization export")
-        if self.source == "" or self.export == "":
-            raise ValueError("Torch Optimization paths must not be empty")
+    def distinct_chains(self):
+        if self.binder_chain == self.target_chain:
+            raise ValueError("binder_chain and target_chain must differ")
         return self
 
 

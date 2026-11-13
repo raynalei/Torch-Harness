@@ -33,7 +33,7 @@ def test_registration_merges_five_services_preserving_provider_and_workspace(tmp
     assert models["torchfold"]["service"]["url"].endswith(":8050")
     assert models["torchscore"]["kind"] == "torchscore"
     assert models["torchscore"]["service"]["url"].endswith(":8060")
-    assert models["torchopt"]["service"]["url"].endswith(":8061")
+    assert models["torchopt"]["service"]["url"].endswith(":8060")
     assert models["torchopt"]["service"]["status_field"] == "state"
     assert "synthetic-key" not in result.output
     backup = Path(summary["backup_path"])

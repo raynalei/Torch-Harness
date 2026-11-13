@@ -47,7 +47,7 @@ def local_defaults():
         "af3score": 8040,
         "torchfold": 8050,
         "torchscore": 8060,
-        "torchopt": 8061,
+        "torchopt": 8060,
     }
     return {
         kind: {
@@ -113,7 +113,7 @@ def register_models(
     local_defaults_flag: bool = typer.Option(
         False,
         "--local-defaults",
-        help="Register all seven same-host service profiles (ports 8010 through 8061); verify deployment ports first.",
+        help="Register example service profiles; TorchOpt and TorchScore both default to 8060 and require distinct hosts or endpoints.",
     ),
     services_file: Path | None = typer.Option(
         None,

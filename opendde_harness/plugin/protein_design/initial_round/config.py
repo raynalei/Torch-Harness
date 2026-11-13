@@ -105,6 +105,8 @@ class Evaluation(RoundModel):
     torchscore: Service | None = None
     torchfold: Service
     rosetta: Service | None = None
+    torchopt: Service | None = None
+    torchopt_options: dict[str, Any] = Field(default_factory=dict)
     af3score_options: dict[str, Any] = Field(default_factory=dict)
     torchscore_options: dict[str, Any] = Field(default_factory=dict)
     torchfold_options: dict[str, Any] = Field(default_factory=lambda: {"run_data_pipeline": False})
@@ -134,6 +136,9 @@ class Evaluation(RoundModel):
     @model_serializer(mode="wrap")
     def serialize(self, handler):
         value = handler(self)
+        if self.torchopt is None and not self.torchopt_options:
+            value.pop("torchopt", None)
+            value.pop("torchopt_options", None)
         # Preserve the historical config hash for unchanged AF3Score runs.
         if (
             self.scoring_backend == "af3score"
@@ -165,15 +170,52 @@ class Evaluation(RoundModel):
         return self
 
 
+class AutonomousRound(RoundModel):
+    """Bounded follow-up experiments; thresholds are prototype defaults."""
+
+    max_rounds: int = Field(default=3, ge=1, le=20)
+    max_samples: int = Field(default=100, ge=1, le=10000)
+    batch_size: int = Field(default=5, ge=1, le=1000)
+    max_batch_size: int = Field(default=20, ge=1, le=1000)
+    patience: int = Field(default=2, ge=1)
+    rescue_limit: int = Field(default=3, ge=0, le=100)
+    min_af3score: float = Field(default=0.8, ge=0, le=1)
+    min_dockq: float = Field(default=0.49, ge=0, le=1)
+    contact_distance: float = Field(default=5.0, gt=0)
+    framework_rmsd: float = Field(default=2.0, gt=0)
+    region_rmsd: float = Field(default=3.0, gt=0)
+    decision_policy: Literal["agent", "rules"] = "agent"
+    decision_timeout: float = Field(default=120, gt=0)
+
+
 class InitialRoundConfig(RoundModel):
     name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
     work_dir: Path
     path_mappings: list[PathMapping] = Field(min_length=1)
     generators: dict[Literal["ppiflow", "torchcraft"], Generator]
     evaluation: Evaluation
+    autonomous: AutonomousRound | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize(self, handler):
+        value = handler(self)
+        if self.autonomous is None:
+            value.pop("autonomous", None)
+        return value
 
     @model_validator(mode="after")
     def check_workflow(self):
+        if self.autonomous is not None:
+            if self.evaluation.scoring_backend != "af3score" or self.evaluation.rosetta is None:
+                raise ValueError("autonomous rounds require AF3Score and Rosetta for the ranking formula")
+            for source, generator in self.generators.items():
+                validate_request(source, {"name": self.name, **generator.request})
+            initial_samples = sum(
+                int(g.request.get("samples_per_target" if source == "ppiflow" else "num_designs", 1))
+                for source, g in self.generators.items()
+            )
+            if initial_samples > self.autonomous.max_samples:
+                raise ValueError("initial generator requests exceed autonomous.max_samples")
         if not self.generators or "ppiflow" not in self.generators:
             raise ValueError("initial round requires ppiflow")
         if "torchcraft" in self.generators:

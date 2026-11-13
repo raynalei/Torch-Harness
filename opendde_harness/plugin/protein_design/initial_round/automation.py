@@ -18,9 +18,23 @@ from opendde_harness.plugin.protein_design.initial_round.storage import SharedFi
 from opendde_harness.utils.portable_lock import file_lock
 
 
-def prepare_run(config_path: Path, *, pdb_path: Path | None = None, name: str | None = None):
-    config = InitialRoundConfig.load(config_path)
+def prepare_run(
+    config_path: Path | dict,
+    *,
+    pdb_path: Path | None = None,
+    name: str | None = None,
+    registrations: dict | None = None,
+):
+    config = (
+        InitialRoundConfig.model_validate(config_path)
+        if isinstance(config_path, dict)
+        else InitialRoundConfig.load(config_path)
+    )
     value = config.model_dump(mode="json")
+    if config.autonomous is not None and config.evaluation.torchopt is None:
+        registered = [item for item in (registrations or {}).values() if item.get("kind") == "torchopt"]
+        if len(registered) == 1:
+            value["evaluation"]["torchopt"] = registered[0]["service"]
     if name:
         value["name"] = name
     if pdb_path is not None:
@@ -88,6 +102,7 @@ def round_status(root: Path):
         "jobs": jobs[-8:],
         "total_jobs": len(jobs),
         "job_counts": dict(Counter(job["state"] for job in jobs)),
+        "api_cleanup": checkpoint.get("api_cleanup", {}),
         "summary_path": str(root / "summary.json"),
         "log_path": str(root / "worker.log"),
     }

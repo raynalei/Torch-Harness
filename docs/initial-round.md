@@ -1,5 +1,9 @@
 # Dual-generator initial round
 
+For optional bounded agent decisions after DockQ, see the
+[autonomous feedback prototype](autonomous-feedback.md). The single-round default
+below is unchanged.
+
 For the PPIFlow-only autonomous chain (PPIFlow -> AF3Score threshold -> TorchFold
 -> DockQ), use the [automatic initial-round guide](automatic-initial-round.md).
 TorchCraft and Rosetta are now optional; the dual-generator example below remains

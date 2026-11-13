@@ -1,4 +1,4 @@
-"""Background worker entry point; no model/LLM requests are made here."""
+"""Background worker; optional bounded feedback uses the existing chat provider."""
 
 import argparse
 import asyncio

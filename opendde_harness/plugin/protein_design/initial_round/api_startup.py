@@ -93,6 +93,7 @@ async def healthy(client: httpx.AsyncClient, path: str) -> bool:
         value = response.json()
         return (
             isinstance(value, dict)
+            and value.get("backend_available") is not False
             and value.get("ok") is not False
             and str(value.get("status", "ok")).lower() not in {"error", "failed", "unhealthy"}
         )
@@ -134,10 +135,11 @@ async def _ensure_locked(config, client, script: Path, state_path: Path, deadlin
     if state is None:
         if not start:
             raise ApiStartupError("API has no saved sbatch allocation; --check does not submit API allocations")
-        state = {"signature": signature, "state": "submission_uncertain"}
+        allocation_name = "harness-api-" + fingerprint(str(state_path.resolve()))[:20]
+        state = {"signature": signature, "state": "submission_uncertain", "allocation_name": allocation_name}
         write_json(state_path, state)
         # A timeout or lost stdout may still mean the scheduler accepted the job.
-        output = await slurm_command(config, "sbatch", "--parsable", str(script))
+        output = await slurm_command(config, "sbatch", "--parsable", f"--job-name={allocation_name}", str(script))
         if not re.fullmatch(r"[0-9]+", output):
             raise ValueError("sbatch must return a numeric local-cluster job ID")
         state.update(job_id=output, state="submitted")
@@ -189,3 +191,69 @@ async def _ensure_locked(config, client, script: Path, state_path: Path, deadlin
                 f"inspect {state_path}; retry within this startup attempt to reuse its ID (not resubmit)"
             )
         await asyncio.sleep(config.startup_poll_interval)
+
+
+def allocation_record(config: Service):
+    """Retain ownership separately from disposable HTTP connections."""
+    path = config.sbatch_state_file
+    if config.sbatch_script is None or path is None or not path.is_file():
+        return None
+    state = json.loads(path.read_text())
+    if not state.get("job_id") or not state.get("allocation_name"):
+        return None
+    return {"state_file": str(path), **{k: state[k] for k in ("job_id", "allocation_name", "signature")}}
+
+
+def allocation_was_released(record):
+    if not record or not Path(record["state_file"]).is_file():
+        return False
+    return json.loads(Path(record["state_file"]).read_text()).get("cleanup", {}).get("state") in {
+        "cancel_requested",
+        "not_in_queue",
+    }
+
+
+async def release_allocation(config: Service, record: dict | None):
+    """Cancel only an owned API allocation, after all inference/results are done."""
+    if config.sbatch_script is None or not record:
+        return {"state": "not_owned"}
+    path = Path(record["state_file"])
+    with file_lock(path.with_suffix(".lock"), blocking=False):
+        state = json.loads(path.read_text())
+        expected_name = "harness-api-" + fingerprint(str(path.resolve()))[:20]
+        if any(state.get(k) != record.get(k) for k in ("job_id", "allocation_name", "signature")) or (
+            record.get("allocation_name") != expected_name or not re.fullmatch(r"[0-9]+", str(record.get("job_id", "")))
+        ):
+            raise ApiStartupError("API allocation ownership does not match; no cancellation attempted")
+        if state.get("cleanup", {}).get("state") in {"cancel_requested", "not_in_queue"}:
+            return state["cleanup"]
+        rows = (
+            await slurm_command(config, "squeue", "--jobs", str(record["job_id"]), "--noheader", "--format=%T|%j")
+        ).splitlines()
+        if not rows:
+            phase, _ = await allocation_status(config, str(record["job_id"]), state)
+            terminal = {
+                "COMPLETED",
+                "CANCELLED",
+                "FAILED",
+                "TIMEOUT",
+                "OUT_OF_MEMORY",
+                "NODE_FAIL",
+                "PREEMPTED",
+                "BOOT_FAIL",
+                "DEADLINE",
+                "REVOKED",
+            }
+            result = {
+                "state": "not_in_queue" if phase in terminal else "cleanup_deferred",
+                "job_id": record["job_id"],
+                "slurm_state": phase,
+            }
+        else:
+            if len(rows) != 1 or rows[0].strip().split("|")[-1] != expected_name:
+                raise ApiStartupError("scheduler job name differs from owned allocation; no cancellation attempted")
+            await slurm_command(config, "scancel", str(record["job_id"]))
+            result = {"state": "cancel_requested", "job_id": record["job_id"]}
+        state["cleanup"] = result
+        write_json(path, state)
+        return result

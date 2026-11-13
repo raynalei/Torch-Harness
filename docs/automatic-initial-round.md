@@ -135,3 +135,48 @@ reduces already-sent input context. These switches require a hybrid Qwen model
 and a server that implements the selected format; a reasoning-only deployment
 cannot necessarily disable thinking. The local wire test verifies the flag and
 ceiling are sent, not a vendor's compliance or a real model's latency.
+
+
+## Natural-language launch without a YAML file
+
+`protein_initial_round_start` accepts a complete structured `run_config` as an
+alternative to `config_path` or a plugin `initial_round_config` profile. Describe
+the task in chat; the agent assembles the object from existing registered service
+metadata, known tool parameters and local Python results. You do not need to
+write a YAML file. Chain/hotspot/framework and deployment inputs must still be
+known; an API URL or framework path must not be invented. The usual initial
+compute authorization applies; bounded follow-up rounds do not ask again.
+
+For example: "Use the PDB, chains, hotspots and framework from the previous
+request. Generate five candidates and run the scoring/refolding pipeline, with
+at most three follow-up rounds under the existing sample budget."
+
+The worker validates the object with the same `InitialRoundConfig` schema as a
+profile and saves `worker-config.json` and `launch-inputs.json` for recovery.
+An inline configuration and explicit `config_path` cannot be supplied together.
+`protein_model_list` now includes safe service configuration metadata (credential
+variable names only, never values), so the agent can reuse registered deployments.
+YAML remains an optional reproducible CLI format.
+
+## Release API allocations
+
+Each sbatch-managed API allocation has a unique `harness-api-*` scheduler name
+and an ownership record. A full workflow caches its scientific outputs and, when
+all recorded inference jobs are terminal, requests `scancel` for only those API
+allocations it owns. `api_cleanup` in the summary/checkpoint reports the outcome.
+This stops the persistent API server allocation; it does not delete output files.
+
+Standalone registered requests cache results/metrics when a successful status is
+observed, then request release of their private API allocation. Later status and
+results calls use the saved records without reconnecting to the stopped API.
+There is no new independent polling daemon for standalone requests: cleanup is
+triggered by status/results observation, while full workflows already poll in
+their worker. Pending/uncertain inference, unverified completion, external APIs,
+and unresolved TorchOptimization child jobs retain their APIs.
+
+Cancellation is reported as `cancel_requested`; the scheduler may briefly show
+`COMPLETING`. A scheduler-name mismatch prevents cancellation, even if a numeric
+job ID has been reused. Startup records from older versions without ownership
+names are not cancelled automatically. A hard-killed worker cannot execute its
+finalizer; resume the same run to use its retained ownership records. Actual
+Slurm/GPU deployment behavior must be verified on the cluster.

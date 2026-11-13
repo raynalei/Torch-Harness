@@ -52,7 +52,9 @@ async def test_sbatch_precedes_http_post_and_resolves_node_and_port(api):
     try:
         response = await client.post("v1/designs", json={"name": "test"})
         assert response.status_code == 202
-        assert commands[0] == ("sbatch", "--parsable", str(config.sbatch_script))
+        assert commands[0][:2] == ("sbatch", "--parsable")
+        assert commands[0][2].startswith("--job-name=harness-api-")
+        assert commands[0][-1] == str(config.sbatch_script)
         assert str(requests[-1].url) == "http://gpu01:8010/base/v1/designs"
         state = json.loads(client.config.sbatch_state_file.read_text())
         assert state["job_id"] == "123" and state["state"] == "ready"
@@ -362,3 +364,57 @@ async def test_failed_slurm_command_preserves_stderr_in_local_log(tmp_path, monk
     with pytest.raises(ApiStartupError, match="slurm.log"):
         await slurm_command(config, "squeue", "--jobs", "123")
     assert "Unable to contact slurm controller" in config.sbatch_state_file.with_suffix(".slurm.log").read_text()
+
+
+async def test_cleanup_only_cancels_owned_scheduler_name_and_is_idempotent(api, monkeypatch):
+    config, commands, _, transport = api
+    client = ServiceConnection(config, transport=transport)
+    await client.ensure_ready()
+    record = client.allocations[0]
+    seen = []
+
+    async def command(config, *args):
+        seen.append(args)
+        if args[0] == "squeue":
+            return "RUNNING|" + record["allocation_name"]
+        return ""
+
+    monkeypatch.setattr("opendde_harness.plugin.protein_design.initial_round.api_startup.slurm_command", command)
+    first = await client.release_allocations()
+    assert first == [{"state": "cancel_requested", "job_id": "123"}]
+    assert await client.release_allocations() == first
+    assert seen.count(("scancel", "123")) == 1
+    await client.close()
+
+
+async def test_cleanup_refuses_reused_job_id_with_different_name(api, monkeypatch):
+    config, _, _, transport = api
+    client = ServiceConnection(config, transport=transport)
+    await client.ensure_ready()
+    seen = []
+
+    async def command(config, *args):
+        seen.append(args)
+        return "RUNNING|someone-elses-job"
+
+    monkeypatch.setattr("opendde_harness.plugin.protein_design.initial_round.api_startup.slurm_command", command)
+    result = await client.release_allocations()
+    assert result[0]["state"] == "cleanup_failed"
+    assert not any(args[0] == "scancel" for args in seen)
+    await client.close()
+
+
+async def test_cleanup_does_not_treat_accounting_lag_as_termination(api, monkeypatch):
+    config, _, _, transport = api
+    client = ServiceConnection(config, transport=transport)
+    await client.ensure_ready()
+    seen = []
+
+    async def command(config, *args):
+        seen.append(args)
+        return ""
+
+    monkeypatch.setattr("opendde_harness.plugin.protein_design.initial_round.api_startup.slurm_command", command)
+    assert (await client.release_allocations())[0]["state"] == "cleanup_deferred"
+    assert not any(args[0] == "scancel" for args in seen)
+    await client.close()

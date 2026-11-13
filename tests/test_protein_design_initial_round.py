@@ -896,3 +896,527 @@ def test_torchscore_round_rejects_msa_search_and_requires_inference(round_config
     for options in ({"run_data_pipeline": True}, {"run_inference": False}, {"seed": 11}, {"mode": "metrics"}):
         with pytest.raises(ValueError):
             Evaluation.model_validate({**value, "torchscore_options": options})
+
+
+def autonomous_config(config, **overrides):
+    value = config.model_dump(mode="json")
+    value["generators"]["ppiflow"]["request"]["specified_hotspots"] = "A:1"
+    value["autonomous"] = {"decision_policy": "rules", "max_rounds": 3, "max_samples": 8, "batch_size": 1, **overrides}
+    return InitialRoundConfig.model_validate(value)
+
+
+async def test_autonomous_round_preserves_best_budget_and_resume(round_config, fake_services):
+    transport, calls = fake_services
+    config = autonomous_config(round_config)
+    result = await InitialRoundRunner(config, transport=transport).run()
+    assert result["ranking_policy"] == "100*af3score_iptm-rosetta_interface_dg_desc"
+    assert result["stop_reason"] == "no_improvement"
+    assert result["used_samples"] == 6  # two initial samples and two follow-up batches of two
+    assert result["accepted"] == 4
+    root = config.work_dir / config.name
+    records = json.loads((root / "candidates.json").read_text())
+    assert all(c["metrics"]["ranking_score"] == 102 for c in records)
+    assert all(c["diagnostics"]["epitope_hit"] is True for c in records)
+    assert all("generated.pdb" in c["generated_structure"] for c in records)
+    decisions = json.loads((root / "decisions.json").read_text())["decisions"]
+    assert [d["source"] for d in decisions] == ["ppiflow", "torchcraft"]
+    assert all(d["action"] == "expand" for d in decisions)
+    before = {key: count for key, count in calls.items() if key[1] == "POST"}
+    assert await InitialRoundRunner(config, transport=transport).run() == result
+    assert {key: count for key, count in calls.items() if key[1] == "POST"} == before
+
+
+async def test_autonomous_sample_budget_counts_initial_jobs(round_config, fake_services):
+    config = autonomous_config(round_config, max_samples=2)
+    result = await InitialRoundRunner(config, transport=fake_services[0]).run()
+    assert result["used_samples"] == 2
+    assert result["followup_rounds"] == 0
+    assert result["stop_reason"] == "sample_budget"
+    with pytest.raises(ValueError, match="exceed"):
+        autonomous_config(round_config, max_samples=1)
+
+
+async def test_autonomous_rescues_low_scores_and_ignores_legacy_refold_gate(round_config, fake_services):
+    config = autonomous_config(round_config, min_af3score=0.95, max_samples=2)
+    config.evaluation.min_refold_iptm = 0.99
+    runner = InitialRoundRunner(config, transport=fake_services[0])
+    result = await runner.run()
+    assert result["accepted"] == 0
+    records = runner.checkpoint.data["candidates"]
+    assert all(c["diagnostics"]["diagnosis"] == "low_confidence" for c in records)
+    assert all(c["metrics"]["design_refold_dockq"] == 1 for c in records)
+    assert "torchopt" in result["unavailable_actions"]
+
+
+async def test_invalid_agent_choice_falls_back_before_submission(round_config, fake_services, monkeypatch):
+    from opendde_harness.plugin.protein_design.initial_round.autonomous import Choice
+
+    async def bad_choice(context):
+        return Choice(option_id=999, reason="invalid selection")
+
+    monkeypatch.setattr("opendde_harness.plugin.protein_design.initial_round.autonomous.agent_choice", bad_choice)
+    config = autonomous_config(round_config, decision_policy="agent", max_rounds=1, max_samples=3)
+    runner = InitialRoundRunner(config, transport=fake_services[0])
+    result = await runner.run()
+    decision = runner.checkpoint.data["autonomous"]["decisions"][0]
+    assert decision["fallback"] and decision["samples"] == 1
+    assert result["used_samples"] == 3
+
+
+async def test_followup_resumes_reserved_decision_without_duplicate_submission(
+    round_config, fake_services, monkeypatch
+):
+    from opendde_harness.plugin.protein_design.initial_round.autonomous import evaluate
+
+    once = True
+
+    async def interrupted_evaluation(runner, candidates):
+        nonlocal once
+        if any(c.get("round_index") for c in candidates) and once:
+            once = False
+            raise RuntimeError("worker interrupted after generation")
+        return await evaluate(runner, candidates)
+
+    monkeypatch.setattr(
+        "opendde_harness.plugin.protein_design.initial_round.autonomous.evaluate", interrupted_evaluation
+    )
+    config = autonomous_config(round_config, max_rounds=1, max_samples=3)
+    transport, calls = fake_services
+    with pytest.raises(RuntimeError, match="interrupted"):
+        await InitialRoundRunner(config, transport=transport).run()
+    before = calls[("ppiflow", "POST")]
+    result = await InitialRoundRunner(config, transport=transport).run()
+    assert calls[("ppiflow", "POST")] == before == 2
+    assert result["used_samples"] == 3
+    assert result["followup_rounds"] == 1
+
+
+def test_diagnosis_thresholds_and_missing_evidence_are_explicit():
+    from opendde_harness.plugin.protein_design.initial_round.config import AutonomousRound
+    from opendde_harness.plugin.protein_design.initial_round.diagnostics import classify
+
+    config = AutonomousRound()
+    metrics = {"af3score_iptm": 0.9, "design_refold_dockq": 0.8, "rosetta_interface_dg": -10}
+    evidence = {"epitope_hit": True}
+    assert classify(metrics, evidence, config) == "hit"
+    assert classify({**metrics, "af3score_iptm": 0.8}, evidence, config) == "low_confidence"
+    assert classify({**metrics, "design_refold_dockq": 0.49}, evidence, config) == "pose_change"
+    assert (
+        classify({**metrics, "design_refold_dockq": 0.1}, {**evidence, "local_region": "H3"}, config) == "local_change"
+    )
+    assert classify(metrics, {"epitope_hit": False}, config) == "off_epitope"
+    assert classify(metrics, {"epitope_hit": None}, config) == "uncertain"
+    assert classify({**metrics, "rosetta_interface_dg": None}, evidence, config) == "evaluation_incomplete"
+
+
+def test_structure_diagnosis_maps_chains_and_localizes_one_region(round_config, tmp_path):
+    import biotite.structure.io as structure_io
+
+    from opendde_harness.plugin.protein_design.initial_round.artifacts import structure
+    from opendde_harness.plugin.protein_design.initial_round.diagnostics import analyze
+
+    config = autonomous_config(round_config)
+    config.generators["ppiflow"].request["cdr_position"] = "B5-6"
+    runner = InitialRoundRunner(config)
+    generated = pdb(tmp_path / "generated.pdb")
+    folded = pdb(tmp_path / "folded.pdb", target="X", chain="Y")
+    atoms = structure(folded)
+    atoms.coord[(atoms.chain_id == "Y") & (atoms.res_id >= 5), 1] += 5
+    # A rigid transform of the whole complex must not change the diagnosis.
+    atoms.coord += [11, 3, -7]
+    structure_io.save_structure(str(folded), atoms)
+    candidate = {
+        "source": "ppiflow",
+        "generated_structure": runner.files.remote(generated),
+        "refold_structure": runner.files.remote(folded),
+        "chains": {"A": "GGGGGG", "B": "AAAAAA"},
+        "metrics": {"af3score_iptm": 0.9, "design_refold_dockq": 0.3, "rosetta_interface_dg": -10},
+    }
+    evidence = analyze(runner, candidate)
+    assert evidence["epitope_hit"] is True
+    assert evidence["framework_rmsd"] < 0.01
+    assert evidence["region_rmsd"]["B_region_1"] == pytest.approx(5, abs=0.01)
+    assert evidence["diagnosis"] == "local_change"
+    assert evidence["region_source"] == "registered_cdr_position"
+    config.generators["ppiflow"].request.pop("cdr_position")
+    automatic = analyze(runner, candidate)
+    assert automatic["region_source"] == "python_displaced_loop"
+    assert automatic["local_region"] == "B_region_1"
+    candidate["chains"]["A"] = "WRONG"
+    evidence = analyze(runner, candidate)
+    assert evidence["epitope_hit"] is None
+    assert evidence["diagnosis"] == "uncertain"
+
+
+def test_partial_flow_uses_registered_inputs_and_python_region(round_config, tmp_path):
+    from opendde_harness.plugin.protein_design.initial_round.autonomous import options_for
+
+    config = autonomous_config(round_config)
+    runner = InitialRoundRunner(config)
+    runner.root.mkdir()
+    runner.checkpoint = Checkpoint(runner.root, {})
+    generated = pdb(tmp_path / "parent.pdb")
+    candidate = {
+        "candidate_id": "parent",
+        "source": "ppiflow",
+        "status": "rejected",
+        "generated_structure": runner.files.remote(generated),
+        "chains": {"A": "GGGGGG", "B": "AAAAAA"},
+        "metrics": {},
+        "diagnostics": {"diagnosis": "local_change", "local_region": "B_region_1"},
+    }
+    assert all(o["action"] != "partial_flow" for o in options_for(runner, [candidate], 1, 2, []))
+    candidate["diagnostics"]["repair_regions"] = {"B_region_1": {"chain": "B", "positions": [5, 6]}}
+    options = options_for(runner, [candidate], 1, 2, [])
+    repair = options[0]
+    assert repair["action"] == "partial_flow" and repair["samples"] == 1
+    assert repair["request"]["complex_pdb"] == runner.files.remote(generated)
+    assert repair["request"]["fixed_positions"] == "B1-4"
+    assert repair["request"]["cdr_position"] == "B5-6"
+    assert repair["request"]["start_t"] == 0.01
+    assert all(o["action"] != "partial_flow" for o in options_for(runner, [candidate], 2, 2, ["parent"]))
+    # Registered fixed positions win even if geometry suggests moving them.
+    candidate["generation_request"] = {**config.generators["ppiflow"].request, "fixed_positions": "B5-6"}
+    assert all(o["action"] != "partial_flow" for o in options_for(runner, [candidate], 1, 2, []))
+
+
+def test_default_config_hash_shape_is_preserved(round_config):
+    assert "autonomous" not in round_config.model_dump(mode="json")
+    value = round_config.model_dump(mode="json")
+    value["evaluation"]["rosetta"] = None
+    value["autonomous"] = {}
+    with pytest.raises(ValueError, match="require AF3Score and Rosetta"):
+        InitialRoundConfig.model_validate(value)
+
+
+async def test_partial_flow_executes_once_then_rescores_child(round_config, fake_services, monkeypatch):
+    from opendde_harness.plugin.protein_design.initial_round.runner import digest
+
+    transport, calls = fake_services
+    config = autonomous_config(round_config, max_rounds=1, max_samples=3)
+    config.generators.pop("torchcraft")
+    base_generate = InitialRoundRunner.generate
+    submitted = []
+
+    async def recorded_generate(self, **kwargs):
+        result = await base_generate(self, **kwargs)
+        if kwargs.get("round_index"):
+            submitted.append(kwargs["source_requests"]["ppiflow"])
+        return result
+
+    def diagnosis(runner, candidate):
+        return {
+            "diagnosis": "hit" if candidate.get("parent_id") else "local_change",
+            "local_region": "B_region_1",
+            "repair_regions": {"B_region_1": {"chain": "B", "positions": [5, 6]}},
+            "epitope_hit": True,
+            "flexibility": "unknown",
+        }
+
+    monkeypatch.setattr(InitialRoundRunner, "generate", recorded_generate)
+    monkeypatch.setattr("opendde_harness.plugin.protein_design.initial_round.autonomous.analyze", diagnosis)
+    runner = InitialRoundRunner(config, transport=transport)
+    result = await runner.run()
+    assert submitted[0]["mode"] == "partial_nanobody"
+    assert submitted[0]["samples_per_target"] == 1
+    assert result["accepted"] == 1
+    assert result["used_samples"] == 2
+    assert calls[("af3score", "POST")] == calls[("torchfold", "POST")] == 2
+    parent, child = runner.checkpoint.data["candidates"]
+    assert child["parent_id"] == parent["candidate_id"]
+    assert digest(runner.files.local(parent["generated_structure"])) == parent["generated_sha256"]
+    # A completed resume must still reject modified retained evidence.
+    runner.files.local(child["refold_structure"]).write_text("changed")
+    with pytest.raises(ValueError, match="refold artifact changed"):
+        await InitialRoundRunner(config, transport=transport).run()
+
+
+async def test_agent_decision_reuses_configured_provider_and_json_contract(monkeypatch):
+    from types import SimpleNamespace
+
+    from opendde_harness.plugin.protein_design.initial_round.autonomous import agent_choice
+
+    seen = []
+    closed = []
+
+    class Provider:
+        async def chat_with_retry(self, **kwargs):
+            seen.append(kwargs)
+            return SimpleNamespace(
+                finish_reason="stop", tool_calls=[], content='{"option_id":0,"reason":"localized H3"}'
+            )
+
+    monkeypatch.setattr("opendde_harness.cli._helpers.make_provider", lambda config: Provider())
+    monkeypatch.setattr("opendde_harness.config.loader.load_config", lambda: object())
+
+    async def shutdown():
+        closed.append(True)
+
+    monkeypatch.setattr("opendde_harness.providers.pi_service.shutdown_service", shutdown)
+    decision = await agent_choice({"options": [{"option_id": 0, "action": "partial_flow"}]})
+    assert decision.option_id == 0 and decision.reason == "localized H3"
+    assert seen[0]["max_tokens"] == 1500
+    assert closed == [True]
+
+
+async def test_feedback_repairs_python_loop_without_extra_input(round_config, fake_services, monkeypatch):
+    import biotite.structure.io as structure_io
+
+    from opendde_harness.plugin.protein_design.initial_round.artifacts import structure
+
+    transport, calls = fake_services
+    base_handler = transport.handler
+    config = autonomous_config(round_config, max_rounds=1, max_samples=2)
+    config.generators.pop("torchcraft")
+    requests = []
+    first_refold = True
+
+    def handler(request):
+        nonlocal first_refold
+        if request.method == "POST" and request.url.host == "ppiflow.test":
+            requests.append(json.loads(request.content))
+        response = base_handler(request)
+        if request.url.host == "torchfold.test" and request.url.path.endswith("/results") and first_refold:
+            first_refold = False
+            path = SharedFiles(config.path_mappings).local(response.json()["files"][0])
+            atoms = structure(path)
+            atoms.coord[(atoms.chain_id == "Y") & (atoms.res_id >= 5), 1] += 5
+            structure_io.save_structure(str(path), atoms)
+        return response
+
+    dockq_calls = 0
+
+    async def dockq(*args, **kwargs):
+        nonlocal dockq_calls
+        if args[-1] == "--check":
+            payload = {"dockq_available": True}
+        else:
+            dockq_calls += 1
+            payload = {"dockq": 0.3 if dockq_calls == 1 else 1.0, "interfaces": []}
+
+        class Process:
+            returncode = 0
+
+            async def communicate(self):
+                return json.dumps(payload).encode(), b""
+
+        return Process()
+
+    monkeypatch.setattr(
+        "opendde_harness.plugin.protein_design.initial_round.runner.asyncio.create_subprocess_exec", dockq
+    )
+    runner = InitialRoundRunner(config, transport=httpx.MockTransport(handler))
+    result = await runner.run()
+    assert len(requests) == 2
+    assert requests[1]["mode"] == "partial_nanobody"
+    assert requests[1]["cdr_position"] == "B5-6"
+    assert requests[1]["fixed_positions"] == "B1-4"
+    parent, child = runner.checkpoint.data["candidates"]
+    assert parent["diagnostics"]["region_source"] == "python_displaced_loop"
+    assert "cdr_position" not in parent["generation_request"]
+    assert "design_regions" not in parent and "partial_requests" not in parent
+    assert child["status"] == "accepted" and result["used_samples"] == 2
+    assert calls[("af3score", "POST")] == calls[("torchfold", "POST")] == 2
+
+
+def test_registered_ranges_preserve_fixed_positions_and_actual_pdb_ids(round_config, tmp_path):
+    from opendde_harness.plugin.protein_design.initial_round.artifacts import structure
+    from opendde_harness.plugin.protein_design.initial_round.autonomous import _partial_request
+    from opendde_harness.plugin.protein_design.initial_round.regions import derive_regions, encode_positions
+
+    config = autonomous_config(round_config)
+    runner = InitialRoundRunner(config)
+    path = pdb(tmp_path / "numbered.pdb")
+    atoms = structure(path)
+    atoms.res_id[atoms.chain_id == "B"] += 100
+    import biotite.structure.io as structure_io
+
+    structure_io.save_structure(str(path), atoms)
+    request = {
+        **config.generators["ppiflow"].request,
+        "cdr_position": "B104-106",
+        "fixed_positions": "B105",
+        "start_t": 0.03,
+        "num_timesteps": 100,
+        "config": "/shared/config.yaml",
+        "model_weights": "/shared/weights.ckpt",
+    }
+    regions, origin = derive_regions(atoms, config.generators["ppiflow"].chains, request, {"B": [0, 0, 0, 4, 4, 4]}, 3)
+    assert origin == "registered_cdr_position"
+    assert [r.positions for r in regions.values()] == [[4], [6]]
+    assert encode_positions(atoms, {"B": {1, 2, 3, 5, 6}}) == "B101-103,B105-106"
+    candidate = {
+        "source": "ppiflow",
+        "generation_request": request,
+        "generated_structure": runner.files.remote(path),
+        "chains": {"A": "GGGGGG", "B": "AAAAAA"},
+        "diagnostics": {"repair_regions": {"B_region_1": regions["B_region_1"].model_dump()}},
+    }
+    repair = _partial_request(runner, candidate, "B_region_1", "repair")
+    assert repair["cdr_position"] == "B104"
+    assert repair["fixed_positions"] == "B101-103,B105-106"
+    assert repair["start_t"] == 0.03 and repair["num_timesteps"] == 100
+    assert repair["config"] == request["config"] and repair["model_weights"] == request["model_weights"]
+    with pytest.raises(ValueError, match="missing or ambiguous"):
+        derive_regions(atoms, config.generators["ppiflow"].chains, {"cdr_position": "B200-201"}, {"B": [4] * 6}, 3)
+
+
+@pytest.fixture
+def owned_api_config(round_config, tmp_path, monkeypatch):
+    names, cancelled = {}, []
+    services = [g.service for g in round_config.generators.values()]
+    services += [round_config.evaluation.af3score, round_config.evaluation.torchfold, round_config.evaluation.rosetta]
+    for index, service in enumerate(services):
+        script = tmp_path / f"api-{index}.sbatch"
+        script.write_text("#!/bin/bash\nsleep infinity\n")
+        service.sbatch_script = script
+        service.sbatch_state_file = tmp_path / f"api-{index}.json"
+        service.sbatch_resolve_host = False
+
+    async def command(config, *args):
+        if args[0] == "sbatch":
+            job_id = str(100 + len(names))
+            names[job_id] = args[2].split("=", 1)[1]
+            return job_id
+        if args[0] == "scancel":
+            cancelled.append(args[1])
+            return ""
+        if args[0] == "squeue":
+            job_id = args[2]
+            return "RUNNING|" + (names[job_id] if args[-1] == "--format=%T|%j" else "gpu01")
+        return ""
+
+    monkeypatch.setattr("opendde_harness.plugin.protein_design.initial_round.api_startup.slurm_command", command)
+    return names, cancelled
+
+
+async def test_completed_round_releases_owned_apis_after_caching_results(round_config, fake_services, owned_api_config):
+    names, cancelled = owned_api_config
+    config = autonomous_config(round_config, max_samples=2)
+    first = await InitialRoundRunner(config, transport=fake_services[0]).run()
+    assert set(cancelled) == set(names) and len(cancelled) == 5
+    assert all(rows[0]["state"] == "cancel_requested" for rows in first["api_cleanup"].values())
+    root = config.work_dir / config.name
+    assert json.loads((root / "summary.json").read_text())["api_cleanup"] == first["api_cleanup"]
+    second = await InitialRoundRunner(config, transport=fake_services[0]).run()
+    assert first == second and len(cancelled) == 5
+
+
+async def test_round_keeps_apis_when_inference_outcome_is_unresolved(
+    round_config, fake_services, owned_api_config, monkeypatch
+):
+    _, cancelled = owned_api_config
+    base_score = InitialRoundRunner.score
+
+    async def interrupted(self, candidate):
+        await base_score(self, candidate)
+        self.checkpoint.data["jobs"][f"score/{candidate['candidate_id']}"]["state"] = "waiting"
+        raise TimeoutError("remote work still pending")
+
+    monkeypatch.setattr(InitialRoundRunner, "score", interrupted)
+    config = autonomous_config(round_config, max_samples=2)
+    result = await InitialRoundRunner(config, transport=fake_services[0]).run()
+    assert not cancelled
+    assert result["accepted"] == 0
+    assert all(rows[0]["state"] == "retained_active_jobs" for rows in result["api_cleanup"].values())
+
+
+async def test_low_confidence_candidate_is_optimized_and_fully_reevaluated(round_config, fake_services, tmp_path):
+    transport, calls = fake_services
+    handler_base = transport.handler
+    config = autonomous_config(round_config, max_samples=2, max_rounds=1)
+    config.generators.pop("torchcraft")
+    config.evaluation.torchopt = Service(url="https://torchopt.test", poll_interval=0.001)
+    files = SharedFiles(config.path_mappings)
+    final = pdb(tmp_path / "native/cases/case/final/optimized.pdb")
+    table = tmp_path / "native/results.csv"
+    table.write_text("candidate\noptimized\n")
+    identifier = "a" * 32
+    submitted = {}
+    optimization_calls = []
+
+    def handler(request):
+        if request.url.host == "torchopt.test":
+            optimization_calls.append(request)
+            if request.url.path == "/health":
+                return httpx.Response(200, json={"backend_available": True})
+            if request.method == "POST":
+                submitted.update(json.loads(request.content))
+                assert request.url.path == "/v1/optimizations"
+                assert submitted["binder_type"] == "vhh"
+                assert submitted["binder_chain"] == "B" and submitted["target_chain"] == "A"
+                return httpx.Response(201, json={"optimization_id": identifier})
+            if request.url.path.endswith("/results"):
+                return httpx.Response(
+                    200,
+                    json={
+                        "optimization_id": identifier,
+                        "structures": [files.remote(final)],
+                        "results": [files.remote(table)],
+                    },
+                )
+            return httpx.Response(
+                200,
+                json={
+                    "optimization_id": identifier,
+                    "request": submitted,
+                    "state": "SUCCEEDED",
+                    "returncode": 0,
+                    "runs": {"run": {"native": True}},
+                    "submissions": {"run/submission.json": {"slurm_job_id": "123"}},
+                    "scheduler_jobs": {"123": {"state": "COMPLETED", "exit_code": "0:0"}},
+                },
+            )
+        response = handler_base(request)
+        if request.url.host == "af3score.test" and request.url.path.endswith("/metrics"):
+            return httpx.Response(200, json={"metrics": [{"iptm": 0.7 if calls[("af3score", "POST")] == 1 else 0.9}]})
+        return response
+
+    runner = InitialRoundRunner(config, transport=httpx.MockTransport(handler))
+    result = await runner.run()
+    decision = runner.checkpoint.data["autonomous"]["decisions"][0]
+    assert decision["action"] == "torchopt" and result["used_samples"] == 2
+    assert result["accepted"] == 1 and result["unavailable_actions"] == {}
+    assert submitted["mcmc_rounds"] == submitted["mcmc_proposals"] == submitted["ddg_rounds"] == 1
+    parent, child = runner.checkpoint.data["candidates"]
+    assert parent["diagnostics"]["diagnosis"] == "low_confidence"
+    assert child["optimized_by"] == "torchopt" and child["parent_id"] == parent["candidate_id"]
+    assert child["metrics"]["af3score_iptm"] == 0.9 and child["metrics"]["ranking_score"] == 102
+    assert calls[("af3score", "POST")] == calls[("torchfold", "POST")] == calls[("rosetta", "POST")] == 2
+    assert sum(request.method == "POST" for request in optimization_calls) == 1
+    before = dict(calls)
+    assert await InitialRoundRunner(config, transport=httpx.MockTransport(handler)).run() == result
+    assert {k: v for k, v in calls.items() if k[1] == "POST"} == {k: v for k, v in before.items() if k[1] == "POST"}
+    assert sum(request.method == "POST" for request in optimization_calls) == 1
+
+
+def test_paired_antibodies_do_not_route_into_unsupported_optimization(round_config, tmp_path):
+    from opendde_harness.plugin.protein_design.initial_round.autonomous import options_for
+
+    config = autonomous_config(round_config)
+    config.generators.pop("torchcraft")
+    config.evaluation.torchopt = Service(url="https://torchopt.test")
+    config.generators["ppiflow"].chains.binder.append("L")
+    runner = InitialRoundRunner(config)
+    runner.root.mkdir()
+    runner.checkpoint = Checkpoint(runner.root, {})
+    candidate = {
+        "candidate_id": "paired",
+        "source": "ppiflow",
+        "status": "rejected",
+        "metrics": {},
+        "diagnostics": {"diagnosis": "low_confidence"},
+    }
+    assert all(option["action"] != "torchopt" for option in options_for(runner, [candidate], 1, 2, []))
+
+
+def test_registered_optimization_service_is_reused_without_new_scientific_inputs(round_config):
+    from opendde_harness.plugin.protein_design.initial_round.automation import prepare_run
+
+    config = autonomous_config(round_config)
+    registrations = {"existing_opt": {"kind": "torchopt", "service": {"url": "https://torchopt.test"}}}
+    result = prepare_run(config.model_dump(mode="json"), registrations=registrations)
+    assert result.evaluation.torchopt.url == "https://torchopt.test"
+    assert result.generators == config.generators
+    registrations["other_opt"] = {"kind": "torchopt", "service": {"url": "https://other.test"}}
+    assert prepare_run(config.model_dump(mode="json"), registrations=registrations).evaluation.torchopt is None

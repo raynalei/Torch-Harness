@@ -9,7 +9,7 @@ shared task-management tools to the main assistant:
 | `protein_model_torchcraft` | Submit TorchCraft VHH/minibinder requests |
 | `protein_model_torchfold` | Submit TorchFold predictions/refolds |
 | `protein_model_torchscore` | Submit TorchScore PDB scoring or metrics extraction |
-| `protein_model_torchopt` | Submit Torch Optimization pipeline actions |
+| `protein_model_torchopt` | Submit TorchOptimization jobs and retrieve final structures |
 | `protein_model_af3score` | Submit AF3Score scoring, preprocessing or metrics tasks |
 | `protein_model_rosetta` | Submit any of the six documented Rosetta operations |
 | `protein_model_list` | Discover configured model aliases, request schemas, sample limits and optional HTTP health |
@@ -266,42 +266,64 @@ ports, not a claim that a service already runs there. Cancellation is not suppor
 See [initial-round selection](initial-round.md#choose-af3score-or-torchscore) to choose
 it for the autonomous workflow. Metrics are model-specific; thresholds need validation.
 
-## Torch Optimization structure optimization
+## TorchOptimization jobs
 
-Register the uploaded multi-target API as `kind: torchopt` and call
-`protein_model_torchopt`. Its request mirrors the supplied API:
-
-```json
-{"action":"import","target":"1BVK","source":"/shared/pdbs"}
-```
-
-After import/check, submit a separately authorized optimization action:
+Register the deployed service as `kind: torchopt` and use `protein_model_torchopt`:
 
 ```json
-{"action":"submit","target":"1BVK"}
+{
+  "request_id": "optimization_001",
+  "request": {
+    "name": "target",
+    "pdb_paths": ["/shared/design.pdb"],
+    "binder_type": "vhh",
+    "binder_chain": "A",
+    "target_chain": "C",
+    "method": "mcmc-ddg",
+    "full_jobs": 1,
+    "full_gpus": 1,
+    "prepare_only": false
+  },
+  "user_confirmed": true
+}
 ```
 
-The complete action set is `import`, `check`, `smoke`, `submit`, `status`, `resume`,
-`collect`, `export`. Import requires `source`; export requires a fresh `export`
-path inside the server's project. Other actions reject those paths. Group values
-are `latest` or `group_<digits>`. Targets must already be deployed on the server;
-Harness does not run deployment scripts or invent target configuration.
+This submits `POST /v1/optimizations` and retains `optimization_id`. The API
+returns immediately and launches the native 2.0.13 pipeline in the background.
+Only this optimization-job protocol is supported; the old action API is removed.
+The API is deployed separately from this repository; reuse its registered service.
 
-The adapter POSTs `/v1/jobs`, reads API `job_id` (not Slurm job ID), polls
-`/v1/jobs/{job_id}` and retrieves the **singular** `/v1/jobs/{job_id}/result`.
-The uploaded API reports `state` without an exit code; this protocol is handled
-explicitly. A completed outer action is reported as `action_completed`, with
-`completion_scope: pipeline_action` and `optimization_verified: false`. It is
-not a verified completed optimization: submit/smoke/resume may enqueue child jobs.
-Use explicit `status`, `collect`, and `export` actions and inspect their logs/artifacts.
-`protein_model_results` returns these action logs, not invented scores or optimized
-structure paths. No optimization is inserted automatically into initial-round.
-Cancellation and automatic discovery of final child-job outputs are unsupported.
+The existing `request_id` controls local resume. The client also persists an
+Idempotency-Key; repeated requests with that key cannot launch a second cohort.
+A lost POST response is reconciled through `GET /v1/optimizations/by-key/{key}`,
+never an automatic second POST. The API preserves failed/partially submitted
+cohorts and their receipts for inspection.
 
-The uploaded sbatch uses port 8060, which conflicts with TorchScore on the same
-node. The registration example and local defaults reserve **8061** for Torch
-Optimization. Change its uvicorn startup to `--port 8061`, or supply the actual
-node/port in a custom service file. A different-node deployment may reuse 8060.
-The supplied API's synchronous sbatch has a 30-second timeout; configure an
-adequate request_timeout for that deployment. Unknown submission outcomes must
-be reconciled before retrying with a new request_id.
+Status is read at `/v1/optimizations/{optimization_id}`. PREPARING, SUBMITTED,
+RUNNING, UNKNOWN and COLLECTING are not successful optimization. The API queries
+Slurm itself, so the Harness client need not have local scheduler commands.
+SUCCEEDED requires recognized submission receipts, every recorded job completed
+with exit code zero, native summaries, result CSVs and final PDBs. The client
+checks that evidence before reading `/results`; it does not invent ipTM scores.
+`prepare_only: true` returns PREPARED and `optimization_verified: false`.
+
+Results include native `results` table paths and `structures` PDB paths on the
+shared filesystem, not downloaded file bytes. Successful status caches these
+results before releasing an owned API allocation. Calls with failed or uncertain
+child jobs preserve the API and never automatically resubmit optimization.
+
+The request schema matches the uploaded backend: `binder_type` is `vhh` or
+`mini-binder`, with one binder and one target chain. Paired VH/VL is unsupported.
+`method`, MCMC/ddG rounds, proposals, rescue cutoff/percentage, partition, shards
+and GPUs are registered request fields. Ordinary standalone calls use the native
+5-round/5-proposal defaults; automatic feedback uses one round/proposal, one
+shard/GPU and imports at most one final structure per reserved repair slot.
+It re-runs AF3Score, TorchFold, DockQ and Rosetta rather than trusting optimizer
+metrics as equivalent scores. Explicit fixed-residue/CDR constraints are checked
+before admitting the optimized structure.
+
+TorchOptimization defaults to port **8060**. TorchScore also defaults to 8060;
+use different nodes or explicitly configured endpoints when running both.
+Use the actual deployed node/port in registration. Native
+model Python/weights remain configured in that service's environment, never in
+new user-supplied workflow annotations.

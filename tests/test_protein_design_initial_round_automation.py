@@ -244,3 +244,47 @@ def test_status_on_another_login_node_does_not_treat_remote_pid_as_dead(profile,
     monkeypatch.setattr("opendde_harness.plugin.protein_design.initial_round.automation._alive", lambda *_: False)
     result = round_status(root)
     assert result["state"] == "running" and result["worker_host"] == "another-login-node"
+
+
+async def test_natural_language_tool_accepts_inline_config_without_yaml(profile, tmp_path, monkeypatch):
+    from opendde_harness.plugin.protein_design.tools.initial_round import InitialRoundTool
+
+    value = prepare_run(profile).model_dump(mode="json")
+    profile.unlink()  # The tool must not read a YAML file on this path.
+    tool = InitialRoundTool({}, "start")
+    launched = []
+
+    def launch(config):
+        launched.append(config)
+        return {"state": "starting", "run_dir": str(config.work_dir / config.name)}
+
+    monkeypatch.setattr("opendde_harness.plugin.protein_design.tools.initial_round.start_round", launch)
+    result = await tool.execute(run_config=value, name="spoken_task", user_confirmed=True)
+    assert json.loads(result.model_text)["state"] == "starting"
+    assert launched[0].name == "spoken_task"
+    assert launched[0].generators["ppiflow"].request == value["generators"]["ppiflow"]["request"]
+    assert not profile.exists()
+    schema = tool.parameters
+    assert "run_config" in schema["properties"]
+    assert "pdb_path" not in schema["required"]
+    import jsonschema
+
+    jsonschema.validate({"run_config": value, "user_confirmed": True}, schema)
+
+
+async def test_inline_launch_still_validates_inputs_and_authorization(profile, monkeypatch):
+    from opendde_harness.plugin.protein_design.tools.initial_round import InitialRoundTool
+
+    tool = InitialRoundTool({}, "start")
+    launched = []
+    monkeypatch.setattr(
+        "opendde_harness.plugin.protein_design.tools.initial_round.start_round", lambda config: launched.append(config)
+    )
+    value = prepare_run(profile).model_dump(mode="json")
+    result = await tool.execute(run_config=value, user_confirmed=False)
+    assert "authorization" in json.loads(result.model_text)["error"]
+    value["generators"]["ppiflow"]["chains"]["binder"] = []
+    result = await tool.execute(run_config=value, user_confirmed=True)
+    assert "error" in json.loads(result.model_text) and not launched
+    result = await tool.execute(run_config=value, config_path=str(profile), user_confirmed=True)
+    assert "not both" in json.loads(result.model_text)["error"]

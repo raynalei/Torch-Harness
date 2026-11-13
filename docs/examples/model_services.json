@@ -48,7 +48,7 @@
           "torchopt": {
             "kind": "torchopt",
             "service": {
-              "url": "http://127.0.0.1:8061",
+              "url": "http://127.0.0.1:8060",
               "status_field": "state"
             },
             "allowed_input_roots": ["/lustre/project"]
