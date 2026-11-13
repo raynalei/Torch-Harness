@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import ipaddress
 import json
 import re
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -22,6 +24,75 @@ class ApiStartupError(RuntimeError):
 
 class ApiStartupTimeoutError(ApiStartupError, TimeoutError):
     """An API allocation remains pending and can be reused on retry."""
+
+
+def require_sbatch(config: Service):
+    if config.sbatch_script is None or not config.sbatch_script.is_file():
+        raise ApiStartupError("scientific APIs require an existing sbatch_script; direct/local HTTP is disabled")
+    if config.sbatch_resolve_host is not True:
+        raise ApiStartupError("sbatch_resolve_host must be true; API hosts must come from Slurm")
+
+
+def remote_api_url(url):
+    target = httpx.URL(url)
+    host = (target.host or "").rstrip(".").lower()
+    if target.scheme not in {"http", "https"} or not host or target.userinfo or target.query or target.fragment:
+        raise ApiStartupError("invalid allocated API URL")
+    if host in {
+        "localhost",
+        "localhost.localdomain",
+        "localhost6",
+        "localhost6.localdomain6",
+        "ip6-localhost",
+        "ip6-loopback",
+        "unallocated-api.invalid",
+        "slurm-api.invalid",
+    } or host.endswith(".localhost"):
+        raise ApiStartupError("local/unallocated API hosts are forbidden")
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        if re.fullmatch(r"(?:0x[0-9a-f]+|[0-9]+)(?:\.(?:0x[0-9a-f]+|[0-9]+))*", host):
+            raise ApiStartupError("ambiguous numeric API host is forbidden") from None
+    else:
+        mapped = getattr(address, "ipv4_mapped", None)
+        if address.is_loopback or address.is_unspecified or (mapped and (mapped.is_loopback or mapped.is_unspecified)):
+            raise ApiStartupError("loopback/unspecified API addresses are forbidden")
+    return target
+
+
+def api_path(path):
+    parsed = urlsplit(path)
+    if parsed.scheme or parsed.netloc or path.startswith("//") or "\\" in path:
+        raise ApiStartupError("API requests require relative paths; endpoint overrides are forbidden")
+    return path.lstrip("/")
+
+
+def validate_binding(config, url, record):
+    require_sbatch(config)
+    target = remote_api_url(url)
+    if not record:
+        raise ApiStartupError("resuming an API requires its saved sbatch allocation")
+    state = json.loads(Path(record["state_file"]).read_text())
+    if not re.fullmatch(r"[0-9]+", str(record.get("job_id", ""))) or record.get("allocation_name") != (
+        "harness-api-" + fingerprint(str(Path(record["state_file"]).resolve()))[:20]
+    ):
+        raise ApiStartupError("invalid sbatch allocation identity")
+    signature = fingerprint(
+        {
+            "script": str(config.sbatch_script),
+            "sha256": hashlib.sha256(config.sbatch_script.read_bytes()).hexdigest(),
+            "url": config.url,
+        }
+    )
+    if any(state.get(k) != record.get(k) for k in ("signature", "job_id", "allocation_name")) or (
+        state.get("signature") != signature
+        or state.get("state") != "ready"
+        or state.get("resolved_url") != str(target)
+        or allocation_was_released(record)
+    ):
+        raise ApiStartupError("recorded endpoint is not bound to this live sbatch allocation")
+    return target
 
 
 async def slurm_command(config: Service, *args: str) -> str:
@@ -87,8 +158,10 @@ async def allocation_status(config: Service, job_id: str, state: dict) -> tuple[
 
 
 async def healthy(client: httpx.AsyncClient, path: str) -> bool:
+    remote_api_url(client.base_url)
+    path = api_path(path)
     try:
-        response = await client.get(path.lstrip("/"))
+        response = await client.get(path, follow_redirects=False)
         response.raise_for_status()
         value = response.json()
         return (
@@ -103,8 +176,7 @@ async def healthy(client: httpx.AsyncClient, path: str) -> bool:
 
 async def ensure_api(config: Service, client: httpx.AsyncClient, *, start: bool = True) -> None:
     """Persist the allocation before submitting, so an uncertain sbatch is never retried."""
-    if config.sbatch_script is None:
-        return
+    require_sbatch(config)
     script = config.sbatch_script
     state_path = config.sbatch_state_file or script.parent / (
         ".harness-api-" + fingerprint({"script": str(script), "url": config.url})[:16] + ".json"
@@ -157,11 +229,10 @@ async def _ensure_locked(config, client, script: Path, state_path: Path, deadlin
             raise
         state["slurm_state"] = phase
         if phase == "RUNNING":
-            if config.sbatch_resolve_host:
-                hosts = (await slurm_command(config, "scontrol", "show", "hostnames", nodes)).splitlines()
-                if len(hosts) != 1 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]*", hosts[0]):
-                    raise ValueError("API sbatch allocation must resolve to exactly one hostname")
-                client.base_url = httpx.URL(config.url.rstrip("/") + "/").copy_with(host=hosts[0])
+            hosts = (await slurm_command(config, "scontrol", "show", "hostnames", nodes)).splitlines()
+            if len(hosts) != 1 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]*", hosts[0]):
+                raise ValueError("API sbatch allocation must resolve to exactly one hostname")
+            client.base_url = remote_api_url(httpx.URL(config.url.rstrip("/") + "/").copy_with(host=hosts[0]))
             if await healthy(client, config.health_path):
                 state.update(state="ready", resolved_url=str(client.base_url))
                 write_json(state_path, state)

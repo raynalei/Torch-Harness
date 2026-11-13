@@ -10,6 +10,7 @@ from pydantic import Field, model_validator
 
 from .artifacts import chain_sequences, structure
 from .config import RoundModel
+from .policy import flexibility, hotspot_hit, local_region
 
 
 class DesignRegion(RoundModel):
@@ -129,7 +130,7 @@ def analyze(runner, candidate):
             contacts.append(
                 {"hotspot": token.strip(), "distance": distance, "contact": distance < options.contact_distance}
             )
-        evidence.update(hotspots=contacts, epitope_hit=any(c["contact"] for c in contacts))
+        evidence.update(hotspots=contacts, epitope_hit=hotspot_hit(contacts, options.contact_distance))
     except (ValueError, KeyError, TypeError, OSError) as exc:
         evidence["notes"].append(str(exc))
     try:
@@ -175,10 +176,7 @@ def analyze(runner, candidate):
                     "local_rmsd": motion,
                     "interpretation": "structure-pair routing hint, not measured dynamics",
                 }
-                if fraction >= 0.5 and motion > options.framework_rmsd:
-                    evidence["flexibility"] = "flexible"
-                elif fraction < 0.3 and motion < options.framework_rmsd:
-                    evidence["flexibility"] = "rigid"
+                evidence["flexibility"] = flexibility(fraction, motion, options.framework_rmsd)
         from .regions import derive_regions
 
         deviations, framework, region_rmsd = {}, [], {}
@@ -202,9 +200,14 @@ def analyze(runner, candidate):
         evidence["binder_rmsd"] = _rmsd(np.concatenate(list(deviations.values())))
         if regions and len(framework) >= 3 and len(framework) >= sum(map(len, deviations.values())) / 2:
             evidence.update(framework_rmsd=_rmsd(framework), region_rmsd=region_rmsd)
-            changed = [name for name, value in region_rmsd.items() if value > options.region_rmsd]
-            if evidence["framework_rmsd"] < options.framework_rmsd and len(changed) == 1:
-                evidence["local_region"] = changed[0]
+            evidence["local_region"] = local_region(
+                evidence["framework_rmsd"],
+                region_rmsd,
+                len(framework),
+                sum(map(len, deviations.values())),
+                options.framework_rmsd,
+                options.region_rmsd,
+            )
         else:
             evidence["notes"].append("no localized mutable loop with a majority stable binder core")
         if evidence["flexibility"] == "unknown":

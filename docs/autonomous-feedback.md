@@ -58,34 +58,36 @@ feedback evaluation; the bounded rescue quota preserves some low-score candidate
 
 ```mermaid
 flowchart TD
-    A[Initial generation: configured PPIFlow / TorchCraft] --> B{Choose registered scoring tool once}
-    B -->|Explicit choice or sole available kind| C[AF3Score or TorchScore: S = its own ipTM]
-    B -->|Both available, no preference| C
-    C --> D[TorchFold + DockQ + Rosetta + Python geometry]
-    D --> E{Round / sample / stagnation limit reached?}
-    E -->|Yes| Z[Export historical best and saved decisions]
-    E -->|No| F{Hotspot contact below 5 Angstrom?}
-    F -->|No| R[Regenerate: preserve target/hotspots, use a new request]
-    F -->|Unknown mapping| U[Small trials of compatible available generators]
-    F -->|Yes| G{S > 0.8 and DockQ > 0.49?}
-    G -->|Yes: verified hit| H{Python hotspot-neighborhood evidence}
-    H -->|Loop fraction < 0.3 and local RMSD < 2 Angstrom| P[Prefer PPIFlow expansion]
-    H -->|Loop fraction >= 0.5 and local RMSD > 2 Angstrom| T[Prefer TorchCraft expansion if compatible]
-    H -->|Insufficient / mixed evidence| U
-    G -->|No| I{DockQ <= 0.49?}
-    I -->|Yes| J{Stable binder core and one displaced mutable loop?}
-    J -->|Core RMSD < 2; one region > 3; valid mask; repair eligible| L[Partial flow: compatible PPIFlow antibody/VHH; freeze other residues]
-    J -->|No valid local repair| R
-    I -->|No: pose retained, S <= 0.8| K{Registered TorchOpt and supported single-chain format?}
-    K -->|Yes and repair eligible| O[TorchOptimization: verify child jobs and final PDB]
-    K -->|No| R
-    R --> C
-    U --> C
-    P --> C
-    T --> C
-    L --> C
+    A[generate] --> B[choose_scorer]
+    B --> C[score / refold / DockQ / Rosetta]
+    C --> D[analyze: hotspot_hit + flexibility + local_region]
+    D --> E{stop_reason}
+    E -->|non-null| Z[export]
+    E -->|null| F{classify}
+    F -->|hit| G[generation_order]
+    G --> H[expand]
+    F -->|off_epitope / pose_change / uncertain| I[generation_order]
+    I --> J[regenerate]
+    F -->|local_change| K{repair_allowed}
+    K -->|false| J
+    K -->|true| L{_partial_request: check_region_encoding.ok}
+    L -->|false / null| J
+    L -->|true| M[partial_flow]
+    F -->|low_confidence| N{repair_allowed and torchopt_supported}
+    N -->|false| J
+    N -->|true| O[torchopt]
+    H --> C
+    J --> C
+    M --> C
     O --> C
 ```
+
+Every API operation in this diagram passes through the mandatory Slurm gateway.
+The [executable predicate reference](decision-predicates.md) gives actual Python
+functions, inputs, return values, formulas and error behavior. The agent receives
+these measured results and legal options; it does not assign qualitative labels
+from prose or invent residue masks.
+
 
 The both-available/no-preference branch selects AF3Score. This is a legal-menu
 policy, not a claim that its scores are superior. Expansion proposals are based

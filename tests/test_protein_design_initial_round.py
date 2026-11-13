@@ -19,8 +19,9 @@ from opendde_harness.plugin.protein_design.initial_round.services import (
     SubmissionUncertainError,
 )
 from opendde_harness.plugin.protein_design.initial_round.storage import Checkpoint, SharedFiles
+from tests._slurm_api import mock_slurm_apis  # noqa: F401
 
-pytestmark = pytest.mark.in_memory_transport
+pytestmark = [pytest.mark.in_memory_transport, pytest.mark.usefixtures("mock_slurm_apis")]
 
 
 def pdb(path, *, binder="ALA", target="A", chain="B", light=None):
@@ -772,10 +773,10 @@ async def test_sbatch_api_startup_is_lazy_and_check_remains_read_only(
     starts = []
 
     async def ensure(config, client, *, start=True):
-        if config.sbatch_script is not None:
+        if config.sbatch_script == script:
             starts.append(start)
-            # No inference has been posted before the generator's API startup.
             assert calls[("ppiflow", "POST")] == 0
+        client.base_url = httpx.URL(config.url.rstrip("/") + "/")
 
     monkeypatch.setattr("opendde_harness.plugin.protein_design.initial_round.services.ensure_api", ensure)
     checked = await InitialRoundRunner(round_config, transport=transport).run(check_only=True)
@@ -814,6 +815,7 @@ async def test_cold_sbatch_preflight_never_probes_http_or_slurm(round_config, fa
         *((name, getattr(round_config.evaluation, name)) for name in ("af3score", "torchfold", "rosetta")),
     ]:
         service.sbatch_script = tmp_path / f"{name}.sbatch"
+        service.sbatch_script.write_text("#!/bin/bash\n")
 
     def forbid_http(request):
         pytest.fail("sbatch-managed preflight must not probe HTTP")
@@ -1271,13 +1273,15 @@ def owned_api_config(round_config, tmp_path, monkeypatch):
         script.write_text("#!/bin/bash\nsleep infinity\n")
         service.sbatch_script = script
         service.sbatch_state_file = tmp_path / f"api-{index}.json"
-        service.sbatch_resolve_host = False
+        service.sbatch_resolve_host = True
 
     async def command(config, *args):
         if args[0] == "sbatch":
             job_id = str(100 + len(names))
             names[job_id] = args[2].split("=", 1)[1]
             return job_id
+        if args[0] == "scontrol":
+            return httpx.URL(config.url).host
         if args[0] == "scancel":
             cancelled.append(args[1])
             return ""
@@ -1513,3 +1517,32 @@ def test_scorer_choice_uses_explicit_configuration_then_registered_kind(round_co
     registrations.pop("af3_alias")
     with pytest.raises(ValueError, match="af3score service is required"):
         prepare_run(value, registrations=registrations)
+
+
+def test_machine_predicates_do_not_confuse_missing_evidence_or_loop_content(round_config, tmp_path):
+    from opendde_harness.plugin.protein_design.initial_round.artifacts import structure
+    from opendde_harness.plugin.protein_design.initial_round.policy import (
+        flexibility,
+        generation_order,
+        hotspot_hit,
+        local_region,
+        repair_allowed,
+    )
+    from opendde_harness.plugin.protein_design.initial_round.regions import check_region_encoding
+
+    assert hotspot_hit([]) is None
+    assert hotspot_hit([{"distance": 5.0}]) is False
+    assert hotspot_hit([{"distance": 4.99}]) is True
+    assert flexibility(0.8, 0.2) == "unknown"  # Loop-rich alone does not establish flexibility.
+    assert flexibility(0.8, 3) == "flexible"
+    assert flexibility(0.2, 1) == "rigid"
+    assert generation_order(["ppiflow", "torchcraft"], "flexible", ["torchcraft"]) == ["torchcraft", "ppiflow"]
+    assert generation_order(["ppiflow"], "flexible", []) == ["ppiflow"]
+    assert local_region(1.0, {"H3": 4}, 2, 4) is None  # Too few stable residues.
+    assert local_region(1.0, {"H1": 4, "H3": 4}, 4, 6) is None
+    assert local_region(1.0, {"H3": 4}, 4, 6) == "H3"
+    assert not repair_allowed({"candidate_id": "child", "parent_id": "parent"}, [])
+    atoms = structure(pdb(tmp_path / "encoding.pdb"))
+    atoms.ins_code[(atoms.chain_id == "B") & (atoms.res_id == 5)] = "A"
+    encoding = check_region_encoding(atoms, {"B": {5}})
+    assert encoding["ok"] is False and encoding["encoded"] is None and encoding["reason"]

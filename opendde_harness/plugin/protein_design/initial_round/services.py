@@ -6,13 +6,23 @@ import asyncio
 import os
 import re
 import time
+from pathlib import Path
 from urllib.parse import quote
 from uuid import uuid4
 
 import httpx
 from loguru import logger
 
-from .api_startup import allocation_record, allocation_was_released, ensure_api, release_allocation
+from .api_startup import (
+    allocation_record,
+    allocation_was_released,
+    api_path,
+    ensure_api,
+    release_allocation,
+    remote_api_url,
+    require_sbatch,
+    validate_binding,
+)
 from .config import Service
 from .storage import Checkpoint, fingerprint, select
 
@@ -37,6 +47,7 @@ class ServiceConnection:
                 update={"sbatch_state_file": prefix.with_name(f"{prefix.stem}-{uuid4().hex}{prefix.suffix or '.json'}")}
             )
         self._api_ready = False
+        self._bound_url = None
         self.allocations = []
         headers = {}
         if config.token_env:
@@ -45,15 +56,15 @@ class ServiceConnection:
                 raise ValueError(f"required credential variable is absent: {config.token_env}")
             headers["Authorization"] = f"Bearer {token}"
         self.client = httpx.AsyncClient(
-            base_url=config.url.rstrip("/") + "/",
+            base_url=httpx.URL(config.url.rstrip("/") + "/").copy_with(host="unallocated-api.invalid"),
             timeout=config.request_timeout,
             headers=headers,
             transport=transport,
         )
 
-    def attach_api(self, url: str):
+    def attach_api(self, url: str, allocation: dict | None = None):
         """Reconnect to the endpoint recorded for an already submitted inference."""
-        target = httpx.URL(url)
+        target = validate_binding(self.config, url, allocation)
         configured = httpx.URL(self.config.url.rstrip("/") + "/")
         if (
             target.scheme != configured.scheme
@@ -65,12 +76,16 @@ class ServiceConnection:
         ):
             raise ValueError("recorded API endpoint does not match the configured protocol, port and path")
         self.client.base_url = target
-        self._api_ready = True
+        self.config = self.config.model_copy(update={"sbatch_state_file": Path(allocation["state_file"])})
+        # The next request rechecks the recorded allocation through Slurm.
+        self._bound_url = None
+        self._api_ready = False
 
     async def close(self):
         await self.client.aclose()
 
     async def ensure_ready(self, *, start: bool = True):
+        require_sbatch(self.config)
         if not self._api_ready:
             if start and self.config.sbatch_script is not None:
                 logger.info("Starting this task's API allocation; state file: {}", self.config.sbatch_state_file)
@@ -81,6 +96,12 @@ class ServiceConnection:
                 if record and record not in self.allocations:
                     self.allocations.append(record)
             self._api_ready = True
+            self._bound_url = str(remote_api_url(self.client.base_url))
+
+    def assert_bound(self):
+        if not self._api_ready or self._bound_url != str(self.client.base_url):
+            raise ValueError("API connection has no verified sbatch binding")
+        remote_api_url(self.client.base_url)
 
     async def release_allocations(self):
         results = []
@@ -92,12 +113,18 @@ class ServiceConnection:
         return results
 
     async def post(self, path: str, **kwargs):
+        path = api_path(path)
+        if kwargs.pop("follow_redirects", False):
+            raise ValueError("API redirects cannot override the allocated node")
         await self.ensure_ready()
-        return await self.client.post(path.lstrip("/"), **kwargs)
+        self.assert_bound()
+        return await self.client.post(path, follow_redirects=False, **kwargs)
 
     async def get(self, path: str, *, start_service: bool = True):
+        path = api_path(path)
         await self.ensure_ready(start=start_service)
-        response = await self.client.get(path.lstrip("/"))
+        self.assert_bound()
+        response = await self.client.get(path, follow_redirects=False)
         response.raise_for_status()
         return response.json()
 
@@ -122,9 +149,7 @@ class SlurmService(ServiceConnection):
         if not key or route != "/v1/designs":
             return False
         try:
-            response = await self.client.get(f"{route.lstrip('/')}/{key}")
-            response.raise_for_status()
-            value = response.json()
+            value = await self.get(f"{route.lstrip('/')}/{key}")
         except (httpx.HTTPError, ValueError):
             return False
         if not isinstance(value, dict) or (
@@ -161,6 +186,8 @@ class SlurmService(ServiceConnection):
                 raise ValueError(f"cannot replace existing job ID for {key}")
         if job and job["request_hash"] != signature:
             raise ValueError(f"job request changed: {key}")
+        if job and job["state"] == "completed":
+            return job["results"]
         if job is None:
             await self.ensure_ready()
             job = jobs[key] = {
@@ -197,7 +224,7 @@ class SlurmService(ServiceConnection):
             and job.get("api_url")
             and not allocation_was_released(job.get("api_allocation"))
         ):
-            self.attach_api(job["api_url"])
+            self.attach_api(job["api_url"], job.get("api_allocation"))
         if attach_id:
             job.update(id=attach_id)
             if job["state"] == "submission_uncertain":

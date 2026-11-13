@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import re
 from pathlib import Path, PurePosixPath
@@ -19,7 +18,7 @@ from opendde_harness.plugin.protein_design.core.model_requests import (
     AF3ScoreRequest,
     validate_request,
 )
-from opendde_harness.plugin.protein_design.initial_round.api_startup import allocation_record
+from opendde_harness.plugin.protein_design.initial_round.api_startup import allocation_record, allocation_was_released
 from opendde_harness.plugin.protein_design.initial_round.config import Service
 from opendde_harness.plugin.protein_design.initial_round.services import ServiceConnection
 from opendde_harness.plugin.protein_design.initial_round.storage import fingerprint, select, write_json
@@ -59,12 +58,14 @@ class ProteinModelRegistry:
             "active_config_path": str(self.config_path) if self.config_path else None,
             "available_model_kinds": sorted(REQUEST_TYPES),
             "unconfigured_model_kinds": sorted(set(REQUEST_TYPES) - {model.kind for model in self.models.values()}),
-            "configuration_hint": "An empty models list means tool code is installed but no API services are configured. Register endpoints in this active config using protein-design models register, then restart Harness.",
+            "configuration_hint": "An empty models list means tool code is installed but no API services are configured. Register sbatch-managed services in this active config using protein-design models register, then restart Harness. Every scientific request requires sbatch_script; direct/local HTTP is disabled.",
             "models": [
                 {
                     "model": name,
                     "kind": model.kind,
                     "configured": True,
+                    "execution": "sbatch",
+                    "sbatch_configured": bool(model.service.sbatch_script),
                     "inference_verified": False,
                     "max_samples": model.max_samples,
                     "service": model.service.model_dump(mode="json", exclude_none=True),
@@ -86,38 +87,27 @@ class ProteinModelRegistry:
         }
 
     def client(self, model: ModelRegistration, record: dict | None = None):
-        if record is not None and model.service.sbatch_script is not None and not record.get("api_url"):
-            raise ValueError("older request has no recorded API endpoint; reconcile it before status/results/cancel")
         client = ServiceConnection(model.service, transport=self.transport)
-        if record is not None and model.service.sbatch_script is not None:
-            client.attach_api(record["api_url"])
-            if record.get("api_allocation"):
-                client.allocations.append(record["api_allocation"])
+        if record is not None:
+            if not record.get("api_url"):
+                raise ValueError("request has no saved sbatch API endpoint; reconcile it before querying")
+            allocation = record.get("api_allocation")
+            if not allocation_was_released(allocation):
+                client.attach_api(record["api_url"], allocation)
+            if allocation:
+                client.allocations.append(allocation)
         return client
 
     async def catalogue_with_health(self):
+        # Discovery must never probe a placeholder/local port or queue an allocation.
         catalogue = self.catalogue()
-
-        async def probe(item):
-            model = self.model(item["model"])
-            client = None
-            try:
-                client = self.client(model)
-                health = await client.get(model.service.health_path, start_service=False)
-                item["reachable"] = True
-                item["healthy"] = (
-                    isinstance(health, dict)
-                    and health.get("backend_available") is not False
-                    and health.get("ok") is not False
-                    and str(health.get("status", "ok")).lower() not in {"error", "failed", "unhealthy"}
-                )
-            except Exception:
-                item.update(reachable=False, healthy=False)
-            finally:
-                if client is not None:
-                    await client.close()
-
-        await asyncio.gather(*(probe(item) for item in catalogue["models"]))
+        for item in catalogue["models"]:
+            item.update(
+                reachable=None,
+                healthy=None,
+                startup="deferred_until_submission",
+                sbatch_configured=bool(self.model(item["model"]).service.sbatch_script),
+            )
         return catalogue
 
     @staticmethod
@@ -392,7 +382,8 @@ class ProteinModelRegistry:
     async def _release(self, record, model):
         if not record.get("api_allocation"):
             return
-        client = self.client(model, record)
+        client = ServiceConnection(model.service, transport=self.transport)
+        client.allocations.append(record["api_allocation"])
         try:
             record["api_cleanup"] = await client.release_allocations()
         finally:

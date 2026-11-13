@@ -53,7 +53,7 @@ def local_defaults():
         kind: {
             "kind": kind,
             "service": {
-                "url": f"http://127.0.0.1:{port}",
+                "url": f"http://slurm-api.invalid:{port}",
                 "health_path": "/openapi.json" if kind in {"ppiflow", "torchcraft"} else "/health",
                 **({"status_field": "state"} if kind == "torchopt" else {}),
             },

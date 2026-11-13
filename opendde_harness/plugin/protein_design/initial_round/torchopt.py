@@ -110,6 +110,8 @@ class TorchOptimizationService(SlurmService):
             raise ValueError("attached optimization key must already exist in the checkpoint")
         if job is not None and job["request_hash"] != signature:
             raise ValueError(f"job request changed: {key}")
+        if job and job["state"] == "completed":
+            return job["results"]
         if job is None:
             await self.ensure_ready()
             job = jobs[key] = {
@@ -144,7 +146,7 @@ class TorchOptimizationService(SlurmService):
             job.update(id=identifier, state="submitted")
             self.checkpoint.save()
         elif not api_startup.allocation_was_released(job.get("api_allocation")) and job.get("api_url"):
-            self.attach_api(job["api_url"])
+            self.attach_api(job["api_url"], job.get("api_allocation"))
         if attach_id:
             if not re.fullmatch(r"[0-9a-f]{32}", attach_id) or (job.get("id") and job["id"] != attach_id):
                 raise ValueError("invalid or conflicting attached optimization ID")

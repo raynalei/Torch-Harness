@@ -14,8 +14,9 @@ from opendde_harness.plugin.protein_design.core.model_registry import ProteinMod
 from opendde_harness.plugin.protein_design.core.model_requests import AF3ScoreRequest
 from opendde_harness.plugin.protein_design.initial_round.config import Evaluation
 from opendde_harness.plugin.protein_design.tools.models import ProteinModelTool
+from tests._slurm_api import mock_slurm_apis  # noqa: F401
 
-pytestmark = pytest.mark.in_memory_transport
+pytestmark = [pytest.mark.in_memory_transport, pytest.mark.usefixtures("mock_slurm_apis")]
 
 
 @pytest.fixture
@@ -435,7 +436,9 @@ async def test_health_does_not_hide_other_models_when_one_credential_is_missing(
     registration["fold"] = {"kind": "torchfold", "service": {"url": "https://fold.test"}}
     result = await ProteinModelRegistry(registration, tmp_path, transport=api[0]).catalogue_with_health()
     models = {row["model"]: row for row in result["models"]}
-    assert not models["af3"]["reachable"] and models["fold"]["reachable"]
+    assert models["af3"]["reachable"] is None and models["fold"]["reachable"] is None
+    assert all(row["startup"] == "deferred_until_submission" for row in models.values())
+    assert not api[1]
     assert not models["fold"]["inference_verified"]
 
 
@@ -657,7 +660,7 @@ async def test_registered_status_caches_results_before_releasing_api(registratio
     transport, requests, remote = api
     script = tmp_path / "api.sbatch"
     script.write_text("#!/bin/bash\nsleep infinity\n")
-    registration["af3"]["service"].update(sbatch_script=str(script), sbatch_resolve_host=False)
+    registration["af3"]["service"].update(sbatch_script=str(script), sbatch_resolve_host=True)
     names, cancelled = {}, []
 
     async def command(config, *args):
@@ -666,6 +669,8 @@ async def test_registered_status_caches_results_before_releasing_api(registratio
             return "555"
         if args[0] == "squeue":
             return "RUNNING|" + (names["555"] if args[-1] == "--format=%T|%j" else "gpu01")
+        if args[0] == "scontrol":
+            return httpx.URL(config.url).host
         if args[0] == "scancel":
             # Metrics and artifacts must already be retained when the API is cancelled.
             cached = json.loads((tmp_path / "task.results.json").read_text())

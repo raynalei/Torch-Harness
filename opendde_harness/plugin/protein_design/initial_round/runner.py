@@ -139,20 +139,10 @@ class InitialRoundRunner:
             else:
                 service = SlurmService(config, self.checkpoint, transport=self.transport)
             self.services[name] = service
-            if config.sbatch_script is not None:
-                # Preflight never probes placeholder/loopback URLs or queues API jobs.
-                # Only the stage's first request resolves and checks its allocation.
-                result[name] = {"reachable": None, "startup": "deferred_until_first_request"}
-                continue
-            health = await service.get(config.health_path, start_service=start_services)
-            if (
-                not isinstance(health, dict)
-                or health.get("backend_available") is False
-                or health.get("ok") is False
-                or str(health.get("status", "ok")).lower() in {"error", "failed", "unhealthy"}
-            ):
-                raise RuntimeError(f"{name}: service health check failed")
-            result[name] = {"reachable": True}
+            from .api_startup import require_sbatch
+
+            require_sbatch(service.config)
+            result[name] = {"reachable": None, "startup": "deferred_until_first_request"}
         return result
 
     async def job(self, service: str, key: str, route: str, id_field: str, payload: dict):

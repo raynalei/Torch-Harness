@@ -418,3 +418,162 @@ async def test_cleanup_does_not_treat_accounting_lag_as_termination(api, monkeyp
     assert (await client.release_allocations())[0]["state"] == "cleanup_deferred"
     assert not any(args[0] == "scancel" for args in seen)
     await client.close()
+
+
+@pytest.mark.parametrize(
+    "url", ["http://127.0.0.1:8070", "http://localhost:8060", "http://[::1]:8040", "https://api.test"]
+)
+async def test_missing_sbatch_never_sends_http_even_for_remote_urls(url):
+    requests = []
+    client = ServiceConnection(
+        Service(url=url), transport=httpx.MockTransport(lambda request: requests.append(request))
+    )
+    try:
+        with pytest.raises(RuntimeError, match="sbatch_script"):
+            await client.post("/v1/tasks", json={})
+        with pytest.raises(RuntimeError, match="sbatch_script"):
+            await client.get("/health")
+        assert not requests
+    finally:
+        await client.close()
+
+
+@pytest.mark.parametrize(
+    "hostname", ["localhost", "localhost.", "127.0.0.2", "0.0.0.0", "127.1", "0x7f000001", "localhost6"]
+)
+async def test_scheduler_loopback_or_ambiguous_host_never_gets_http(api, monkeypatch, hostname):
+    config, _, requests, transport = api
+
+    async def command(config, *args):
+        if args[0] == "sbatch":
+            return "123"
+        if args[0] == "squeue":
+            return "RUNNING|node"
+        return hostname
+
+    monkeypatch.setattr("opendde_harness.plugin.protein_design.initial_round.api_startup.slurm_command", command)
+    client = ServiceConnection(config, transport=transport)
+    try:
+        with pytest.raises((RuntimeError, ValueError)):
+            await client.post("/v1/tasks", json={})
+        assert not requests
+    finally:
+        await client.close()
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["http://127.0.0.1:8070/v1/tasks", "//localhost:8060/v1/tasks", "https://other.test/tasks", "\\localhost\\tasks"],
+)
+async def test_request_path_cannot_override_allocated_endpoint(api, path):
+    config, commands, requests, transport = api
+    client = ServiceConnection(config, transport=transport)
+    try:
+        with pytest.raises(RuntimeError, match="relative paths"):
+            await client.post(path, json={})
+        assert not commands and not requests
+    finally:
+        await client.close()
+
+
+async def test_recovery_rejects_local_or_unbound_endpoint_before_http(api):
+    config, _, requests, transport = api
+    first = ServiceConnection(config, transport=transport)
+    await first.ensure_ready()
+    record = first.allocations[0]
+    requests.clear()
+    restored = ServiceConnection(config, transport=transport)
+    try:
+        with pytest.raises(RuntimeError):
+            restored.attach_api("http://127.0.0.1:8010/base/", record)
+        with pytest.raises(RuntimeError, match="not bound"):
+            restored.attach_api("http://other-node:8010/base/", record)
+        with pytest.raises(RuntimeError, match="saved sbatch"):
+            restored.attach_api("http://gpu01:8010/base/")
+        restored.attach_api("http://gpu01:8010/base/", record)
+        await restored.get("/health")
+        assert requests and all(request.url.host == "gpu01" for request in requests)
+    finally:
+        await first.close()
+        await restored.close()
+
+
+async def test_redirect_and_runtime_endpoint_tampering_never_reach_localhost(api):
+    config, _, requests, _ = api
+
+    def handler(request):
+        requests.append(request)
+        assert request.url.host == "gpu01"
+        if request.url.path.endswith("/health"):
+            return httpx.Response(200, json={"ok": True})
+        return httpx.Response(302, headers={"Location": "http://127.0.0.1:8070/v1/tasks"})
+
+    client = ServiceConnection(config, transport=httpx.MockTransport(handler))
+    try:
+        with pytest.raises(httpx.HTTPStatusError):
+            await client.get("/v1/tasks")
+        requests.clear()
+        client.client.base_url = "http://127.0.0.1:8010/base/"
+        with pytest.raises(ValueError, match="verified sbatch"):
+            await client.post("/v1/tasks", json={})
+        assert not requests
+    finally:
+        await client.close()
+
+
+def test_disabling_host_resolution_is_not_a_configuration_mode(api):
+    config, _, _, _ = api
+    with pytest.raises(ValueError):
+        Service.model_validate({**config.model_dump(mode="json"), "sbatch_resolve_host": False})
+
+
+@pytest.mark.parametrize(
+    "kind,payload,operation",
+    [
+        (
+            "ppiflow",
+            {
+                "mode": "nanobody",
+                "name": "test",
+                "antigen_pdb": "/shared/input.pdb",
+                "antigen_chain": "C",
+                "framework_dir": "/shared/framework",
+                "heavy_chain": "A",
+            },
+            None,
+        ),
+        (
+            "torchcraft",
+            {
+                "mode": "vhh",
+                "name": "test",
+                "pdb_path": "/shared/input.pdb",
+                "hotspot_indices": "1",
+                "target_full_seq": "/shared/target.csv",
+                "framework_cif_path": "/shared/framework.cif",
+            },
+            None,
+        ),
+        ("af3score", {"input_pdb_dir": "/shared/pdbs"}, None),
+        ("torchscore", {"input_pdb_dir": "/shared/pdbs"}, None),
+        ("torchfold", {"json_path": "/shared/input.json"}, None),
+        ("torchopt", {"pdb_paths": ["/shared/input.pdb"]}, None),
+        (
+            "rosetta",
+            {"input_pdb": "/shared/input.pdb", "chain_group_a": "A", "chain_group_b": "C"},
+            "interface_analyze",
+        ),
+    ],
+)
+async def test_all_registered_scientific_tools_require_sbatch_before_http(tmp_path, kind, payload, operation):
+    from opendde_harness.plugin.protein_design.core.model_registry import ProteinModelRegistry
+
+    requests = []
+    registry = ProteinModelRegistry(
+        {kind: {"kind": kind, "service": {"url": "http://127.0.0.1:8070"}}},
+        tmp_path,
+        transport=httpx.MockTransport(lambda request: requests.append(request)),
+    )
+    with pytest.raises(RuntimeError, match="sbatch_script"):
+        await registry.submit(kind, "test", payload, operation)
+    assert requests == []

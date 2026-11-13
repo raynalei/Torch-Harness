@@ -11,6 +11,7 @@ from opendde_harness.plugin.protein_design.core.model_requests import validate_r
 
 from .config import RoundModel
 from .diagnostics import analyze
+from .policy import generation_order, repair_allowed, stop_reason, torchopt_supported
 from .services import SubmissionUncertainError
 from .storage import write_json
 
@@ -62,7 +63,7 @@ def _partial_request(runner, candidate, region_name, name):
     """Build registered API arguments from the saved request and measured geometry."""
     from .artifacts import structure
     from .diagnostics import DesignRegion
-    from .regions import encode_positions, selection_positions
+    from .regions import check_region_encoding, selection_positions
 
     if candidate["source"] != "ppiflow":
         return None
@@ -100,13 +101,17 @@ def _partial_request(runner, candidate, region_name, name):
         )
         if key in request
     }
+    fixed_encoding = check_region_encoding(atoms, selections)
+    mutable_encoding = check_region_encoding(atoms, {region.chain: mutable})
+    if not fixed_encoding["ok"] or not mutable_encoding["ok"]:
+        return None
     value.update(
         mode=expected,
         name=name,
         complex_pdb=candidate["generated_structure"],
         samples_per_target=1,
-        fixed_positions=encode_positions(atoms, selections),
-        cdr_position=encode_positions(atoms, {region.chain: mutable}),
+        fixed_positions=fixed_encoding["encoded"],
+        cdr_position=mutable_encoding["encoded"],
         start_t=request.get("start_t", 0.01),
         output_dir=runner.files.remote(runner.root / name),
     )
@@ -120,7 +125,7 @@ def options_for(runner, candidates, index, remaining, repaired):
     hits.sort(key=lambda c: (-rank_score(c, runner.config.evaluation.score_metric), c["candidate_id"]))
     options = []
     for candidate in sorted(usable, key=lambda c: c["candidate_id"]):
-        if candidate["candidate_id"] in repaired or candidate.get("parent_id"):
+        if not repair_allowed(candidate, repaired):
             continue
         evidence = candidate["diagnostics"]
         if evidence["diagnosis"] == "local_change":
@@ -140,13 +145,12 @@ def options_for(runner, candidates, index, remaining, repaired):
                         "repair_region": evidence["repair_regions"][evidence["local_region"]],
                         "samples": 1,
                         "request": request,
+                        "basis": {"diagnosis": "local_change", "repair_allowed": True, "region_encodable": True},
                     }
                 )
         if evidence["diagnosis"] == "low_confidence" and runner.config.evaluation.torchopt is not None:
             generator = runner.config.generators[candidate["source"]]
-            if len(generator.chains.binder) == len(generator.chains.target) == 1 and all(
-                len(chain) == 1 for chain in generator.chains.binder + generator.chains.target
-            ):
+            if torchopt_supported(generator.chains, generator.request["mode"], runner.config.evaluation.torchopt):
                 from .artifacts import write_pdb
 
                 path = runner.root / "optimization-inputs" / (candidate["candidate_id"] + ".pdb")
@@ -177,18 +181,12 @@ def options_for(runner, candidates, index, remaining, repaired):
                         "parent_id": candidate["candidate_id"],
                         "samples": 1,
                         "request": payload,
+                        "basis": {"diagnosis": "low_confidence", "repair_allowed": True, "torchopt_supported": True},
                     }
                 )
     used = [d["source"] for d in runner.checkpoint.data.get("autonomous", {}).get("decisions", [])]
-    preferred = "torchcraft" if hits and hits[0]["diagnostics"]["flexibility"] == "flexible" else "ppiflow"
-    known_flexibility = hits and hits[0]["diagnostics"]["flexibility"] in {"rigid", "flexible"}
-    sources = sorted(
-        runner.config.generators,
-        key=lambda source: (
-            (source != preferred, used.count(source))
-            if known_flexibility
-            else (used.count(source), source != preferred)
-        ),
+    sources = generation_order(
+        runner.config.generators, hits[0]["diagnostics"]["flexibility"] if hits else "unknown", used
     )
     for source in sources:
         generator = runner.config.generators[source]
@@ -210,6 +208,11 @@ def options_for(runner, candidates, index, remaining, repaired):
                 "samples": count,
                 "request": request,
                 "parent_id": hits[0]["candidate_id"] if hits else None,
+                "basis": {
+                    "has_hit": bool(hits),
+                    "flexibility": hits[0]["diagnostics"]["flexibility"] if hits else "unknown",
+                    "source_configured": True,
+                },
             }
         )
     if hits:
@@ -291,8 +294,9 @@ async def run_autonomous(runner):
             continue
         if decision is None:
             remaining = config.max_samples - state["used_samples"]
-            if remaining <= 0 or state["stale_rounds"] >= config.patience:
-                state["stop_reason"] = "sample_budget" if remaining <= 0 else "no_improvement"
+            reason = stop_reason(index, state["used_samples"], state["stale_rounds"], config)
+            if reason:
+                state["stop_reason"] = reason
                 break
             options = options_for(runner, candidates, index, remaining, state["repaired"])
             context = {
@@ -354,6 +358,8 @@ async def run_autonomous(runner):
         state["progress"] = current
         decision.update(state="completed", progress=current)
         runner.save_candidates()
-    state.setdefault("stop_reason", "max_rounds")
+    state.setdefault(
+        "stop_reason", stop_reason(config.max_rounds + 1, state["used_samples"], state["stale_rounds"], config)
+    )
     write_json(runner.root / "decisions.json", state)
     runner.save_candidates()

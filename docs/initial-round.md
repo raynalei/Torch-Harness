@@ -62,14 +62,14 @@ The command runs in the foreground. Use a persistent terminal on the submission
 host for long jobs. `--check` validates local inputs and runs the bundled
 `dockq.py --check` with `evaluation.dockq_python` (module `DockQ.DockQ`, not
 `dockq`). Failed subprocess output is saved to `dockq-check.log`. Sbatch-managed
-API checks are deferred without HTTP/port probes or Slurm submissions; only
-externally managed APIs are probed during preflight. This does not prove GPU/model
+API checks are deferred without HTTP/port probes or Slurm submissions. Every
+scientific service must declare an existing sbatch_script; direct HTTP mode is disabled. This does not prove GPU/model
 readiness. Exit codes: 0 completed/check passed, 1 configuration or
 round-level error, 2 partial completion with candidate errors. Zero accepted
 candidates is a legitimate completed `no_hits` outcome, not a fabricated success.
 
-All services must be reachable from the runner. The README localhost addresses
-refer to the API host, not to this cloud container. AF3Score and TorchFold both
+All allocated service nodes must be reachable from the runner. Configured URL
+hostnames are placeholders, never dialed directly; Slurm supplies the API host. AF3Score and TorchFold both
 use 8040 in the supplied READMEs: allocate different ports if colocated. Keep
 these unauthenticated APIs on a trusted network or behind an authenticated
 gateway; optional `service.token_env` reads a bearer credential from the named
@@ -233,7 +233,7 @@ generator to this configuration. Existing VHH/minibinder pairings are unchanged.
 
 ## Starting API servers with sbatch
 
-Each `Service` accepts optional API startup fields. The same fields work in
+Every scientific `Service` requires sbatch startup configuration. The same fields work in
 `plugins.config.protein-design.model_services.<alias>.service` for individual
 model tools. See [the sbatch deployment example](examples/initial_round_sbatch.yaml).
 
@@ -241,7 +241,7 @@ model tools. See [the sbatch deployment example](examples/initial_round_sbatch.y
 generators:
   ppiflow:
     service:
-      url: http://127.0.0.1:8010
+      url: http://slurm-api.invalid:8010
       health_path: /openapi.json
       sbatch_script: /shared/scripts/ppiflow-api.sbatch
       sbatch_state_file: /shared/harness/api-state/ppiflow.json
@@ -253,7 +253,7 @@ generators:
 
 Configure the equivalent block under `evaluation.af3score`, `evaluation.torchfold`
 and optional `evaluation.rosetta`, or `generators.torchcraft`. The supported initial-round deployment example uses `sbatch_script` for every API.
-Independent registry services without sbatch configuration retain their HTTP behavior.
+Registry services without an existing sbatch script fail before any HTTP request.
 Scripts and state files are absolute paths on the Harness host, not paths
 translated by `path_mappings`. Scripts must exist; their log directories, Conda
 environments, API code and model resources must already be prepared.
@@ -265,8 +265,9 @@ that hostname in the configured URL, and waits for the health endpoint before
 sending the inference POST. The port and URL path are retained. Scripts must
 allocate exactly one node and bind the API to `0.0.0.0`; Harness needs `sbatch`,
 `squeue` and `scontrol`, Slurm submission rights, and direct network access to the
-compute node. `sbatch_resolve_host: false` retains the configured hostname for
-an already configured tunnel or fixed service address; it does not create a tunnel.
+compute node. `sbatch_resolve_host` must be true. Localhost, loopback/unspecified
+addresses and direct-host modes are rejected. Saved endpoints must match their
+owned allocation records, and API paths cannot override the allocated endpoint.
 
 Each API starts lazily when its stage is reached. The first registry request can
 wait up to the startup budget, but it still does not wait for inference to finish.

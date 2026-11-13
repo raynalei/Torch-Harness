@@ -38,7 +38,7 @@ class Service(RoundModel):
     token_env: str | None = None
     sbatch_script: Path | None = None
     sbatch_state_file: Path | None = None
-    sbatch_resolve_host: bool = True
+    sbatch_resolve_host: Literal[True] = True
     startup_timeout: float = Field(default=1800, gt=0)
     startup_poll_interval: float = Field(default=5, gt=0)
     slurm_command_timeout: float = Field(default=30, gt=0)

@@ -10,7 +10,7 @@ path_mappings:
 generators:
   ppiflow:
     service:
-      url: http://127.0.0.1:8010
+      url: http://slurm-api.invalid:8010
       health_path: /openapi.json
       status_field: status
       exit_code_field: exit_code
@@ -58,7 +58,7 @@ evaluation:
     seed: 10
     write_fold_input_json_file: false
   af3score:
-    url: http://127.0.0.1:8030
+    url: http://slurm-api.invalid:8030
     metrics_field: metrics
     metric_fields:
       iptm: iptm
@@ -68,7 +68,7 @@ evaluation:
     startup_timeout: 1800
     startup_poll_interval: 5
   torchfold:
-    url: http://127.0.0.1:8040
+    url: http://slurm-api.invalid:8040
     metric_fields:
       iptm: iptm
     sbatch_script: /lustre/grp/cmclab/leiy/torchfold_api/torchfold-api.sbatch
@@ -77,7 +77,7 @@ evaluation:
     startup_timeout: 1800
     startup_poll_interval: 5
   rosetta:
-    url: http://127.0.0.1:8050
+    url: http://slurm-api.invalid:8050
     metrics_field: metrics
     metric_fields:
       interface_dg: dG_separated

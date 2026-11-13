@@ -31,7 +31,7 @@ not an unhealthy-service failure. Do not run curl, socket probes, registry healt
 checks or a local-port scan to second-guess this result. After authorization,
 launch the worker; each new run starts fresh API allocations for its stages, resolves
 the Slurm node, and checks that node's API before its HTTP task. Never treat the
-placeholder `127.0.0.1` URL as the allocated service address. Resolve real missing
+configured URL host as the allocated service address. No localhost probing or direct-HTTP fallback is allowed. Resolve real missing
 script/input files, but do not claim sbatch-managed services must be running
 before launch. These instructions apply before the legacy workflow below.
 
@@ -44,7 +44,7 @@ TorchCraft `monomer_unconditional` requires an existing remote `json_path` and a
 
 Resolve scientific inputs and the compute scope with the user. Reuse existing authorization for the same inputs and scope rather than repeatedly asking. Call `protein_model_submit` with a unique, stable `request_id` and `user_confirmed: true` only when authorized. Submission returns immediately. Preserve the request ID and query `protein_model_status` when needed; never poll in a tight loop. Read completed artifacts with `protein_model_results`. For ordinary successful model requests, status automatically caches artifacts/metrics before requesting cancellation of that request's private API allocation; later status/results reads use the retained data. Full workflows release owned APIs when their remote jobs are terminal. Externally managed APIs, unresolved submissions and unresolved TorchOptimization child jobs are not cancelled automatically. Cleanup reports cancellation requested, not confirmed scheduler termination. A lost submission response is uncertain: do not submit again under a new request ID; ask the service operator to reconcile it. `protein_model_cancel` currently supports AF3Score only, and reports cancellation requested rather than claiming the remote job stopped.
 
-AF3Score `pdb` mode can perform fast scoring or database searches plus inference. Pipeline-only tasks (`run_data_pipeline=true`, `run_inference=false`) produce prepared inputs and no metrics. `prepared` mode does not rewrite supplied MSA/templates or automatically extract metrics; use a separate `metrics` task with the original PDB directory and AF3Score output directory when required. `init_guess` is independent of structural templates. Never fabricate scores or compare fast/MSA scoring as if their protocols were identical. Use absolute paths on the service's filesystem; these tools do not upload files or activate Conda interactively. A configured `service.sbatch_script` can start the API through Slurm before HTTP submission; environment activation belongs in that script.
+AF3Score `pdb` mode can perform fast scoring or database searches plus inference. Pipeline-only tasks (`run_data_pipeline=true`, `run_inference=false`) produce prepared inputs and no metrics. `prepared` mode does not rewrite supplied MSA/templates or automatically extract metrics; use a separate `metrics` task with the original PDB directory and AF3Score output directory when required. `init_guess` is independent of structural templates. Never fabricate scores or compare fast/MSA scoring as if their protocols were identical. Use absolute paths on the service's filesystem; these tools do not upload files or activate Conda interactively. Every scientific API must have an existing `service.sbatch_script`; direct HTTP is disabled. Slurm must allocate and resolve a non-loopback node before any HTTP request; environment activation belongs in that script.
 
 For external-only requests, proceed through these tools; do not apply the legacy YAML/Docker/checkpoint prerequisites below. Predicted structures, confidence and Rosetta energies are not experimentally measured affinity.
 
@@ -153,3 +153,14 @@ after a service failure. Candidate metrics, diagnostics and ranking use the chos
 scorer's own field. `autonomous.min_score` is the generic feedback threshold; its
 0.8 default is a prototype policy, not a claim of equal model calibration.
 The supplied TorchScore sbatch uses 8070; TorchOptimization remains 8060.
+
+
+Feedback classifications are Python outputs: `hotspot_hit`, `flexibility`,
+`local_region`, `classify`, `repair_allowed`, `check_region_encoding`,
+`torchopt_supported`, `generation_order` and `stop_reason`. Use measured values,
+not prose guesses, to select legal options. The transport rejects loopback hosts,
+absolute URL overrides, redirects and saved endpoints without allocation proof.
+Registry health discovery is deferred and never probes a local port. Missing
+sbatch deployment metadata is a configuration issue, not permission to run an API
+locally or bypass Slurm. The language-provider connection is separate from these
+scientific compute APIs.

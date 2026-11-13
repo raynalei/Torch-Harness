@@ -171,8 +171,9 @@ observed, then request release of their private API allocation. Later status and
 results calls use the saved records without reconnecting to the stopped API.
 There is no new independent polling daemon for standalone requests: cleanup is
 triggered by status/results observation, while full workflows already poll in
-their worker. Pending/uncertain inference, unverified completion, external APIs,
-and unresolved TorchOptimization child jobs retain their APIs.
+their worker. Pending/uncertain inference, unverified completion and unresolved
+TorchOptimization child jobs retain their APIs. Scientific API requests never
+use direct/local endpoints; a valid sbatch deployment is mandatory.
 
 Cancellation is reported as `cancel_requested`; the scheduler may briefly show
 `COMPLETING`. A scheduler-name mismatch prevents cancellation, even if a numeric

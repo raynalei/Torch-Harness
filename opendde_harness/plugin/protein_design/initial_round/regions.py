@@ -93,3 +93,13 @@ def derive_regions(atoms, chains, request, displacements, threshold):
         for index, run in enumerate(runs, 1):
             regions[f"{chain}_region_{index}"] = DesignRegion(chain=chain, positions=run)
     return regions, origin
+
+
+def check_region_encoding(atoms, selections):
+    try:
+        encoded = encode_positions(atoms, selections)
+        if not encoded:
+            raise ValueError("empty residue selection")
+        return {"ok": True, "encoded": encoded, "reason": None}
+    except ValueError as exc:
+        return {"ok": False, "encoded": None, "reason": str(exc)}

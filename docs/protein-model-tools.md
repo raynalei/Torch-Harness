@@ -30,8 +30,9 @@ into `plugins.config.protein-design` in the active Harness configuration, usuall
 `~/.opendde_harness/config.json`. Preserve existing provider, memory, workspace,
 compute and other plugin settings. Restart Harness after editing.
 
-Alternatively, register all seven services on the same host using the explicit
-default ports, without manually editing the JSON:
+Alternatively, register the seven port templates without manually editing JSON.
+These templates are not runnable deployments: every service needs its existing
+absolute sbatch_script path before submission. Hosts resolve through Slurm:
 
 ```bash
 uv run --frozen ddeharness protein-design models register --local-defaults
@@ -71,11 +72,11 @@ not require the client to mount Lustre or install DockQ/biotite: the service rea
 the remote paths, and the client retrieves HTTP result metadata. File contents
 remain on the cluster unless a service explicitly returns them.
 
-`127.0.0.1` in the example assumes Harness and all API processes are on the same
-specific host. Use private reachable endpoints or approved tunnels otherwise.
-AF3Score and TorchFold must use different ports if colocated. Scientific services
-that lack authentication belong on a trusted network or behind an authenticated
-gateway. Do not bypass the environment's networking policy.
+`service.url` supplies protocol, port and API prefix only. Its hostname is never
+used directly. The client always submits/reuses its owned sbatch allocation,
+resolves the assigned node and checks that node before inference. `--check-health`
+reports deferred/unknown without probing ports or submitting allocations. Missing
+sbatch scripts are configuration errors, not a reason to try localhost.
 
 ## Conversation examples
 

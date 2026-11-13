@@ -17,6 +17,7 @@ from pathlib import Path
 import yaml
 
 from opendde_harness.plugin.protein_design.initial_round.config import InitialRoundConfig
+from opendde_harness.plugin.protein_design.initial_round.policy import choose_scorer
 from opendde_harness.plugin.protein_design.initial_round.storage import SharedFiles, write_json
 from opendde_harness.utils.portable_lock import file_lock
 
@@ -37,9 +38,7 @@ def prepare_run(
     known = registrations or {}
     configured = {kind for kind in ("af3score", "torchscore") if evaluation.get(kind) is not None}
     registered = {item.get("kind") for item in known.values() if item.get("kind") in {"af3score", "torchscore"}}
-    if "scoring_backend" not in evaluation:
-        available = configured or registered
-        evaluation["scoring_backend"] = "torchscore" if available == {"torchscore"} else "af3score"
+    evaluation["scoring_backend"] = choose_scorer(evaluation.get("scoring_backend"), configured, registered)
     selected = evaluation["scoring_backend"]
     for kind in (selected, "torchopt"):
         if kind == "torchopt" and value.get("autonomous") is None:
