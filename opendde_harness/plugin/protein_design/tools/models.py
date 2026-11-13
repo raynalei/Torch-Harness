@@ -162,7 +162,12 @@ class ProteinModelSubmitTool(ProteinModelTool):
 
     @property
     def description(self):
-        return f"Submit a {self.kind} task using its validated request schema. " + super().description
+        return (
+            f"Submit a {self.kind} task using its validated request schema. "
+            "This is a submit-only tool: there is no action/import argument. "
+            "Use protein_model_status and protein_model_results with the local request_id after submission. "
+            + super().description
+        )
 
     @property
     def parameters(self):
@@ -190,6 +195,17 @@ class ProteinModelSubmitTool(ProteinModelTool):
         return schema
 
     async def execute(self, **kwargs):
+        if "action" in kwargs:
+            return ToolResult(
+                json.dumps(
+                    {
+                        "error": f"{self.name} submits tasks directly; omit action (including import). "
+                        "Use protein_model_status/protein_model_results with request_id for existing Harness tasks."
+                    }
+                ),
+                "Unsupported model action",
+                retryable=False,
+            )
         aliases = [name for name, model in self.registry.models.items() if model.kind == self.kind]
         alias = kwargs.get("model")
         if alias is None and len(aliases) == 1:

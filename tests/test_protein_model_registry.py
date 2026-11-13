@@ -808,3 +808,56 @@ async def test_torchopt_recovers_lost_post_response_by_key_without_resubmitting(
     assert result["state"] == "submitted" and result["remote_id"] == "b" * 32
     await registry.submit("opt", "stable", {"pdb_paths": ["/shared/input.pdb"]})
     assert sum(c.method == "POST" for c in calls) == 1
+
+
+async def test_named_torchopt_tool_submits_native_optimization_endpoint(optimization_api):
+    from opendde_harness.plugin.protein_design.tools.models import ProteinModelSubmitTool
+
+    registry, _, calls, submitted = optimization_api
+    tool = ProteinModelSubmitTool(registry, "torchopt")
+    assert tool.name == "protein_model_torchopt"
+    assert "action" not in tool.parameters["properties"]
+    result = await tool.execute(
+        request_id="named-opt",
+        request={"pdb_paths": ["/shared/input.pdb"], "binder_type": "vhh"},
+        user_confirmed=True,
+    )
+    assert json.loads(result.model_text)["remote_id"] == "a" * 32
+    assert submitted["binder_type"] == "vhh"
+    assert [r.url.path for r in calls if r.method == "POST"] == ["/v1/optimizations"]
+    result = await tool.execute(action="import", request_id="bad-action", user_confirmed=True)
+    assert "omit action" in json.loads(result.model_text)["error"]
+    assert sum(r.method == "POST" for r in calls) == 1
+
+
+@pytest.mark.parametrize("failure", ["http", "missing_id", "timeout"])
+async def test_torchopt_submission_diagnostics_survive_status_and_retry(tmp_path, failure):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        if request.method != "POST":
+            return httpx.Response(404)
+        if failure == "http":
+            return httpx.Response(422, json={"detail": "secret-response-body"})
+        if failure == "timeout":
+            raise httpx.ReadTimeout("secret-timeout-detail", request=request)
+        return httpx.Response(201, json={"state": "SUBMITTED"})
+
+    registry = ProteinModelRegistry(
+        {"opt": {"kind": "torchopt", "service": {"url": "https://opt.test"}}},
+        tmp_path,
+        transport=httpx.MockTransport(handler),
+    )
+    request = {"pdb_paths": ["/shared/input.pdb"]}
+    result = await registry.submit("opt", "diagnostic-opt", request)
+    diagnostic = result["submission_diagnostic"]
+    assert diagnostic["endpoint"] == "/v1/optimizations"
+    assert diagnostic["expected_id_field"] == "optimization_id"
+    assert diagnostic["stage"] == ("read_remote_id" if failure == "missing_id" else "post")
+    if failure == "http":
+        assert diagnostic["http_status"] == 422
+    assert "secret" not in json.dumps(result)
+    assert (await registry.submit("opt", "diagnostic-opt", request))["submission_diagnostic"] == diagnostic
+    assert (await registry.status("diagnostic-opt"))["submission_diagnostic"] == diagnostic
+    assert sum(r.method == "POST" for r in calls) == 1

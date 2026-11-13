@@ -191,6 +191,7 @@ class ProteinModelRegistry:
                 "remote_id",
                 "slurm_job_id",
                 "metrics_expected",
+                "submission_diagnostic",
                 "cancel_state",
             )
             if key in record
@@ -249,22 +250,37 @@ class ProteinModelRegistry:
                     write_json(path, record)
                 await client.close()
                 raise
+            submission_stage = "record_allocation"
             try:
                 record["api_url"] = str(client.client.base_url)
                 record["api_allocation"] = allocation_record(client.config)
                 write_json(path, record)
+                submission_stage = "post"
                 response = await client.post(
                     route.lstrip("/"),
                     json=payload,
                     **({"headers": {"Idempotency-Key": record["submission_key"]}} if model.kind == "torchopt" else {}),
                 )
                 response.raise_for_status()
+                submission_stage = "decode_response"
                 submitted = response.json()
+                submission_stage = "read_remote_id"
                 remote_id = submitted[id_field]
+                submission_stage = "validate_remote_id"
                 self.valid_id(remote_id)
                 record.update(state="submitted", remote_id=remote_id, slurm_job_id=submitted.get("slurm_job_id"))
                 write_json(path, record)
-            except Exception:
+            except Exception as exc:
+                # Keep protocol evidence, never arbitrary response bodies or exception text.
+                diagnostic = {
+                    "method": "POST",
+                    "endpoint": route,
+                    "stage": submission_stage,
+                    "error_type": type(exc).__name__,
+                    "expected_id_field": id_field,
+                }
+                if isinstance(exc, httpx.HTTPStatusError):
+                    diagnostic["http_status"] = exc.response.status_code
                 if model.kind == "torchopt":
                     try:
                         recovered = await client.get(f"/v1/optimizations/by-key/{record['submission_key']}")
@@ -278,6 +294,8 @@ class ProteinModelRegistry:
                         return self.public_record(record)
                     except Exception:
                         pass
+                record["submission_diagnostic"] = diagnostic
+                write_json(path, record)
                 # Do not expose headers, tokens or server-provided arbitrary text.
                 return {
                     **self.public_record(record),
