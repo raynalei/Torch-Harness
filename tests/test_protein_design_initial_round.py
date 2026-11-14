@@ -343,11 +343,18 @@ async def test_unknown_and_queue_states_are_polled_before_results(tmp_path):
         await service.close()
 
 
-def test_fold_input_updates_binder_without_reusing_stale_msa(round_config, tmp_path):
+@pytest.mark.parametrize("dialect", ["alphafold3", "TorchFold"])
+def test_fold_input_updates_binder_without_reusing_stale_msa(round_config, tmp_path, dialect):
     generator = round_config.generators["ppiflow"]
+    template = json.loads(generator.fold_template.read_text())
+    template["dialect"] = dialect
+    generator.fold_template.write_text(json.dumps(template))
+    original = generator.fold_template.read_bytes()
     output = tmp_path / "fold.json"
     prepare_fold(generator.fold_template, {"A": "GGGGGG", "B": "VVVVVV"}, generator.chains, "new", output)
     value = json.loads(output.read_text())
+    assert value["dialect"] == "TorchFold"
+    assert generator.fold_template.read_bytes() == original
     assert value["sequences"][1]["protein"] == {
         "id": "Y",
         "sequence": "VVVVVV",
@@ -407,6 +414,7 @@ def fake_services(round_config, tmp_path, monkeypatch):
                 return httpx.Response(202, json={"design_id": job})
             if source == "torchfold":
                 prepared = json.loads(files.local(body["json_path"]).read_text())
+                assert prepared["dialect"] == "TorchFold"
                 assert prepared["sequences"][1]["protein"]["sequence"] == "AAAAAA"
                 out = tmp_path / job
                 pdb(out / "model.pdb", target="X", chain="Y", light="Z" if len(prepared["sequences"]) == 3 else None)
@@ -668,6 +676,7 @@ def test_generated_fold_input_supports_query_only_or_pipeline_search(round_confi
             None, {"A": "GGGGGG", "B": "AAAAAA"}, chains, "auto", output, seeds=[7], run_data_pipeline=pipeline
         )
         content = json.loads(output.read_text())
+        assert content["dialect"] == "TorchFold"
         assert content["modelSeeds"] == [7]
         assert all(("unpairedMsa" not in entity["protein"]) == pipeline for entity in content["sequences"])
 

@@ -84,7 +84,7 @@ def prepare_fold(
         if template
         else {
             "name": name,
-            "dialect": "alphafold3",
+            "dialect": "TorchFold",
             "version": 1,
             "modelSeeds": seeds or [1],
             "sequences": [
@@ -99,8 +99,9 @@ def prepare_fold(
             ],
         }
     )
-    if value.get("dialect") != "alphafold3" or not isinstance(value.get("sequences"), list):
-        raise ValueError("fold_template must use the alphafold3 JSON dialect with sequences")
+    if value.get("dialect") not in {"alphafold3", "TorchFold"} or not isinstance(value.get("sequences"), list):
+        raise ValueError("fold_template must use the alphafold3 or TorchFold JSON dialect with sequences")
+    value["dialect"] = "TorchFold"
     seeds = value.get("modelSeeds")
     if not isinstance(seeds, list) or not seeds or any(type(seed) is not int or seed < 0 for seed in seeds):
         raise ValueError("fold_template requires nonnegative integer modelSeeds")
