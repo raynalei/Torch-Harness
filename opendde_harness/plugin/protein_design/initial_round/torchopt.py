@@ -9,7 +9,7 @@ from uuid import uuid4
 from opendde_harness.plugin.protein_design.core.model_requests import validate_request
 
 from . import api_startup
-from .services import SlurmService, SubmissionUncertainError
+from .services import RemoteJobFailedError, SlurmService, SubmissionUncertainError
 from .storage import fingerprint
 
 JOB_ID = re.compile(r"[0-9]+(?:_[0-9]+)?")
@@ -63,6 +63,33 @@ async def inspect_optimization(client, optimization_id, request):
             "diagnostic": "launcher failed; some child jobs may still have been submitted; never POST again",
         }
     if remote == "FAILED":
+        receipts = metadata.get("submissions", {})
+        ids = set(receipt_job_ids(receipts))
+        states = metadata.get("scheduler_jobs", {})
+        terminal = {
+            "COMPLETED",
+            "FAILED",
+            "CANCELLED",
+            "TIMEOUT",
+            "OUT_OF_MEMORY",
+            "NODE_FAIL",
+            "PREEMPTED",
+            "BOOT_FAIL",
+            "DEADLINE",
+            "REVOKED",
+        }
+        if (
+            ids
+            and set(states) == ids
+            and all(row.get("state") in terminal and row.get("exit_code") is not None for row in states.values())
+        ):
+            return {
+                **verdict,
+                "state": "failed",
+                "retry_safe": True,
+                "scheduler_jobs": states,
+                "diagnostic": "All optimization child jobs are terminal; this attempt failed",
+            }
         return {
             **verdict,
             "state": "optimization_failed",
@@ -145,8 +172,8 @@ class TorchOptimizationService(SlurmService):
                     ) from exc
             job.update(id=identifier, state="submitted")
             self.checkpoint.save()
-        elif not api_startup.allocation_was_released(job.get("api_allocation")) and job.get("api_url"):
-            self.attach_api(job["api_url"], job.get("api_allocation"))
+        elif job.get("api_url"):
+            await self.restore_job_api(job)
         if attach_id:
             if not re.fullmatch(r"[0-9a-f]{32}", attach_id) or (job.get("id") and job["id"] != attach_id):
                 raise ValueError("invalid or conflicting attached optimization ID")
@@ -171,6 +198,10 @@ class TorchOptimizationService(SlurmService):
             verdict = await inspect_optimization(self, job["id"], payload)
             job.update(state="waiting", optimization_status=verdict)
             self.checkpoint.save()
+            if verdict["state"] == "failed" and verdict.get("retry_safe"):
+                job.update(state="failed", retry_safe=True)
+                self.checkpoint.save()
+                raise RemoteJobFailedError(f"{key}: optimization failed with all child jobs terminal; resume this run")
             if verdict["state"] == "succeeded":
                 job.update(state="completed", results=verdict["artifacts"])
                 self.checkpoint.save()

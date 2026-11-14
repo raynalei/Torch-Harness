@@ -82,3 +82,34 @@ class Checkpoint:
 
     def save(self):
         write_json(self.path, self.data)
+
+
+def retry_failed_jobs(checkpoint):
+    """Archive only confirmed terminal failures; unknown submissions keep their IDs."""
+    retried = []
+    for key, job in list(checkpoint.data["jobs"].items()):
+        if job.get("state") != "failed":
+            continue
+        status = job.get("status", {})
+        terminal = str(job.get("remote_status", "")).upper() in {
+            "FAILED",
+            "CANCELLED",
+            "CANCELED",
+            "TIMEOUT",
+            "OUT_OF_MEMORY",
+            "NODE_FAIL",
+            "PREEMPTED",
+            "BOOT_FAIL",
+            "DEADLINE",
+            "REVOKED",
+        }
+        nonzero = job.get("remote_status") in {"COMPLETED", "SUCCEEDED", "SUCCESS"} and (
+            status.get("exit_code") is not None and str(status["exit_code"]) not in {"0", "0:0"}
+        )
+        if not (terminal or nonzero or job.get("retry_safe") is True):
+            continue
+        checkpoint.data.setdefault("job_attempts", {}).setdefault(key, []).append(job)
+        del checkpoint.data["jobs"][key]
+        retried.append(key)
+    checkpoint.save()
+    return retried

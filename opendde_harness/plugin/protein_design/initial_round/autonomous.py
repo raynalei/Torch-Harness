@@ -259,6 +259,10 @@ async def evaluate(runner, candidates):
             candidate.update(status="failed", error=str(exc))
         runner.save_candidates()
     runner.save_candidates()
+    if any(c.get("status") == "failed" for c in candidates):
+        raise RuntimeError(
+            "Evaluation step failed; resume this run_dir to retry failed steps without regenerating candidates"
+        )
 
 
 def progress(candidates, score_metric):
@@ -280,6 +284,11 @@ async def run_autonomous(runner):
             "repaired": [],
         },
     )
+    failed = [c for c in runner.checkpoint.data.get("candidates", []) if c.get("status") == "failed"]
+    if runner.retry_failed and failed:
+        await evaluate(runner, failed)
+        state["progress"] = progress(runner.checkpoint.data["candidates"], runner.config.evaluation.score_metric)
+        runner.save_candidates()
     if state.get("stop_reason"):
         return
     candidates = runner.checkpoint.data["candidates"]

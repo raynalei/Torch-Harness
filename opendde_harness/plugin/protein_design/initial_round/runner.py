@@ -33,12 +33,20 @@ def digest(path: Path) -> str:
 
 
 class InitialRoundRunner:
-    def __init__(self, config: InitialRoundConfig, *, transport=None, attach_jobs: dict[str, str] | None = None):
+    def __init__(
+        self,
+        config: InitialRoundConfig,
+        *,
+        transport=None,
+        attach_jobs: dict[str, str] | None = None,
+        retry_failed: bool = False,
+    ):
         self.config = config
         self.files = SharedFiles(config.path_mappings)
         self.root = config.work_dir / config.name
         self.transport = transport
         self.attach_jobs = attach_jobs or {}
+        self.retry_failed = retry_failed
         self.services = {}
 
     def validate_files(self):
@@ -589,6 +597,12 @@ class InitialRoundRunner:
             self.checkpoint = Checkpoint(
                 self.root, {"config": self.config.model_dump(mode="json"), "inputs": self.input_hashes}
             )
+            if self.retry_failed and not check_only:
+                from .storage import retry_failed_jobs
+
+                retried = retry_failed_jobs(self.checkpoint)
+                self.checkpoint.data.setdefault("recovery", []).append({"retried_jobs": retried})
+                self.checkpoint.save()
             write_json(self.root / "run-config.json", self.config.model_dump(mode="json"))
             unknown = set(self.attach_jobs) - set(self.checkpoint.data["jobs"])
             if unknown:

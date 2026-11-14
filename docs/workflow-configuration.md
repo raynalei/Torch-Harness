@@ -60,3 +60,19 @@ Standalone `protein_model_*` submissions return a local `request_id`, remote API
 Named and generic submission tools start a detached Python monitor after the request record is saved. The monitor tracks the original recorded API allocation, caches results before requesting API cancellation, and calls scancel only after verified success/preparation/failure/cancellation. Query or cleanup errors are retried without resubmitting inference. Unknown/unverified states retain the API; after the configured service `job_timeout`, tracking records `monitor_timeout` and retains the unresolved allocation. A later submit retry with the same unchanged request, or status/results call, can restart a stopped monitor. Inspect `<request_id>.monitor-status.json` and `.monitor.log` for progress. The monitor survives the submitting chat process exiting, but the machine must remain running. Previously submitted jobs begin monitoring when next queried through the tools.
 
 Full initial-round/autonomous runs already have their own worker and checkpoint. Use `run_dir` with `protein_initial_round_status` for those tasks; their internal job IDs are not standalone registry request IDs. A direct curl/HTTP submission creates no Harness request record or monitor and cannot be queried by inventing a local request_id. Do not bypass Harness after a failed/uncertain submission; first reconcile its original record.
+
+## Resume a failed workflow without rerunning generation
+
+Use `protein_initial_round_resume` with the existing `run_dir`, or:
+
+```bash
+ddeharness protein-design initial-round-resume --run-dir /absolute/path/to/existing/run
+```
+
+Recovery loads `worker-config.json` directly. Do not change the name or work directory. The original scientific inputs and generated/refolded artifact hashes must still match. Running/completed workers are returned as-is. Foreground users can instead repeat the original `initial-round -c ... --retry-failed` command with the unchanged task configuration.
+
+Successful generation, scoring, refolding and interface-analysis jobs retain their results. On an explicit recovery, confirmed terminal failed jobs are archived under `checkpoint.json:job_attempts` and only those logical steps receive new remote IDs and idempotency keys. Other candidates' successful results are reused. A failed TorchScore step therefore does not rerun PPIFlow. Local DockQ/result-extraction errors are retried from the saved structures and remote results. Partial Flow and TorchOptimization retain the already planned decision and reserved sample budget; infrastructure retries do not reserve the scientific samples again. Attempt history records the additional execution attempts.
+
+Autonomous evaluation errors pause the worker rather than consuming subsequent scientific decisions. Unknown, timed-out polling and uncertain submissions keep their original remote IDs and are queried/reconciled, never blindly resubmitted. TorchOptimization retries require scheduler evidence covering every child receipt and showing all children terminal; partial launcher failures or active/unknown children remain blocked for reconciliation.
+
+If an owned API allocation has ended, recovery can start a new API allocation to query the same remote task ID, provided the deployed API uses the same persistent shared task directory. The API host history is saved. This does not submit new inference. Missing server task metadata remains an error, rather than permission to generate again. Repair service deployment problems first; recovery cannot make inaccessible inputs or invalid model resources valid. Scientific configuration/input changes still require a distinct experiment.

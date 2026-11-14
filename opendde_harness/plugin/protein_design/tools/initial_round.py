@@ -6,7 +6,12 @@ from pathlib import Path
 
 from opendde_harness.agent.tools.base import Tool, ToolResult
 from opendde_harness.plugin.context import PluginContext
-from opendde_harness.plugin.protein_design.initial_round.automation import prepare_run, round_status, start_round
+from opendde_harness.plugin.protein_design.initial_round.automation import (
+    prepare_run,
+    resume_round,
+    round_status,
+    start_round,
+)
 from opendde_harness.plugin.protein_design.initial_round.config import InitialRoundConfig
 
 
@@ -14,7 +19,7 @@ class InitialRoundTool(Tool):
     def __init__(self, config: dict, action: str):
         self.config = config
         self.action = action
-        self.external_effects = action == "start"
+        self.external_effects = action in {"start", "resume"}
 
     @property
     def name(self):
@@ -22,13 +27,15 @@ class InitialRoundTool(Tool):
 
     @property
     def description(self):
+        if self.action == "resume":
+            return "Resume an authorized workflow from its existing run_dir and immutable snapshot. Reuse completed generation/scoring/folding/results; retry confirmed failed steps only, preserving attempt history. Never choose a new run name to recover. Running or uncertain jobs retain their remote IDs; failed infrastructure does not imply scientific failure."
         if self.action == "status":
             return "Read saved automatic initial-round progress once. The background Python worker already polls Slurm via GET and advances stages; do not use repeated LLM calls to poll."
-        return "Start an authorized PPIFlow -> AF3Score/TorchScore -> TorchFold -> DockQ workflow from natural-language instructions. Build run_config from known registered services, tool parameters and Python-derived data; the user does not need to write YAML. Alternatively reuse config_path or the configured profile. Never invent scientific inputs, mounted paths or service addresses. An autonomous configuration authorizes its bounded follow-up budget; no per-round confirmation is needed within that scope. Return run_dir immediately; the worker polls status and releases its private API allocations after completion. Reuse the exact run configuration/name on retries."
+        return "Start an authorized PPIFlow -> AF3Score/TorchScore -> TorchFold -> DockQ workflow from natural-language instructions. Build run_config from known registered services, tool parameters and Python-derived data; the user does not need to write YAML. Alternatively reuse config_path or the configured profile. Never invent scientific inputs, mounted paths or service addresses. When autonomous is present, this same worker runs expand/regenerate, Partial Flow for encodable local changes, and TorchOptimization for eligible low-confidence VHH/minibinder candidates with a configured torchopt service. These actions are not the legacy protein_design_start loop. Zero accepted candidates does not by itself stop autonomous feedback; bounded rescue candidates are refolded for diagnostics and legal regeneration/repair actions remain available. Autonomous hit classification uses its selected scorer threshold, DockQ threshold and hotspot evidence; evaluation.min_refold_iptm is not an additional autonomous hit gate. Without autonomous, this tool runs only the single initial round. An autonomous configuration authorizes its bounded follow-up budget; no per-round confirmation is needed within that scope. Return run_dir immediately; the worker polls status and releases its private API allocations after completion. Reuse the exact run configuration/name on retries."
 
     @property
     def parameters(self):
-        if self.action == "status":
+        if self.action in {"status", "resume"}:
             return {
                 "type": "object",
                 "properties": {"run_dir": {"type": "string"}},
@@ -59,7 +66,9 @@ class InitialRoundTool(Tool):
 
     async def execute(self, **kwargs):
         try:
-            if self.action == "status":
+            if self.action == "resume":
+                result = await asyncio.to_thread(resume_round, Path(kwargs["run_dir"]))
+            elif self.action == "status":
                 result = await asyncio.to_thread(round_status, Path(kwargs["run_dir"]))
             else:
                 if kwargs.get("user_confirmed") is not True:
@@ -94,3 +103,7 @@ def make_initial_round_start_tool(ctx: PluginContext):
 
 def make_initial_round_status_tool(ctx: PluginContext):
     return InitialRoundTool(ctx.config, "status")
+
+
+def make_initial_round_resume_tool(ctx: PluginContext):
+    return InitialRoundTool(ctx.config, "resume")

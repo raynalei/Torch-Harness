@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 import time
@@ -15,6 +16,7 @@ from loguru import logger
 
 from .api_startup import (
     allocation_record,
+    allocation_status,
     allocation_was_released,
     api_path,
     ensure_api,
@@ -133,6 +135,8 @@ class SlurmService(ServiceConnection):
     def __init__(self, config: Service, checkpoint: Checkpoint, *, transport=None):
         super().__init__(config, transport=transport)
         self.checkpoint = checkpoint
+        self._registration = config
+        self._transport = transport
         self.allocations.extend(checkpoint.data.get("api_allocations", {}).get(config.url, []))
 
     async def ensure_ready(self, *, start: bool = True):
@@ -142,6 +146,40 @@ class SlurmService(ServiceConnection):
             if self.allocations:
                 self.checkpoint.data.setdefault("api_allocations", {})[self.config.url] = self.allocations
                 self.checkpoint.save()
+
+    async def restore_job_api(self, job):
+        """Rehost persisted API metadata after its owned allocation has ended; never re-POST inference."""
+        allocation = job.get("api_allocation")
+        old_url = job.get("api_url")
+        if not allocation or not old_url:
+            raise ValueError("job has no saved API allocation; reconcile it before recovery")
+        ended = allocation_was_released(allocation)
+        if not ended:
+            self.attach_api(old_url, allocation)
+            state = json.loads(Path(allocation["state_file"]).read_text())
+            phase, _ = await allocation_status(self.config, str(allocation["job_id"]), state)
+            ended = phase in {
+                "COMPLETED",
+                "CANCELLED",
+                "FAILED",
+                "TIMEOUT",
+                "OUT_OF_MEMORY",
+                "NODE_FAIL",
+                "PREEMPTED",
+                "BOOT_FAIL",
+                "DEADLINE",
+                "REVOKED",
+            }
+        if not ended:
+            return
+        owned = self.allocations[:]
+        await self.client.aclose()
+        ServiceConnection.__init__(self, self._registration, transport=self._transport)
+        self.allocations.extend(owned)
+        await self.ensure_ready()
+        job.setdefault("api_history", []).append({"api_url": old_url, "api_allocation": allocation})
+        job.update(api_url=str(self.client.base_url), api_allocation=allocation_record(self.config))
+        self.checkpoint.save()
 
     async def reconcile(self, route: str, job: dict, payload: dict) -> bool:
         """Only trust services that echo the persisted key and exact request hash."""
@@ -219,12 +257,8 @@ class SlurmService(ServiceConnection):
             else:
                 job.update(id=job_id, state="submitted", submission=response.json())
                 self.checkpoint.save()
-        elif (
-            self.config.sbatch_script is not None
-            and job.get("api_url")
-            and not allocation_was_released(job.get("api_allocation"))
-        ):
-            self.attach_api(job["api_url"], job.get("api_allocation"))
+        elif self.config.sbatch_script is not None and job.get("api_url"):
+            await self.restore_job_api(job)
         if attach_id:
             job.update(id=attach_id)
             if job["state"] == "submission_uncertain":
@@ -237,7 +271,9 @@ class SlurmService(ServiceConnection):
         if job["state"] == "completed":
             return job["results"]
         if job["state"] == "failed":
-            raise RemoteJobFailedError(f"{key}: persisted failed job {job['id']}; use a new work_dir to retry")
+            raise RemoteJobFailedError(
+                f"{key}: persisted failed job {job['id']}; resume this run with retry_failed enabled"
+            )
         if self.config.sbatch_script is not None and not job.get("api_url"):
             raise ValueError("older job has no recorded API endpoint; reconcile it before continuing polling")
         status_route = f"{status_base or route}/{quote(job['id'], safe='')}"
@@ -272,7 +308,7 @@ class SlurmService(ServiceConnection):
                 "DEADLINE",
                 "REVOKED",
             }:
-                job["state"] = "failed"
+                job.update(state="failed", retry_safe=True)
                 self.checkpoint.save()
                 raise RemoteJobFailedError(f"{key}: {state}; see {status_route}/logs on the service")
             if state in {"COMPLETED", "SUCCEEDED", "SUCCESS"}:
@@ -280,7 +316,7 @@ class SlurmService(ServiceConnection):
                 if exit_code is None and self.config.require_exit_code:
                     raise RemoteJobFailedError(f"{key}: completed without exit_code; check the response profile")
                 if exit_code is not None and str(exit_code) not in {"0", "0:0"}:
-                    job["state"] = "failed"
+                    job.update(state="failed", retry_safe=True)
                     self.checkpoint.save()
                     raise RemoteJobFailedError(f"{key}: nonzero exit code {exit_code}")
                 results = await self.get(status_route + "/results")

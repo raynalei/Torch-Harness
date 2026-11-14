@@ -343,3 +343,48 @@ def test_explicit_service_wins_and_ambiguous_registration_is_rejected(profile):
         prepare_run(value, registrations=registrations)
     with pytest.raises(ValueError, match="generator services"):
         prepare_run(value, registrations={})
+
+
+def test_resume_uses_saved_snapshot_and_enables_failed_step_retry(profile, monkeypatch):
+    from opendde_harness.plugin.protein_design.initial_round import automation
+    from opendde_harness.plugin.protein_design.tools.initial_round import InitialRoundTool
+
+    config = prepare_run(profile)
+    root = config.work_dir / config.name
+    root.mkdir()
+    write_json(root / "worker-config.json", config.model_dump(mode="json"))
+    seen = []
+
+    def launch(saved, *, retry_failed):
+        seen.append((saved, retry_failed))
+        return {"state": "starting", "run_dir": str(root)}
+
+    monkeypatch.setattr(automation, "start_round", launch)
+    # Global registrations and the original profile are no longer needed for recovery.
+    profile.unlink()
+    assert automation.resume_round(root)["state"] == "starting"
+    assert seen == [(config, True)]
+    assert InitialRoundTool({}, "resume").parameters["required"] == ["run_dir"]
+    assert InitialRoundTool({}, "resume").external_effects
+
+
+def test_detached_resume_passes_retry_flag_without_changing_saved_inputs(profile, monkeypatch):
+    config = prepare_run(profile)
+    root = config.work_dir / config.name
+    commands = []
+
+    class Process:
+        pid = 12345
+
+        def wait(self):
+            return 0
+
+    def launch(command, **kwargs):
+        commands.append(command)
+        return Process()
+
+    monkeypatch.setattr("opendde_harness.plugin.protein_design.initial_round.automation.subprocess.Popen", launch)
+    result = start_round(config, retry_failed=True)
+    assert result["state"] == "starting"
+    assert "--retry-failed" in commands[0]
+    assert json.loads((root / "worker-config.json").read_text()) == config.model_dump(mode="json")

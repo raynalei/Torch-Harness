@@ -128,6 +128,7 @@ def round_status(root: Path):
         "worker_host": launch.get("hostname"),
         "jobs": jobs[-8:],
         "total_jobs": len(jobs),
+        "resume_tool": "protein_initial_round_resume",
         "job_counts": dict(Counter(job["state"] for job in jobs)),
         "api_cleanup": checkpoint.get("api_cleanup", {}),
         "summary_path": str(root / "summary.json"),
@@ -135,7 +136,7 @@ def round_status(root: Path):
     }
 
 
-def start_round(config: InitialRoundConfig, *, attach_jobs: dict[str, str] | None = None):
+def start_round(config: InitialRoundConfig, *, attach_jobs: dict[str, str] | None = None, retry_failed: bool = False):
     attach_jobs = dict(attach_jobs or {})
     root = (config.work_dir / config.name).resolve()
     SharedFiles(config.path_mappings).remote(root)
@@ -194,6 +195,8 @@ def start_round(config: InitialRoundConfig, *, attach_jobs: dict[str, str] | Non
         command = [sys.executable, "-m", "opendde_harness.plugin.protein_design.initial_round.worker", str(root)]
         if attach_jobs:
             command.extend(["--attach-jobs", json.dumps(attach_jobs)])
+        if retry_failed:
+            command.append("--retry-failed")
         with (root / "worker.log").open("ab") as log:
             process = subprocess.Popen(
                 command,
@@ -205,3 +208,12 @@ def start_round(config: InitialRoundConfig, *, attach_jobs: dict[str, str] | Non
         write_json(root / "launch.json", {"pid": process.pid, "hostname": socket.gethostname()})
         threading.Thread(target=process.wait, daemon=True).start()
         return {"state": "starting", "run_dir": str(root), "pid": process.pid, "log_path": str(root / "worker.log")}
+
+
+def resume_round(root: Path):
+    """Resume the immutable launch snapshot rather than reconstructing task inputs."""
+    root = root.expanduser().resolve()
+    config = InitialRoundConfig.model_validate(json.loads((root / "worker-config.json").read_text()))
+    if (config.work_dir / config.name).resolve() != root:
+        raise ValueError("run directory does not match the saved worker configuration")
+    return start_round(config, retry_failed=True)

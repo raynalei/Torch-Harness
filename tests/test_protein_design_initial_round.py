@@ -1091,7 +1091,8 @@ def test_default_config_hash_shape_is_preserved(round_config):
         InitialRoundConfig.model_validate(value)
 
 
-async def test_partial_flow_executes_once_then_rescores_child(round_config, fake_services, monkeypatch):
+@pytest.mark.parametrize("fail_partial", [False, True])
+async def test_partial_flow_executes_once_then_rescores_child(round_config, fake_services, monkeypatch, fail_partial):
     from opendde_harness.plugin.protein_design.initial_round.runner import digest
 
     transport, calls = fake_services
@@ -1117,8 +1118,26 @@ async def test_partial_flow_executes_once_then_rescores_child(round_config, fake
 
     monkeypatch.setattr(InitialRoundRunner, "generate", recorded_generate)
     monkeypatch.setattr("opendde_harness.plugin.protein_design.initial_round.autonomous.analyze", diagnosis)
+    base_handler = transport.handler
+    failed_ids = set()
+
+    def handler(request):
+        response = base_handler(request)
+        if fail_partial and request.method == "POST" and request.url.host == "ppiflow.test":
+            if json.loads(request.content)["mode"].startswith("partial_") and not failed_ids:
+                failed_ids.add(response.json()["design_id"])
+        if request.method == "GET" and request.url.path.rsplit("/", 1)[-1] in failed_ids:
+            return httpx.Response(200, json={"status": "FAILED", "exit_code": "1:0"})
+        return response
+
+    transport = httpx.MockTransport(handler)
     runner = InitialRoundRunner(config, transport=transport)
+    if fail_partial:
+        with pytest.raises(RuntimeError, match="generation failures"):
+            await runner.run()
+        runner = InitialRoundRunner(config, transport=transport, retry_failed=True)
     result = await runner.run()
+    assert calls[("ppiflow", "POST")] == (3 if fail_partial else 2)
     assert submitted[0]["mode"] == "partial_nanobody"
     assert submitted[0]["samples_per_target"] == 1
     assert result["accepted"] == 1
@@ -1319,13 +1338,17 @@ async def test_round_keeps_apis_when_inference_outcome_is_unresolved(
 
     monkeypatch.setattr(InitialRoundRunner, "score", interrupted)
     config = autonomous_config(round_config, max_samples=2)
-    result = await InitialRoundRunner(config, transport=fake_services[0]).run()
+    runner = InitialRoundRunner(config, transport=fake_services[0])
+    with pytest.raises(RuntimeError, match="resume this run_dir"):
+        await runner.run()
     assert not cancelled
-    assert result["accepted"] == 0
-    assert all(rows[0]["state"] == "retained_active_jobs" for rows in result["api_cleanup"].values())
+    assert all(rows[0]["state"] == "retained_active_jobs" for rows in runner.checkpoint.data["api_cleanup"].values())
 
 
-async def test_low_confidence_candidate_is_optimized_and_fully_reevaluated(round_config, fake_services, tmp_path):
+@pytest.mark.parametrize("fail_optimization", [False, True])
+async def test_low_confidence_candidate_is_optimized_and_fully_reevaluated(
+    round_config, fake_services, tmp_path, fail_optimization
+):
     transport, calls = fake_services
     handler_base = transport.handler
     config = autonomous_config(round_config, max_samples=2, max_rounds=1)
@@ -1340,11 +1363,13 @@ async def test_low_confidence_candidate_is_optimized_and_fully_reevaluated(round
     optimization_calls = []
 
     def handler(request):
+        nonlocal identifier
         if request.url.host == "torchopt.test":
             optimization_calls.append(request)
             if request.url.path == "/health":
                 return httpx.Response(200, json={"backend_available": True})
             if request.method == "POST":
+                identifier = ("a" if sum(r.method == "POST" for r in optimization_calls) == 1 else "b") * 32
                 submitted.update(json.loads(request.content))
                 assert request.url.path == "/v1/optimizations"
                 assert submitted["binder_type"] == "vhh"
@@ -1364,11 +1389,15 @@ async def test_low_confidence_candidate_is_optimized_and_fully_reevaluated(round
                 json={
                     "optimization_id": identifier,
                     "request": submitted,
-                    "state": "SUCCEEDED",
+                    "state": "FAILED" if fail_optimization and identifier == "a" * 32 else "SUCCEEDED",
                     "returncode": 0,
                     "runs": {"run": {"native": True}},
                     "submissions": {"run/submission.json": {"slurm_job_id": "123"}},
-                    "scheduler_jobs": {"123": {"state": "COMPLETED", "exit_code": "0:0"}},
+                    "scheduler_jobs": {
+                        "123": {"state": "FAILED", "exit_code": "1:0"}
+                        if fail_optimization and identifier == "a" * 32
+                        else {"state": "COMPLETED", "exit_code": "0:0"}
+                    },
                 },
             )
         response = handler_base(request)
@@ -1377,6 +1406,10 @@ async def test_low_confidence_candidate_is_optimized_and_fully_reevaluated(round
         return response
 
     runner = InitialRoundRunner(config, transport=httpx.MockTransport(handler))
+    if fail_optimization:
+        with pytest.raises(RemoteJobFailedError, match="all child jobs terminal"):
+            await runner.run()
+        runner = InitialRoundRunner(config, transport=httpx.MockTransport(handler), retry_failed=True)
     result = await runner.run()
     decision = runner.checkpoint.data["autonomous"]["decisions"][0]
     assert decision["action"] == "torchopt" and result["used_samples"] == 2
@@ -1387,11 +1420,11 @@ async def test_low_confidence_candidate_is_optimized_and_fully_reevaluated(round
     assert child["optimized_by"] == "torchopt" and child["parent_id"] == parent["candidate_id"]
     assert child["metrics"]["af3score_iptm"] == 0.9 and child["metrics"]["ranking_score"] == 102
     assert calls[("af3score", "POST")] == calls[("torchfold", "POST")] == calls[("rosetta", "POST")] == 2
-    assert sum(request.method == "POST" for request in optimization_calls) == 1
+    assert sum(request.method == "POST" for request in optimization_calls) == (2 if fail_optimization else 1)
     before = dict(calls)
     assert await InitialRoundRunner(config, transport=httpx.MockTransport(handler)).run() == result
     assert {k: v for k, v in calls.items() if k[1] == "POST"} == {k: v for k, v in before.items() if k[1] == "POST"}
-    assert sum(request.method == "POST" for request in optimization_calls) == 1
+    assert sum(request.method == "POST" for request in optimization_calls) == (2 if fail_optimization else 1)
 
 
 def test_paired_antibodies_do_not_route_into_unsupported_optimization(round_config, tmp_path):
@@ -1547,3 +1580,136 @@ def test_machine_predicates_do_not_confuse_missing_evidence_or_loop_content(roun
     atoms.ins_code[(atoms.chain_id == "B") & (atoms.res_id == 5)] = "A"
     encoding = check_region_encoding(atoms, {"B": {5}})
     assert encoding["ok"] is False and encoding["encoded"] is None and encoding["reason"]
+
+
+@pytest.mark.parametrize("failed_source", ["ppiflow", "torchcraft", "af3score", "torchscore", "torchfold", "rosetta"])
+async def test_resume_retries_only_failed_model_and_reuses_upstream_results(round_config, fake_services, failed_source):
+    config = round_config
+    if failed_source == "torchscore":
+        config.evaluation.scoring_backend = "torchscore"
+        config.evaluation.torchscore = Service(url="https://torchscore.test", poll_interval=0.001)
+        config.evaluation.af3score = None
+    base, calls = fake_services
+    failed_ids = set()
+
+    def handler(request):
+        response = base.handler(request)
+        source = request.url.host.split(".")[0]
+        if source == failed_source and request.method == "POST" and not failed_ids:
+            submitted = response.json()
+            failed_ids.add(next(submitted[key] for key in ("task_id", "design_id", "fold_id") if key in submitted))
+        if request.method == "GET" and request.url.path.rsplit("/", 1)[-1] in failed_ids:
+            return httpx.Response(200, json={"status": "FAILED", "exit_code": "1:0"})
+        return response
+
+    transport = httpx.MockTransport(handler)
+    first = InitialRoundRunner(config, transport=transport)
+    if failed_source in {"ppiflow", "torchcraft"}:
+        with pytest.raises(RuntimeError, match="generation failures"):
+            await first.run()
+    else:
+        assert (await first.run())["status"] == "partial"
+    before = dict(calls)
+    generated = {c["candidate_id"]: c["generated_sha256"] for c in first.checkpoint.data.get("candidates", [])}
+    resumed = InitialRoundRunner(config, transport=transport, retry_failed=True)
+    result = await resumed.run()
+    assert result["status"] == "completed"
+    assert result["accepted"] == 2
+    for source in config.generators:
+        assert calls[(source, "POST")] == before[(source, "POST")] + (source == failed_source)
+    if failed_source not in config.generators:
+        assert calls[(failed_source, "POST")] == before[(failed_source, "POST")] + 1
+    assert all(
+        c["generated_sha256"] == generated.get(c["candidate_id"], c["generated_sha256"])
+        for c in resumed.checkpoint.data["candidates"]
+    )
+    attempts = resumed.checkpoint.data["job_attempts"]
+    assert len(attempts) == 1
+    key, history = next(iter(attempts.items()))
+    assert history[0]["id"] in failed_ids
+    assert history[0]["submission_key"] != resumed.checkpoint.data["jobs"][key]["submission_key"]
+
+
+async def test_autonomous_recovery_pauses_on_scoring_failure_without_consuming_extra_budget(
+    round_config, fake_services
+):
+    config = autonomous_config(round_config, max_samples=2)
+    base, calls = fake_services
+    failed = set()
+
+    def handler(request):
+        response = base.handler(request)
+        if request.url.host == "af3score.test" and request.method == "POST" and not failed:
+            failed.add(response.json()["task_id"])
+        if request.method == "GET" and request.url.path.rsplit("/", 1)[-1] in failed:
+            return httpx.Response(200, json={"status": "FAILED", "exit_code": "1:0"})
+        return response
+
+    transport = httpx.MockTransport(handler)
+    runner = InitialRoundRunner(config, transport=transport)
+    with pytest.raises(RuntimeError, match="resume this run_dir"):
+        await runner.run()
+    resumed = InitialRoundRunner(config, transport=transport, retry_failed=True)
+    result = await resumed.run()
+    assert result["accepted"] == 2
+    assert result["used_samples"] == 2
+    assert calls[("ppiflow", "POST")] == calls[("torchcraft", "POST")] == 1
+    assert calls[("af3score", "POST")] == 3
+
+
+def test_recovery_does_not_reset_unknown_running_or_unverified_jobs(tmp_path):
+    from opendde_harness.plugin.protein_design.initial_round.storage import retry_failed_jobs
+
+    checkpoint = Checkpoint(tmp_path, {})
+    checkpoint.data["jobs"] = {
+        "unknown": {"state": "submission_uncertain"},
+        "running": {"state": "waiting", "id": "running"},
+        "unverified": {"state": "failed", "remote_status": "UNKNOWN"},
+        "success": {"state": "completed", "results": {"files": []}},
+        "failed": {"state": "failed", "remote_status": "FAILED", "id": "old"},
+    }
+    assert retry_failed_jobs(checkpoint) == ["failed"]
+    assert set(checkpoint.data["jobs"]) == {"unknown", "running", "unverified", "success"}
+    assert checkpoint.data["job_attempts"]["failed"][0]["id"] == "old"
+
+
+async def test_resume_rehosts_ended_api_and_queries_original_job_without_posting(tmp_path, monkeypatch):
+    from opendde_harness.plugin.protein_design.initial_round import services
+    from opendde_harness.plugin.protein_design.initial_round.api_startup import allocation_record
+    from opendde_harness.plugin.protein_design.initial_round.storage import fingerprint
+
+    checkpoint = Checkpoint(tmp_path, {})
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        assert request.method == "GET"
+        if request.url.path.endswith("/results"):
+            return httpx.Response(200, json={"files": ["/shared/retained.pdb"]})
+        return httpx.Response(200, json={"status": "COMPLETED", "exit_code": "0:0"})
+
+    service = SlurmService(Service(url="https://restore.test"), checkpoint, transport=httpx.MockTransport(handler))
+    await service.ensure_ready()
+    old = allocation_record(service.config)
+    checkpoint.data["jobs"]["score/existing"] = {
+        "state": "waiting",
+        "id": "original-job",
+        "submission_key": "a" * 32,
+        "request_hash": fingerprint({"url": service.config.url, "route": "/v1/tasks", "payload": {}}),
+        "api_url": str(service.client.base_url),
+        "api_allocation": old,
+    }
+
+    async def ended(config, job_id, state):
+        return "COMPLETED", "restore.test"
+
+    monkeypatch.setattr(services, "allocation_status", ended)
+    try:
+        assert await service.run("score/existing", "/v1/tasks", "task_id", {}) == {"files": ["/shared/retained.pdb"]}
+        job = checkpoint.data["jobs"]["score/existing"]
+        assert job["id"] == "original-job"
+        assert job["api_allocation"]["job_id"] != old["job_id"]
+        assert job["api_history"][0]["api_allocation"] == old
+        assert all("original-job" in r.url.path for r in requests)
+    finally:
+        await service.close()

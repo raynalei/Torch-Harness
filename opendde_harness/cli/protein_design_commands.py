@@ -47,6 +47,9 @@ def initial_round(
     detach: bool = typer.Option(
         False, "--detach", help="Launch a background worker that polls and advances stages automatically."
     ),
+    retry_failed: bool = typer.Option(
+        False, "--retry-failed", help="Retry confirmed failed steps in the same run; reuse successful results."
+    ),
     attach_job: list[str] | None = typer.Option(
         None, "--attach-job", help="Reconcile an uncertain submission: checkpoint-job-key=remote-job-id. Repeatable."
     ),
@@ -71,15 +74,37 @@ def initial_round(
         if detach:
             if check:
                 raise ValueError("--detach cannot be combined with --check")
-            result = start_round(workflow, attach_jobs=attachments) if attachments else start_round(workflow)
+            options = {"attach_jobs": attachments} if attachments else {}
+            if retry_failed:
+                options["retry_failed"] = True
+            result = start_round(workflow, **options)
         else:
-            result = asyncio.run(InitialRoundRunner(workflow, attach_jobs=attachments).run(check_only=check))
+            result = asyncio.run(
+                InitialRoundRunner(
+                    workflow, attach_jobs=attachments, **({"retry_failed": True} if retry_failed else {})
+                ).run(check_only=check)
+            )
     except Exception as exc:
         error_console.print(f"Initial round failed: {exc}", markup=False)
         raise typer.Exit(1) from exc
     typer.echo(json.dumps(result, ensure_ascii=False, allow_nan=False))
     if result.get("status") == "partial":
         raise typer.Exit(2)
+
+
+@protein_design_app.command("initial-round-resume")
+def initial_round_resume(
+    run_dir: Path = typer.Option(..., "--run-dir", exists=True, file_okay=False, resolve_path=True),
+):
+    """Resume the saved workflow and retry only confirmed failed model steps."""
+    from opendde_harness.plugin.protein_design.initial_round.automation import resume_round
+
+    try:
+        result = resume_round(run_dir)
+    except Exception as exc:
+        error_console.print(f"Initial round recovery failed: {exc}", markup=False)
+        raise typer.Exit(1) from exc
+    typer.echo(json.dumps(result, ensure_ascii=False, allow_nan=False))
 
 
 @protein_design_app.command("initial-round-status")

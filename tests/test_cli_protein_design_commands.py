@@ -188,3 +188,17 @@ def test_initial_round_cli_partial_result_is_nonzero(tmp_path, monkeypatch):
     monkeypatch.setattr(InitialRoundRunner, "run", run)
     result = CliRunner().invoke(commands.protein_design_app, ["initial-round", "-c", str(source)])
     assert result.exit_code == 2 and json.loads(result.output)["status"] == "partial"
+
+
+def test_initial_round_resume_cli_uses_run_directory_without_yaml(tmp_path, monkeypatch):
+    observed = []
+
+    def resume(root):
+        observed.append(root)
+        return {"state": "starting", "run_dir": str(root)}
+
+    monkeypatch.setattr("opendde_harness.plugin.protein_design.initial_round.automation.resume_round", resume)
+    result = CliRunner().invoke(commands.protein_design_app, ["initial-round-resume", "--run-dir", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["state"] == "starting"
+    assert observed == [tmp_path]
