@@ -50,6 +50,16 @@ def pdb(path, *, binder="ALA", target="A", chain="B", light=None):
     return path
 
 
+async def run_with_test_user_approval(runner):
+    from opendde_harness.plugin.protein_design.initial_round.approval import AwaitingActionApprovalError, approve_action
+
+    while True:
+        try:
+            return await runner.run()
+        except AwaitingActionApprovalError as exc:
+            approve_action(runner.root, exc.pending["approval_id"])
+
+
 @pytest.fixture
 def round_config(tmp_path):
     template = tmp_path / "template.json"
@@ -437,7 +447,7 @@ def fake_services(round_config, tmp_path, monkeypatch):
         if path.endswith("/results"):
             return httpx.Response(200, json=outputs[job])
         if path.endswith("/metrics"):
-            return httpx.Response(200, json={"metrics": [{"iptm": 0.9}]})
+            return httpx.Response(200, json={"metrics": [{"iptm": 0.9, "ptm": 0.95}]})
         return httpx.Response(200, json={"status": "COMPLETED", "exit_code": "0:0"})
 
     return httpx.MockTransport(handler), calls
@@ -1143,9 +1153,9 @@ async def test_partial_flow_executes_once_then_rescores_child(round_config, fake
     runner = InitialRoundRunner(config, transport=transport)
     if fail_partial:
         with pytest.raises(RuntimeError, match="generation failures"):
-            await runner.run()
+            await run_with_test_user_approval(runner)
         runner = InitialRoundRunner(config, transport=transport, retry_failed=True)
-    result = await runner.run()
+    result = await run_with_test_user_approval(runner)
     assert calls[("ppiflow", "POST")] == (3 if fail_partial else 2)
     assert submitted[0]["mode"] == "partial_nanobody"
     assert submitted[0]["samples_per_target"] == 1
@@ -1236,7 +1246,7 @@ async def test_feedback_repairs_python_loop_without_extra_input(round_config, fa
         "opendde_harness.plugin.protein_design.initial_round.runner.asyncio.create_subprocess_exec", dockq
     )
     runner = InitialRoundRunner(config, transport=httpx.MockTransport(handler))
-    result = await runner.run()
+    result = await run_with_test_user_approval(runner)
     assert len(requests) == 2
     assert requests[1]["mode"] == "partial_nanobody"
     assert requests[1]["cdr_position"] == "B5-6"
@@ -1417,9 +1427,9 @@ async def test_low_confidence_candidate_is_optimized_and_fully_reevaluated(
     runner = InitialRoundRunner(config, transport=httpx.MockTransport(handler))
     if fail_optimization:
         with pytest.raises(RemoteJobFailedError, match="all child jobs terminal"):
-            await runner.run()
+            await run_with_test_user_approval(runner)
         runner = InitialRoundRunner(config, transport=httpx.MockTransport(handler), retry_failed=True)
-    result = await runner.run()
+    result = await run_with_test_user_approval(runner)
     decision = runner.checkpoint.data["autonomous"]["decisions"][0]
     assert decision["action"] == "torchopt" and result["used_samples"] == 2
     assert result["accepted"] == 1 and result["unavailable_actions"] == {}
@@ -1530,9 +1540,15 @@ def test_feedback_diagnosis_and_ranking_never_mix_scorers():
     from opendde_harness.plugin.protein_design.initial_round.config import AutonomousRound
     from opendde_harness.plugin.protein_design.initial_round.diagnostics import classify
 
-    metrics = {"af3score_iptm": 0.99, "torchscore_iptm": 0.7, "design_refold_dockq": 0.9, "rosetta_interface_dg": -12}
+    metrics = {
+        "af3score_iptm": 0.99,
+        "torchscore_iptm": 0.4,
+        "torchscore_ptm": 0.95,
+        "design_refold_dockq": 0.9,
+        "rosetta_interface_dg": -12,
+    }
     assert classify(metrics, {"epitope_hit": True}, AutonomousRound(), "torchscore_iptm") == "low_confidence"
-    assert rank_score({"metrics": metrics}, "torchscore_iptm") == 82
+    assert rank_score({"metrics": metrics}, "torchscore_iptm") == 52
     assert rank_score({"metrics": metrics}, "af3score_iptm") == 111
 
 
@@ -1722,3 +1738,96 @@ async def test_resume_rehosts_ended_api_and_queries_original_job_without_posting
         assert all("original-job" in r.url.path for r in requests)
     finally:
         await service.close()
+
+
+@pytest.mark.parametrize(
+    "iptm,ptm,passes",
+    [(0.51, 0.81, True), (0.5, 0.9, False), (0.9, 0.8, False), (0.49, 0.95, False), (0.9, 0.79, False)],
+)
+async def test_torchscore_joint_gate_controls_refold(round_config, fake_services, iptm, ptm, passes):
+    round_config.evaluation.scoring_backend = "torchscore"
+    round_config.evaluation.torchscore = Service(url="https://torchscore.test", poll_interval=0.001)
+    round_config.evaluation.af3score = None
+    base, calls = fake_services
+
+    def handler(request):
+        response = base.handler(request)
+        if request.url.host == "torchscore.test" and request.url.path.endswith("/metrics"):
+            return httpx.Response(200, json={"metrics": [{"iptm": iptm, "ptm": ptm}]})
+        return response
+
+    runner = InitialRoundRunner(round_config, transport=httpx.MockTransport(handler))
+    result = await runner.run()
+    assert result["accepted"] == (2 if passes else 0)
+    assert calls[("torchfold", "POST")] == (2 if passes else 0)
+    assert all(c["metrics"]["torchscore_ptm"] == ptm for c in runner.checkpoint.data["candidates"])
+    assert "torchscore_ptm" in (runner.root / "ranking.csv").read_text().splitlines()[0]
+
+
+@pytest.mark.parametrize(
+    "ptm,expected", [(0.81, "hit"), (0.8, "low_confidence"), (0.79, "low_confidence"), (None, "evaluation_incomplete")]
+)
+def test_torchscore_hit_uses_both_metrics_independent_of_af3_threshold(ptm, expected):
+    from opendde_harness.plugin.protein_design.initial_round.config import AutonomousRound
+    from opendde_harness.plugin.protein_design.initial_round.diagnostics import classify
+
+    metrics = {"torchscore_iptm": 0.6, "torchscore_ptm": ptm, "design_refold_dockq": 0.9, "rosetta_interface_dg": -12}
+    assert classify(metrics, {"epitope_hit": True}, AutonomousRound(min_score=0.99), "torchscore_iptm") == expected
+
+
+async def test_partial_flow_pauses_without_submitting_or_spending_budget(round_config, fake_services, monkeypatch):
+    from opendde_harness.plugin.protein_design.initial_round.approval import AwaitingActionApprovalError, approve_action
+
+    config = autonomous_config(round_config, max_samples=2, max_rounds=1)
+    config.generators.pop("torchcraft")
+    transport, calls = fake_services
+
+    def diagnosis(runner, candidate):
+        return {
+            "diagnosis": "hit" if candidate.get("parent_id") else "local_change",
+            "local_region": "B_region_1",
+            "repair_regions": {"B_region_1": {"chain": "B", "positions": [5, 6]}},
+            "epitope_hit": True,
+            "flexibility": "unknown",
+        }
+
+    monkeypatch.setattr("opendde_harness.plugin.protein_design.initial_round.autonomous.analyze", diagnosis)
+    runner = InitialRoundRunner(config, transport=transport)
+    with pytest.raises(AwaitingActionApprovalError) as paused:
+        await runner.run()
+    identifier = paused.value.pending["approval_id"]
+    assert paused.value.pending["action"] == "partial_flow"
+    assert calls[("ppiflow", "POST")] == 1
+    assert runner.checkpoint.data["autonomous"]["used_samples"] == 1
+    assert runner.checkpoint.data["autonomous"]["repaired"] == []
+    # Reopening/resuming does not approve the action.
+    with pytest.raises(AwaitingActionApprovalError) as again:
+        await InitialRoundRunner(config, transport=transport, retry_failed=True).run()
+    assert again.value.pending["approval_id"] == identifier
+    assert calls[("ppiflow", "POST")] == 1
+    with pytest.raises(ValueError, match="no matching"):
+        approve_action(runner.root, "wrong-action")
+    approve_action(runner.root, identifier)
+    result = await InitialRoundRunner(config, transport=transport).run()
+    assert result["used_samples"] == 2 and result["accepted"] == 1
+    assert calls[("ppiflow", "POST")] == 2
+    with pytest.raises(ValueError, match="no matching"):
+        approve_action(runner.root, identifier)
+
+
+async def test_missing_torchscore_ptm_is_not_assumed_to_pass(round_config, fake_services):
+    round_config.evaluation.scoring_backend = "torchscore"
+    round_config.evaluation.torchscore = Service(url="https://torchscore.test", poll_interval=0.001)
+    round_config.evaluation.af3score = None
+    base, calls = fake_services
+
+    def handler(request):
+        response = base.handler(request)
+        if request.url.host == "torchscore.test" and request.url.path.endswith("/metrics"):
+            return httpx.Response(200, json={"metrics": [{"iptm": 0.99}]})
+        return response
+
+    runner = InitialRoundRunner(round_config, transport=httpx.MockTransport(handler))
+    assert (await runner.run())["status"] == "partial"
+    assert calls[("torchfold", "POST")] == 0
+    assert all("error" in c for c in runner.checkpoint.data["candidates"])

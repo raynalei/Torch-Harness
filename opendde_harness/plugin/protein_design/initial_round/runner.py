@@ -360,7 +360,7 @@ class InitialRoundRunner:
             and digest(self.files.local(candidate["refold_structure"])) != candidate["refold_sha256"]
         ):
             raise ValueError(f"refold artifact changed: {key}")
-        if metric in candidate["metrics"]:
+        if metric in candidate["metrics"] and (scorer != "torchscore" or "torchscore_ptm" in candidate["metrics"]):
             return
         write_pdb(original, model)
         result = await self.job(
@@ -384,6 +384,11 @@ class InitialRoundRunner:
         write_json(directory / f"{scorer}-metrics.json", metrics)
         field = service.config.metric_fields.get("iptm", "iptm")
         candidate["metrics"][metric] = measured(metric_records(metrics, service.config), field, confidence=True)
+        if scorer == "torchscore":
+            ptm_field = service.config.metric_fields.get("ptm", "ptm")
+            candidate["metrics"]["torchscore_ptm"] = measured(
+                metric_records(metrics, service.config), ptm_field, confidence=True
+            )
         candidate["scoring_backend"] = scorer
         candidate[f"{scorer}_results"] = result
         candidate["status"] = "scored"
@@ -575,6 +580,7 @@ class InitialRoundRunner:
                     "status",
                     "rank",
                     self.config.evaluation.score_metric,
+                    *(["torchscore_ptm"] if self.config.evaluation.scoring_backend == "torchscore" else []),
                     "torchfold_iptm",
                     "design_refold_dockq",
                     "rosetta_interface_dg",
@@ -604,6 +610,10 @@ class InitialRoundRunner:
                 self.checkpoint.data.setdefault("recovery", []).append({"retried_jobs": retried})
                 self.checkpoint.save()
             write_json(self.root / "run-config.json", self.config.model_dump(mode="json"))
+            if not check_only:
+                from .automation import remember_run
+
+                remember_run(self.root)
             unknown = set(self.attach_jobs) - set(self.checkpoint.data["jobs"])
             if unknown:
                 raise ValueError(f"--attach-job keys must exist in checkpoint: {sorted(unknown)}")
@@ -643,7 +653,14 @@ class InitialRoundRunner:
                         key=lambda c: (-c["metrics"][self.config.evaluation.score_metric], c["candidate_id"]),
                     )
                     for c in ordered:
-                        if c["metrics"][self.config.evaluation.score_metric] <= self.config.evaluation.score_threshold:
+                        from .policy import score_passes
+
+                        if not score_passes(
+                            c["metrics"],
+                            self.config.evaluation.score_metric,
+                            self.config.evaluation.score_threshold,
+                            self.config.evaluation.min_torchscore_ptm,
+                        ):
                             c["status"] = "filtered"
                         elif generator.deduplicate_sequences and c["sequence"] in seen:
                             c["status"] = "duplicate"

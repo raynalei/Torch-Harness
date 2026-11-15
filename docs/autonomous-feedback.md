@@ -45,16 +45,37 @@ the default. A unique registered alias supplies that kind's actual service setti
 The selection is fixed in the run snapshot; an API failure never switches scorers.
 
 Let **S** be `af3score_iptm` or `torchscore_iptm` from the selected API.
-A candidate qualifies when **S > 0.8 and design/refold DockQ > 0.49**, using
-`autonomous.min_score` and `min_dockq`. At least one specified hotspot must also
-be contacted. Rank by **100 * S - rosetta_interface_dg**, descending. Rosetta and
-the selected scoring service are required. Missing scores are failures, never
-zero. The default 0.8 is a prototype policy threshold, not evidence that the two
-models' scores have identical calibration. Use separate runs for comparisons.
+TorchScore candidates must pass **ipTM > 0.5 AND pTM > 0.8**, using
+`evaluation.min_torchscore_iptm` and `evaluation.min_torchscore_ptm`. These thresholds
+apply to both single-round selection and autonomous hit classification. AF3Score
+continues to use `autonomous.min_score` (default 0.8) in autonomous runs.
+Both modes additionally require **design/refold DockQ > autonomous.min_dockq**
+(default 0.49) and contact with at least one specified hotspot for an autonomous hit.
+Rank by **100 * S - rosetta_interface_dg**, descending; pTM is a gate, not a ranking term.
+Missing/nonfinite pTM is an evaluation error, never a passing default.
+TorchFold ipTM is recorded but is not an additional autonomous acceptance gate.
+The rescue quota still refolds a bounded number of below-threshold candidates for
+diagnostics; they cannot become hits without passing the scorer's full gate.
 
-TorchFold ipTM remains available but is not an extra acceptance gate. The legacy
-`min_refold_iptm`, scorer threshold and per-source refold limit do not override
-feedback evaluation; the bounded rescue quota preserves some low-score candidates.
+Every selected `partial_flow` or `torchopt` action pauses before submission and
+before reserving that action's sample budget. The worker saves `pending-approval.json`
+and status `awaiting_approval`, including the exact request, parent metrics,
+diagnostics and decision basis. The chat agent must show these and ask the user.
+Only an explicit approval for the current `approval_id` may call
+`protein_initial_round_approve`; previous compute-budget approval is insufficient.
+An ordinary resume or a reopened TUI does not approve an action. No reply or a refusal
+leaves it paused. Approval is bound to this run, round, parent and request; it cannot
+authorize a different next action. Normal generation/expansion continues within the
+previously authorized budget.
+
+The detached worker does not inject a new chat turn by itself. Status/list queries
+expose the pending question; the agent presents it when tracking the workflow or
+when the user reconnects. CLI users can review `pending-approval.json` then run:
+
+```bash
+ddeharness protein-design initial-round-approve --run-dir /existing/run \
+  --approval-id <current-approval-id> --approve
+```
 
 ```mermaid
 flowchart TD

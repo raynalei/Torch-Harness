@@ -50,7 +50,11 @@ class ProteinModelTool(Tool):
         if self.action == "list":
             return {
                 "type": "object",
-                "properties": {"check_health": {"type": "boolean", "default": False}},
+                "properties": {
+                    "check_health": {"type": "boolean", "default": False},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 20},
+                    "offset": {"type": "integer", "minimum": 0, "default": 0},
+                },
                 "additionalProperties": False,
             }
         if self.action == "submit":
@@ -90,16 +94,20 @@ class ProteinModelTool(Tool):
             if self.action in {"submit", "cancel"} and kwargs.pop("user_confirmed", False) is not True:
                 raise ValueError("user authorization is required before submitting or cancelling a computation")
             if self.action == "list":
+                limit, offset = kwargs.get("limit", 20), kwargs.get("offset", 0)
+                if type(limit) is not int or not 1 <= limit <= 500 or type(offset) is not int or offset < 0:
+                    raise ValueError("limit must be 1..500 and offset must be nonnegative")
                 payload = (
-                    await self.registry.catalogue_with_health()
+                    await self.registry.catalogue_with_health(limit=limit, offset=offset)
                     if kwargs.get("check_health", False)
-                    else self.registry.catalogue()
+                    else self.registry.catalogue(limit=limit, offset=offset)
                 )
             elif self.action == "submit":
                 payload = await self.registry.submit(
                     kwargs["model"], kwargs["request_id"], kwargs["request"], kwargs.get("operation")
                 )
             else:
+                self.registry = self.registry.for_request(kwargs["request_id"])
                 payload = await getattr(self.registry, self.action)(kwargs["request_id"])
             if self.registry.auto_monitor and self.action in {"submit", "status", "results"}:
                 from opendde_harness.plugin.protein_design.core.model_monitor import start_monitor

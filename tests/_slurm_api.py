@@ -10,6 +10,10 @@ from opendde_harness.plugin.protein_design.initial_round.services import Service
 
 @pytest.fixture
 def mock_slurm_apis(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "opendde_harness.plugin.protein_design.initial_round.automation.run_index_path",
+        lambda: tmp_path / "instance-runs.json",
+    )
     script = tmp_path / "mock-api.sbatch"
     script.write_text("#!/bin/bash\n# Protocol-test scheduler fixture\n")
     initialize = ServiceConnection.__init__

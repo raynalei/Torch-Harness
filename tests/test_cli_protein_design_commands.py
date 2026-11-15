@@ -202,3 +202,15 @@ def test_initial_round_resume_cli_uses_run_directory_without_yaml(tmp_path, monk
     assert result.exit_code == 0, result.output
     assert json.loads(result.output)["state"] == "starting"
     assert observed == [tmp_path]
+
+
+def test_refinement_cli_requires_approval_flag(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "opendde_harness.plugin.protein_design.initial_round.approval.approve_action", lambda *args: calls.append(args)
+    )
+    result = CliRunner().invoke(
+        commands.protein_design_app, ["initial-round-approve", "--run-dir", str(tmp_path), "--approval-id", "a" * 64]
+    )
+    assert result.exit_code == 1
+    assert not calls

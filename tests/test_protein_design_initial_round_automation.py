@@ -13,6 +13,14 @@ from opendde_harness.plugin.protein_design.initial_round.automation import prepa
 from opendde_harness.plugin.protein_design.initial_round.storage import write_json
 
 
+@pytest.fixture(autouse=True)
+def isolated_run_index(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "opendde_harness.plugin.protein_design.initial_round.automation.run_index_path",
+        lambda: tmp_path / "instance-runs.json",
+    )
+
+
 @pytest.fixture(params=["nanobody", "antibody"])
 def profile(tmp_path, request):
     import yaml
@@ -388,3 +396,103 @@ def test_detached_resume_passes_retry_flag_without_changing_saved_inputs(profile
     assert result["state"] == "starting"
     assert "--retry-failed" in commands[0]
     assert json.loads((root / "worker-config.json").read_text()) == config.model_dump(mode="json")
+
+
+def test_run_discovery_survives_new_session_and_finds_older_runs(tmp_path, monkeypatch):
+    import socket
+
+    from opendde_harness.plugin.protein_design.initial_round import automation
+
+    index = tmp_path / "instance" / "runs.json"
+    monkeypatch.setattr(automation, "run_index_path", lambda: index)
+    monkeypatch.setattr(automation, "_alive", lambda *_: True)
+    parent = tmp_path / "shared-runs"
+    first, older = parent / "current", parent / "older"
+    for root in (first, older):
+        root.mkdir(parents=True)
+        write_json(root / "worker-config.json", {})
+        write_json(root / "launch.json", {"pid": 123, "hostname": socket.gethostname()})
+        write_json(root / "worker-status.json", {"state": "running"})
+    automation.remember_run(first)
+    result = automation.list_rounds()
+    assert [item["run_dir"] for item in result["runs"]] == [str(first)]
+    assert result["runs"][0]["state"] == "running"
+    assert {item["run_dir"] for item in automation.list_rounds(parent)["runs"]} == {str(first), str(older)}
+    # An inaccessible old run does not hide other tasks.
+    (first / "launch.json").unlink()
+    result = automation.list_rounds(parent)
+    assert {item["state"] for item in result["runs"]} == {"unavailable", "running"}
+
+
+def test_run_discovery_does_not_claim_remote_worker_is_alive(tmp_path, monkeypatch):
+    from opendde_harness.plugin.protein_design.initial_round import automation
+
+    root = tmp_path / "remote"
+    root.mkdir()
+    write_json(root / "launch.json", {"pid": 123, "hostname": "different-login-node"})
+    write_json(root / "worker-status.json", {"state": "running"})
+    monkeypatch.setattr(automation, "run_index_path", lambda: tmp_path / "index.json")
+    automation.remember_run(root)
+    assert automation.list_rounds()["runs"][0]["state"] == "remote_worker_unverified"
+
+
+def test_workflow_is_indexed_before_worker_launch_and_fails_closed(profile, monkeypatch):
+    from opendde_harness.plugin.protein_design.initial_round import automation
+
+    config = prepare_run(profile)
+    calls = []
+
+    def launch(saved, **kwargs):
+        assert automation.run_index_path().is_file()
+        calls.append(saved)
+        return {"state": "starting"}
+
+    monkeypatch.setattr(automation, "_start_round", launch)
+    assert automation.start_round(config)["state"] == "starting"
+    assert calls == [config]
+
+    def no_index(root):
+        raise OSError("index unavailable")
+
+    monkeypatch.setattr(automation, "remember_run", no_index)
+    with pytest.raises(OSError, match="index unavailable"):
+        automation.start_round(config)
+    assert calls == [config]
+
+
+def test_worker_saves_approval_question_as_pause_not_failure(profile, monkeypatch):
+    from opendde_harness.plugin.protein_design.initial_round import worker
+    from opendde_harness.plugin.protein_design.initial_round.approval import AwaitingActionApprovalError
+
+    config = prepare_run(profile)
+    root = config.work_dir / config.name
+    root.mkdir()
+    write_json(root / "worker-config.json", config.model_dump(mode="json"))
+    pending = {"approval_id": "a" * 64, "action": "torchopt", "question": "Approve this optimization?"}
+
+    class Runner:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def run(self):
+            raise AwaitingActionApprovalError(pending)
+
+    monkeypatch.setattr(worker, "InitialRoundRunner", Runner)
+    worker.run(root)
+    saved = json.loads((root / "worker-status.json").read_text())
+    assert saved == {"state": "awaiting_approval", "pending_approval": pending}
+
+
+async def test_approval_tool_requires_explicit_user_confirmation(tmp_path, monkeypatch):
+    from opendde_harness.plugin.protein_design.tools.initial_round import InitialRoundTool
+
+    calls = []
+    monkeypatch.setattr(
+        "opendde_harness.plugin.protein_design.tools.initial_round.resume_round", lambda root: calls.append(root)
+    )
+    tool = InitialRoundTool({}, "approve")
+    assert tool.external_effects
+    assert "user_confirmed" in tool.parameters["required"]
+    result = await tool.execute(run_dir=str(tmp_path), approval_id="a" * 64)
+    assert "explicit user approval" in json.loads(result.model_text)["error"]
+    assert not calls

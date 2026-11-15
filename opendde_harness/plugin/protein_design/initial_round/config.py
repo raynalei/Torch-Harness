@@ -112,6 +112,7 @@ class Evaluation(RoundModel):
     rosetta_options: dict[str, Any] = Field(default_factory=lambda: {"pack_input": False, "pack_separated": True})
     min_af3score_iptm: float = Field(default=0.5, ge=0, le=1)
     min_torchscore_iptm: float = Field(default=0.5, ge=0, le=1)
+    min_torchscore_ptm: float = Field(default=0.8, ge=0, le=1)
     min_refold_iptm: float = Field(default=0.8, ge=0, le=1)
     min_dockq: float = Field(default=0.49, ge=0, le=1)
     dockq_python: Path
@@ -144,8 +145,15 @@ class Evaluation(RoundModel):
             and self.torchscore is None
             and not self.torchscore_options
             and self.min_torchscore_iptm == 0.5
+            and self.min_torchscore_ptm == 0.8
         ):
-            for key in ("scoring_backend", "torchscore", "torchscore_options", "min_torchscore_iptm"):
+            for key in (
+                "scoring_backend",
+                "torchscore",
+                "torchscore_options",
+                "min_torchscore_iptm",
+                "min_torchscore_ptm",
+            ):
                 value.pop(key, None)
         return value
 

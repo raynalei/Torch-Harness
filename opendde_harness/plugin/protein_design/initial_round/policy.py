@@ -66,3 +66,14 @@ def stop_reason(round_index, used_samples, stale_rounds, options):
     if stale_rounds >= options.patience:
         return "no_improvement"
     return None
+
+
+def score_passes(metrics, metric, iptm_threshold, ptm_threshold=0.8):
+    import math
+
+    fields = [metric, *(["torchscore_ptm"] if metric == "torchscore_iptm" else [])]
+    if any(type(metrics.get(key)) not in (int, float) or not math.isfinite(metrics[key]) for key in fields):
+        return False
+    return metrics[metric] > iptm_threshold and (
+        metric != "torchscore_iptm" or metrics["torchscore_ptm"] > ptm_threshold
+    )

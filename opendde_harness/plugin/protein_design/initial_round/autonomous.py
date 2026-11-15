@@ -11,7 +11,7 @@ from opendde_harness.plugin.protein_design.core.model_requests import validate_r
 
 from .config import RoundModel
 from .diagnostics import analyze
-from .policy import generation_order, repair_allowed, stop_reason, torchopt_supported
+from .policy import generation_order, repair_allowed, score_passes, stop_reason, torchopt_supported
 from .services import SubmissionUncertainError
 from .storage import write_json
 
@@ -243,7 +243,9 @@ async def evaluate(runner, candidates):
             candidate["status"] = "duplicate"
             continue
         seen.add(sequence)
-        if candidate["metrics"][runner.config.evaluation.score_metric] <= options.min_score:
+        evaluation = runner.config.evaluation
+        threshold = evaluation.min_torchscore_iptm if evaluation.scoring_backend == "torchscore" else options.min_score
+        if not score_passes(candidate["metrics"], evaluation.score_metric, threshold, evaluation.min_torchscore_ptm):
             if rescued >= options.rescue_limit:
                 candidate["status"] = "filtered"
                 continue
@@ -342,12 +344,19 @@ async def run_autonomous(runner):
                 "policy": config.decision_policy,
                 "fallback": fallback,
                 "state": "planned",
+                "budget_reserved": False,
             }
             decisions.append(decision)
+            runner.save_candidates()
+        if decision["action"] in {"partial_flow", "torchopt"}:
+            from .approval import require_approval
+
+            require_approval(runner, decision)
+        if not decision.get("budget_reserved", True):
             state["used_samples"] += decision["samples"]
             if decision["action"] in {"partial_flow", "torchopt"}:
                 state["repaired"].append(decision["parent_id"])
-            # Reserve budget and persist the exact request before any remote submission.
+            decision["budget_reserved"] = True
             runner.save_candidates()
         if decision["action"] == "torchopt":
             batch = await runner.optimize(decision, index)

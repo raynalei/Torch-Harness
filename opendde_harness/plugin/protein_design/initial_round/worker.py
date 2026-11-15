@@ -5,6 +5,7 @@ import asyncio
 import json
 from pathlib import Path
 
+from opendde_harness.plugin.protein_design.initial_round.approval import AwaitingActionApprovalError
 from opendde_harness.plugin.protein_design.initial_round.config import InitialRoundConfig
 from opendde_harness.plugin.protein_design.initial_round.runner import InitialRoundRunner
 from opendde_harness.plugin.protein_design.initial_round.services import SubmissionUncertainError
@@ -22,6 +23,8 @@ def run(root: Path, *, attach_jobs: dict[str, str] | None = None, retry_failed: 
             ).run()
         )
         write_json(status, {"state": "partial" if result["status"] == "partial" else "completed", "summary": result})
+    except AwaitingActionApprovalError as exc:
+        write_json(status, {"state": "awaiting_approval", "pending_approval": exc.pending})
     except SubmissionUncertainError as exc:
         write_json(status, {"state": "submission_uncertain", "error": str(exc)})
         raise

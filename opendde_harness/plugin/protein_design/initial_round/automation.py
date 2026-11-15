@@ -128,6 +128,7 @@ def round_status(root: Path):
         "worker_host": launch.get("hostname"),
         "jobs": jobs[-8:],
         "total_jobs": len(jobs),
+        "pending_approval": checkpoint.get("pending_approval"),
         "resume_tool": "protein_initial_round_resume",
         "job_counts": dict(Counter(job["state"] for job in jobs)),
         "api_cleanup": checkpoint.get("api_cleanup", {}),
@@ -136,7 +137,7 @@ def round_status(root: Path):
     }
 
 
-def start_round(config: InitialRoundConfig, *, attach_jobs: dict[str, str] | None = None, retry_failed: bool = False):
+def _start_round(config: InitialRoundConfig, *, attach_jobs: dict[str, str] | None = None, retry_failed: bool = False):
     attach_jobs = dict(attach_jobs or {})
     root = (config.work_dir / config.name).resolve()
     SharedFiles(config.path_mappings).remote(root)
@@ -213,7 +214,71 @@ def start_round(config: InitialRoundConfig, *, attach_jobs: dict[str, str] | Non
 def resume_round(root: Path):
     """Resume the immutable launch snapshot rather than reconstructing task inputs."""
     root = root.expanduser().resolve()
-    config = InitialRoundConfig.model_validate(json.loads((root / "worker-config.json").read_text()))
+    snapshot = root / "worker-config.json"
+    if not snapshot.is_file():
+        snapshot = root / "run-config.json"
+    config = InitialRoundConfig.model_validate(json.loads(snapshot.read_text()))
     if (config.work_dir / config.name).resolve() != root:
         raise ValueError("run directory does not match the saved worker configuration")
     return start_round(config, retry_failed=True)
+
+
+def run_index_path():
+    from opendde_harness.config.loader import get_config_path
+
+    return get_config_path().parent / "protein_initial_round_runs.json"
+
+
+def remember_run(root: Path):
+    path = run_index_path()
+    root = root.expanduser().resolve()
+    with file_lock(path.with_suffix(".lock")):
+        runs = json.loads(path.read_text()) if path.is_file() else {}
+        runs[str(root)] = {"run_dir": str(root)}
+        write_json(path, runs)
+
+
+def start_round(config: InitialRoundConfig, *, attach_jobs: dict[str, str] | None = None, retry_failed: bool = False):
+    # Fail closed before launching: a task must be discoverable without chat history.
+    remember_run(config.work_dir / config.name)
+    return _start_round(config, attach_jobs=attach_jobs, retry_failed=retry_failed)
+
+
+def list_rounds(work_dir: Path | None = None):
+    path = run_index_path()
+    indexed = json.loads(path.read_text()) if path.is_file() else {}
+    roots = {Path(item["run_dir"]).expanduser().resolve() for item in indexed.values()}
+    if work_dir is not None:
+        directory = work_dir.expanduser().resolve()
+        roots.update(item.parent for item in directory.glob("*/worker-config.json"))
+    runs = []
+    for root in sorted(roots, key=str):
+        try:
+            value = round_status(root)
+            value.pop("jobs", None)
+            value["name"] = root.name
+            value["local_worker_check"] = value["worker_host"] == socket.gethostname()
+            if not value["local_worker_check"] and value["state"] in {"starting", "running"}:
+                value["state"] = "remote_worker_unverified"
+            runs.append(value)
+        except (OSError, ValueError, KeyError) as exc:
+            if (root / "run-config.json").is_file():
+                summary = root / "summary.json"
+                value = json.loads(summary.read_text()) if summary.is_file() else {}
+                runs.append(
+                    {
+                        "run_dir": str(root),
+                        "name": root.name,
+                        "state": value.get("status", "foreground_unverified"),
+                        "resume_tool": "protein_initial_round_resume",
+                    }
+                )
+                continue
+            runs.append({"run_dir": str(root), "state": "unavailable", "error_type": type(exc).__name__})
+    return {
+        "index_path": str(path),
+        "runs": runs,
+        "hint": "Use run_dir with protein_initial_round_status/resume; no new task name is needed. "
+        "Remote worker liveness cannot be proven from a different host. "
+        "If this instance has no index, provide the original shared work_dir to discover older runs.",
+    }

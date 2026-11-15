@@ -92,6 +92,28 @@ def initial_round(
         raise typer.Exit(2)
 
 
+@protein_design_app.command("initial-round-approve")
+def initial_round_approve(
+    run_dir: Path = typer.Option(..., "--run-dir", exists=True, file_okay=False, resolve_path=True),
+    approval_id: str = typer.Option(..., "--approval-id"),
+    confirmed: bool = typer.Option(False, "--approve", help="Explicitly approve the displayed pending action."),
+):
+    """Approve one pending refinement action and resume the saved workflow."""
+    from opendde_harness.plugin.protein_design.initial_round.approval import approve_action
+    from opendde_harness.plugin.protein_design.initial_round.automation import resume_round
+
+    if not confirmed:
+        error_console.print("Review the pending action and pass --approve to authorize this exact request.")
+        raise typer.Exit(1)
+    try:
+        approve_action(run_dir, approval_id)
+        result = resume_round(run_dir)
+    except Exception as exc:
+        error_console.print(f"Action approval failed: {exc}", markup=False)
+        raise typer.Exit(1) from exc
+    typer.echo(json.dumps(result, ensure_ascii=False, allow_nan=False))
+
+
 @protein_design_app.command("initial-round-resume")
 def initial_round_resume(
     run_dir: Path = typer.Option(..., "--run-dir", exists=True, file_okay=False, resolve_path=True),

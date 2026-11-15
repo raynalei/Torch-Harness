@@ -76,3 +76,32 @@ Successful generation, scoring, refolding and interface-analysis jobs retain the
 Autonomous evaluation errors pause the worker rather than consuming subsequent scientific decisions. Unknown, timed-out polling and uncertain submissions keep their original remote IDs and are queried/reconciled, never blindly resubmitted. TorchOptimization retries require scheduler evidence covering every child receipt and showing all children terminal; partial launcher failures or active/unknown children remain blocked for reconciliation.
 
 If an owned API allocation has ended, recovery can start a new API allocation to query the same remote task ID, provided the deployed API uses the same persistent shared task directory. The API host history is saved. This does not submit new inference. Missing server task metadata remains an error, rather than permission to generate again. Repair service deployment problems first; recovery cannot make inaccessible inputs or invalid model resources valid. Scientific configuration/input changes still require a distinct experiment.
+
+## Find workflows after reopening the TUI
+
+Call `protein_initial_round_list` before starting a replacement workflow. New launches register absolute run directories in `protein_initial_round_runs.json` beside the active Harness config. This index is independent of the chat session and workspace. The listing reads saved task status; it does not submit jobs. Use the returned `run_dir` with status/resume.
+
+For workflows launched before indexing was added, pass the original shared parent `work_dir` to discover child run directories. The tool also uses `initial_round_config`'s work_dir when that profile is accessible. Keep the same active config instance and mount the same shared paths after reconnecting; switching instance configs selects another index. Workers on another hostname are reported as `remote_worker_unverified`, since a saved RUNNING label alone cannot prove that remote process is still alive. Standalone model requests remain discoverable through `protein_model_list` and their original jobs_dir; they are distinct from full workflow runs.
+
+Task indexing is a prerequisite for submitting work: a detached workflow registers its run directory before spawning, and foreground workflows register before any scientific API allocation. If the index cannot be written, submission fails before starting remote work. Standalone model tools register their jobs directory in an instance-wide index and write the local request record before starting the API. Configuration/API-start failures are retained too; only startup failures proven safe can reuse the same ID for a fresh startup attempt. Uncertain sbatch submissions are retained for reconciliation.
+
+`protein_model_list` searches the instance's indexed jobs directories across workspaces, reports `total_requests`, and accepts `limit`/`offset` to browse older records. Status/results tools automatically locate a unique matching request in those directories. Duplicate local IDs in different directories require selecting the original model_jobs_dir; the tools never silently choose between them. Records remain scoped to the same active config instance and require persistent, accessible storage. Direct HTTP requests outside Harness do not create these records.
+
+
+## TorchScore gates and refinement approvals
+
+TorchScore selection now requires both `evaluation.min_torchscore_iptm` (default 0.5)
+and `evaluation.min_torchscore_ptm` (default 0.8), using strict greater-than comparisons.
+The API must return both metrics; `metric_fields.ptm` can map an existing API field.
+Missing pTM pauses/fails evaluation instead of assuming a value. Both metrics are saved
+in candidate records and ranking.csv. AF3Score thresholds and ranking formula are unchanged.
+
+Partial Flow and TorchOptimization each require explicit approval of the concrete
+pending action. Use status/list to retrieve `pending_approval`, show its question,
+parameters and evidence to the user, then call `protein_initial_round_approve` with
+run_dir, the exact approval_id and user_confirmed=true only after the user approves.
+Plain resume does not approve. Unanswered/rejected actions remain paused. The worker
+saves the pending request and exits; this is not a new-turn push notification to a
+disconnected TUI. Newly connected agents should inspect task status and ask then.
+Existing runs retain their saved thresholds; do not manually edit checkpoint/config
+hashes to retrofit scientific settings. Start a new experiment for changed thresholds.

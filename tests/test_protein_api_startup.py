@@ -209,7 +209,9 @@ async def test_registry_api_failure_does_not_poison_inference_request(api, tmp_p
     monkeypatch.setattr("opendde_harness.plugin.protein_design.initial_round.api_startup.slurm_command", fail)
     with pytest.raises(TimeoutError):
         await registry.submit("fold", "fold1", {"json_path": "/shared/input.json"})
-    assert not (tmp_path / "requests/fold1.json").exists()
+    record = json.loads((tmp_path / "requests/fold1.json").read_text())
+    assert record["state"] == "api_start_failed"
+    assert record["api_start_retry_safe"] is False
     assert not any(request.method == "POST" for request in requests)
 
 

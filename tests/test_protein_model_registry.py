@@ -335,7 +335,7 @@ async def test_missing_credential_does_not_poison_request_id(registration, api, 
     registry = ProteinModelRegistry(registration, tmp_path, transport=api[0])
     with pytest.raises(ValueError, match="absent"):
         await registry.submit("af3", "task", {"input_pdb_dir": "/shared/pdbs"})
-    assert not (tmp_path / "task.json").exists()
+    assert json.loads((tmp_path / "task.json").read_text())["state"] == "configuration_failed"
     monkeypatch.setenv("TEST_AF3_TOKEN", "synthetic-secret")
     assert (await registry.submit("af3", "task", {"input_pdb_dir": "/shared/pdbs"}))["state"] == "submitted"
     assert "synthetic-secret" not in (tmp_path / "task.json").read_text()
@@ -1000,3 +1000,49 @@ async def test_model_tools_start_monitor_after_durable_submission(registration, 
     )
     assert json.loads(result.model_text)["monitor"]["state"] == "starting"
     assert observed == ["job123"]
+
+
+async def test_model_records_are_discoverable_across_workspaces(registration, api, tmp_path):
+    config_path = tmp_path / "instance/config.json"
+    original = ProteinModelRegistry(registration, tmp_path / "workspace-one", transport=api[0], config_path=config_path)
+    result = await original.submit("af3", "persistent-task", {"input_pdb_dir": "/shared/pdbs"})
+    reopened = ProteinModelRegistry(registration, tmp_path / "workspace-two", transport=api[0], config_path=config_path)
+    listing = reopened.catalogue()
+    assert listing["total_requests"] == 1
+    assert listing["recent_requests"][0]["request_id"] == "persistent-task"
+    assert listing["recent_requests"][0]["jobs_dir"] == str(original.root)
+    located = reopened.for_request("persistent-task")
+    assert (await located.status("persistent-task"))["remote_id"] == result["remote_id"]
+    assert reopened.catalogue(limit=1, offset=1)["recent_requests"] == []
+
+
+async def test_no_model_allocation_if_directory_index_cannot_be_saved(registration, api, tmp_path, monkeypatch):
+    registry = ProteinModelRegistry(
+        registration, tmp_path / "jobs", transport=api[0], config_path=tmp_path / "config.json"
+    )
+
+    def unavailable():
+        raise OSError("index unavailable")
+
+    monkeypatch.setattr(registry, "remember_directory", unavailable)
+    with pytest.raises(OSError, match="index unavailable"):
+        await registry.submit("af3", "not-submitted", {"input_pdb_dir": "/shared/pdbs"})
+    assert not api[1]
+
+
+async def test_model_startup_failure_still_has_durable_request_record(registration, api, tmp_path, monkeypatch):
+    from opendde_harness.plugin.protein_design.initial_round.services import ServiceConnection
+
+    registry = ProteinModelRegistry(
+        registration, tmp_path / "jobs", transport=api[0], config_path=tmp_path / "config.json"
+    )
+
+    async def fail(self):
+        assert (registry.root / "startup-failure.json").is_file()
+        raise RuntimeError("API unavailable")
+
+    monkeypatch.setattr(ServiceConnection, "ensure_ready", fail)
+    with pytest.raises(RuntimeError, match="API unavailable"):
+        await registry.submit("af3", "startup-failure", {"input_pdb_dir": "/shared/pdbs"})
+    assert registry.catalogue()["recent_requests"][0]["state"] == "api_start_failed"
+    assert not api[1]

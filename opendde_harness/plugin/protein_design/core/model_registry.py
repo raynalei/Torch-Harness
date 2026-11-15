@@ -62,10 +62,14 @@ class ProteinModelRegistry:
             raise ValueError(f"model {name!r} is not registered; call protein_model_list")
         return self.models[name]
 
-    def catalogue(self):
+    def catalogue(self, *, limit=20, offset=0):
+        records = self.recent_requests(limit=None)
         return {
             "jobs_dir": str(self.root.resolve()),
-            "recent_requests": self.recent_requests(),
+            "known_job_directories": [str(root) for root in self.known_directories()],
+            "recent_requests": records[offset : offset + limit],
+            "total_requests": len(records),
+            "offset": offset,
             "active_config_path": str(self.config_path) if self.config_path else None,
             "available_model_kinds": sorted(REQUEST_TYPES),
             "unconfigured_model_kinds": sorted(set(REQUEST_TYPES) - {model.kind for model in self.models.values()}),
@@ -109,9 +113,9 @@ class ProteinModelRegistry:
                 client.allocations.append(allocation)
         return client
 
-    async def catalogue_with_health(self):
+    async def catalogue_with_health(self, *, limit=20, offset=0):
         # Discovery must never probe a placeholder/local port or queue an allocation.
-        catalogue = self.catalogue()
+        catalogue = self.catalogue(limit=limit, offset=offset)
         for item in catalogue["models"]:
             item.update(
                 reachable=None,
@@ -121,19 +125,56 @@ class ProteinModelRegistry:
             )
         return catalogue
 
-    def recent_requests(self):
+    def directory_index(self):
+        return self.config_path.parent / "protein_model_job_directories.json" if self.config_path else None
+
+    def remember_directory(self):
+        path = self.directory_index()
+        if path is None:
+            return
+        with file_lock(path.with_suffix(".lock")):
+            directories = json.loads(path.read_text()) if path.is_file() else []
+            write_json(path, sorted(set(directories) | {str(self.root.resolve())}))
+
+    def known_directories(self):
+        path = self.directory_index()
+        directories = json.loads(path.read_text()) if path and path.is_file() else []
+        return sorted({self.root.resolve(), *(Path(item) for item in directories)}, key=str)
+
+    def for_request(self, request_id):
+        self.valid_id(request_id)
+        matches = [root for root in self.known_directories() if (root / f"{request_id}.json").is_file()]
+        if len(matches) > 1:
+            raise ValueError(
+                "request_id exists in multiple jobs_dir entries; select the original model_jobs_dir from protein_model_list"
+            )
+        if not matches or matches[0] == self.root.resolve():
+            return self
+        return ProteinModelRegistry(
+            {name: item.model_dump(mode="json") for name, item in self.models.items()},
+            matches[0],
+            transport=self.transport,
+            config_path=self.config_path,
+            auto_monitor=self.auto_monitor,
+        )
+
+    def recent_requests(self, limit=20):
         records = []
-        for path in self.root.glob("*.json"):
-            try:
-                value = json.loads(path.read_text())
-                if value.get("request_id") != path.stem or "registration_hash" not in value:
+        for root in self.known_directories():
+            for path in root.glob("*.json"):
+                try:
+                    value = json.loads(path.read_text())
+                    if value.get("request_id") != path.stem or "registration_hash" not in value:
+                        continue
+                    records.append(
+                        (
+                            path.stat().st_mtime,
+                            {**self.public_record(value), "request_record": str(path.resolve()), "jobs_dir": str(root)},
+                        )
+                    )
+                except (OSError, ValueError, AttributeError):
                     continue
-                records.append(
-                    (path.stat().st_mtime, {**self.public_record(value), "request_record": str(path.resolve())})
-                )
-            except (OSError, ValueError, AttributeError):
-                continue
-        return [value for _, value in sorted(records, key=lambda item: item[0], reverse=True)[:20]]
+        return [value for _, value in sorted(records, key=lambda item: item[0], reverse=True)[:limit]]
 
     @staticmethod
     def registration_identity(model):
@@ -247,18 +288,28 @@ class ProteinModelRegistry:
                 raise ValueError(f"{field} exceeds configured max_samples={model.max_samples}")
         if len(payload.get("pdb_paths", [])) > model.max_samples:
             raise ValueError("pdb_paths exceeds configured max_samples")
+        self.remember_directory()
         route, status_base, id_field = self.routes(model.kind, operation)
         signature = fingerprint({"model": name, "operation": operation, "payload": payload})
         path, lock = self.paths(request_id)
         with file_lock(lock, blocking=False):
+            startup_attempts = []
             if path.exists():
                 record, _ = self.read(request_id)
                 if record["request_hash"] != signature:
                     raise ValueError("request_id already belongs to a different model/request; use a distinct ID")
-                # Including uncertain submissions: never POST again on retry.
-                return self.public_record(record)
+                safe_startup = record["state"] == "configuration_failed" or (
+                    record["state"] == "api_start_failed" and record.get("api_start_retry_safe") is True
+                )
+                if not safe_startup:
+                    # Including uncertain submissions: never POST again on retry.
+                    return self.public_record(record)
+                startup_attempts = record.get("startup_attempts", []) + [
+                    {k: record[k] for k in ("state", "api_allocation", "api_cleanup", "error_type") if k in record}
+                ]
             record = {
                 "request_id": request_id,
+                "startup_attempts": startup_attempts,
                 "request_record": str(path.resolve()),
                 "model": name,
                 "kind": model.kind,
@@ -273,17 +324,31 @@ class ProteinModelRegistry:
                 else model.kind == "torchscore",
                 **({"submission_key": uuid4().hex} if model.kind == "torchopt" else {}),
             }
-            client = self.client(model)
+            record["state"] = "starting_api"
+            write_json(path, record)
+            try:
+                client = self.client(model)
+            except Exception as exc:
+                record.update(state="configuration_failed", error_type=type(exc).__name__)
+                write_json(path, record)
+                raise
             try:
                 await client.ensure_ready()
             except BaseException:
+                record["state"] = "api_start_failed"
+                state_file = client.config.sbatch_state_file
+                record["api_start_retry_safe"] = state_file is None or not state_file.is_file()
                 if client.allocations:
                     record.update(api_allocation=client.allocations[-1], api_cleanup=await client.release_allocations())
-                    write_json(path, record)
+                    record["api_start_retry_safe"] = bool(record["api_cleanup"]) and all(
+                        item.get("state") in {"cancel_requested", "not_in_queue"} for item in record["api_cleanup"]
+                    )
+                write_json(path, record)
                 await client.close()
                 raise
             submission_stage = "record_allocation"
             try:
+                record["state"] = "submission_uncertain"
                 record["api_url"] = str(client.client.base_url)
                 record["api_allocation"] = allocation_record(client.config)
                 write_json(path, record)

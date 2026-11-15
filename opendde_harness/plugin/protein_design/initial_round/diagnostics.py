@@ -10,7 +10,7 @@ from pydantic import Field, model_validator
 
 from .artifacts import chain_sequences, structure
 from .config import RoundModel
-from .policy import flexibility, hotspot_hit, local_region
+from .policy import flexibility, hotspot_hit, local_region, score_passes
 
 
 class DesignRegion(RoundModel):
@@ -45,8 +45,13 @@ def _rmsd(displacements):
     return float(np.sqrt(np.mean(np.square(displacements))))
 
 
-def classify(metrics, evidence, options, score_metric="af3score_iptm"):
-    required = (score_metric, "design_refold_dockq", "rosetta_interface_dg")
+def classify(metrics, evidence, options, score_metric="af3score_iptm", *, iptm_threshold=None, ptm_threshold=0.8):
+    required = (
+        score_metric,
+        "design_refold_dockq",
+        "rosetta_interface_dg",
+        *(["torchscore_ptm"] if score_metric == "torchscore_iptm" else []),
+    )
     if any(
         isinstance(metrics.get(k), bool)
         or not isinstance(metrics.get(k), (int, float))
@@ -58,7 +63,15 @@ def classify(metrics, evidence, options, score_metric="af3score_iptm"):
         return "off_epitope"
     if evidence.get("epitope_hit") is not True:
         return "uncertain"
-    if metrics[score_metric] > options.min_score and metrics["design_refold_dockq"] > options.min_dockq:
+    threshold = (
+        iptm_threshold
+        if iptm_threshold is not None
+        else (0.5 if score_metric == "torchscore_iptm" else options.min_score)
+    )
+    if (
+        score_passes(metrics, score_metric, threshold, ptm_threshold)
+        and metrics["design_refold_dockq"] > options.min_dockq
+    ):
         return "hit"
     if metrics["design_refold_dockq"] <= options.min_dockq:
         if evidence.get("local_region"):
@@ -215,5 +228,15 @@ def analyze(runner, candidate):
     except (ValueError, KeyError, TypeError, np.linalg.LinAlgError) as exc:
         evidence["local_region"] = None
         evidence["notes"].append(str(exc))
-    evidence["diagnosis"] = classify(candidate["metrics"], evidence, options, runner.config.evaluation.score_metric)
+    evaluation = runner.config.evaluation
+    evidence["diagnosis"] = classify(
+        candidate["metrics"],
+        evidence,
+        options,
+        evaluation.score_metric,
+        iptm_threshold=evaluation.min_torchscore_iptm
+        if evaluation.scoring_backend == "torchscore"
+        else options.min_score,
+        ptm_threshold=evaluation.min_torchscore_ptm,
+    )
     return evidence

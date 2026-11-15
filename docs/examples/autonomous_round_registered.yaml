@@ -36,11 +36,13 @@ generators:
 evaluation:
   # Choose one scorer for the whole run; change to af3score to use AF3Score.
   scoring_backend: torchscore
+  min_torchscore_iptm: 0.5
+  min_torchscore_ptm: 0.8
   dockq_python: /lustre/project/envs/dockq/bin/python
   torchopt_options:
     method: mcmc-ddg
 autonomous:
   max_rounds: 3
   max_samples: 100
-  min_score: 0.8
+  min_score: 0.8  # AF3Score autonomous threshold; TorchScore uses evaluation thresholds.
   min_dockq: 0.49
