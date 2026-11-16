@@ -1,6 +1,6 @@
 # Staged autonomous rounds
 
-Enable `autonomous` for checkpointed follow-ups after PPIFlow/TorchCraft generation.
+Enable `autonomous` for checkpointed per-candidate follow-ups after PPIFlow/TorchCraft generation.
 Autonomous runs require **TorchScore** for both complex ipTM and pTM. The separate
 single-round workflow still supports AF3Score and TorchScore.
 
@@ -16,9 +16,6 @@ autonomous:
   interface_energy_threshold: -5.0
   interface_distance: 12.0
   min_dockq: 0.49
-  max_rounds: 3
-  max_samples: 100
-  patience: 2
   decision_policy: agent
 ```
 
@@ -85,20 +82,34 @@ binder has no legal Partial Flow action. Unsupported modes/chain mappings are
 reported as unavailable. The current registered Partial Flow supports nanobody
 and antibody modes; minibinders have no compatible Partial Flow mode.
 
-## Decisions, budgets and recovery
+## Decisions, per-candidate stages and recovery
 
 Qwen can choose only executable `partial_flow`, `torchopt` or `stop` menu entries.
 An invalid/unavailable response falls back to the first legal option and is
-recorded. Stop is offered only for an accepted candidate. There is no regeneration
+recorded. Stop is offered only for an accepted candidate after pending executable
+follow-ups are exhausted. There is no regeneration
 or expansion action under this staged policy. Terminating one candidate does not
 terminate other candidates in its batch.
 
-Partial Flow and optimization reserve one imported candidate each. Initial
-requested samples count toward `max_samples`. Round, sample and no-improvement
-limits still bound execution; they can stop a run before every candidate finishes
-its route. Each parent is refined at most once. Optimization output must preserve
-the target and inherited fixed-residue constraints. Every child receives a fresh
-TorchScore evaluation on its own structure.
+There is no global round limit, total sample cap or 5–20 batch policy. Initial
+sample counts come directly from each generator request. Every eligible candidate
+can finish its own route: at most one Partial Flow and then at most one
+optimization. Once a child passes both confidence gates it proceeds directly to
+TorchFold/DockQ; optimization children never return to Partial Flow or optimize
+again. No global no-improvement/patience rule truncates pending lineages.
+
+The agent may choose which eligible candidate to process next, but Stop is offered
+only when no executable follow-up remains. The finite stage graph and recorded
+parent IDs prevent unbounded loops. Missing/unsupported services are reported as
+unavailable; infrastructure failures still pause for checkpointed recovery.
+Optimization output must preserve target and inherited fixed-residue constraints.
+Every child receives a fresh TorchScore evaluation on its own structure.
+
+`used_samples` and decision indices are reporting counters, not budgets. Legacy
+`max_rounds`, `max_samples`, `batch_size`, `max_batch_size` and `patience` fields are
+ignored on load and omitted from the active schema/saved configuration. Existing
+checkpoints stopped by the removed round/sample/no-improvement limits can resume
+pending lineages without repeating completed actions or double-counting samples.
 
 Ranking uses TorchScore ipTM, then pTM and DockQ, descending; optional Rosetta
 scores are not required for direct-refold candidates. `ranking_score` stores

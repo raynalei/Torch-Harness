@@ -30,16 +30,6 @@ def torchopt_supported(chains, mode, registered):
     )
 
 
-def stop_reason(round_index, used_samples, stale_rounds, options):
-    if round_index > options.max_rounds:
-        return "max_rounds"
-    if used_samples >= options.max_samples:
-        return "sample_budget"
-    if stale_rounds >= options.patience:
-        return "no_improvement"
-    return None
-
-
 def score_passes(metrics, metric, iptm_threshold, ptm_threshold=0.8, *, require_ptm=False):
     import math
 

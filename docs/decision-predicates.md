@@ -30,7 +30,7 @@ return ['partial_flow'] if any_fixed_points else ['terminate']
 | `autonomous.options_for` | Builds capability-valid Partial Flow/optimization/stop options |
 | `policy.torchopt_supported` | Requires a registered optimizer and a compatible single-chain mode |
 | `policy.repair_allowed` | Prevents repeating a refinement of the same parent |
-| `policy.stop_reason` | Enforces round, sample and no-improvement caps |
+| Completed lineage and legal-menu exhaustion | End processing without a global round, sample, batch or patience limit |
 
 Contacts are diagnostic. Missing scientific outputs are errors; a scalar interface
 energy cannot replace a residue-energy table. See the workflow guide for the

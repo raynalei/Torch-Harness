@@ -928,7 +928,7 @@ def autonomous_config(config, **overrides):
     value["generators"]["ppiflow"]["request"]["specified_hotspots"] = "A:1"
     value["evaluation"]["scoring_backend"] = "torchscore"
     value["evaluation"]["torchscore"] = {**value["evaluation"]["af3score"], "url": "https://torchscore.test"}
-    value["autonomous"] = {"decision_policy": "rules", "max_rounds": 3, "max_samples": 8, "batch_size": 1, **overrides}
+    value["autonomous"] = {"decision_policy": "rules", **overrides}
     return InitialRoundConfig.model_validate(value)
 
 
@@ -953,18 +953,21 @@ async def test_autonomous_round_preserves_best_budget_and_resume(round_config, f
     assert {key: count for key, count in calls.items() if key[1] == "POST"} == before
 
 
-async def test_autonomous_sample_budget_counts_initial_jobs(round_config, fake_services):
-    config = autonomous_config(round_config, max_samples=2)
-    result = await InitialRoundRunner(config, transport=fake_services[0]).run()
-    assert result["used_samples"] == 2
-    assert result["followup_rounds"] == 0
-    assert result["stop_reason"] == "sample_budget"
-    with pytest.raises(ValueError, match="exceed"):
-        autonomous_config(round_config, max_samples=1)
+def test_autonomous_has_no_global_budget_fields_and_accepts_large_initial_requests(round_config):
+    from opendde_harness.plugin.protein_design.initial_round.config import AutonomousRound
+
+    removed = {"max_rounds", "max_samples", "batch_size", "max_batch_size", "patience"}
+    assert not removed & AutonomousRound.model_fields.keys()
+    value = autonomous_config(round_config).model_dump(mode="json")
+    value["generators"]["ppiflow"]["request"]["samples_per_target"] = 150
+    config = InitialRoundConfig.model_validate(value)
+    assert config.generators["ppiflow"].request["samples_per_target"] == 150
+    value["autonomous"].update(max_rounds=3, max_samples=100, batch_size=5, max_batch_size=20, patience=2)
+    assert InitialRoundConfig.model_validate(value).model_dump(mode="json") == config.model_dump(mode="json")
 
 
 async def test_autonomous_low_iptm_terminates_without_regeneration_or_refold(round_config, fake_services):
-    config = autonomous_config(round_config, min_score=0.95, max_samples=2)
+    config = autonomous_config(round_config, min_score=0.95)
     runner = InitialRoundRunner(config, transport=fake_services[0])
     result = await runner.run()
     assert result["accepted"] == 0
@@ -982,13 +985,14 @@ async def test_invalid_agent_choice_falls_back_before_submission(round_config, f
         return Choice(option_id=999, reason="invalid selection")
 
     monkeypatch.setattr("opendde_harness.plugin.protein_design.initial_round.autonomous.agent_choice", bad_choice)
-    config = autonomous_config(round_config, decision_policy="agent", max_rounds=1, max_samples=3)
+    config = autonomous_config(round_config, decision_policy="agent")
+    config.generators.pop("torchcraft")
     config.autonomous.min_refold_score = 0.95
     runner = InitialRoundRunner(config, transport=fake_services[0])
     result = await runner.run()
     decision = runner.checkpoint.data["autonomous"]["decisions"][0]
     assert decision["fallback"] and decision["samples"] == 1
-    assert result["used_samples"] == 3
+    assert result["used_samples"] == 2
 
 
 async def test_followup_resumes_reserved_decision_without_duplicate_submission(
@@ -1008,7 +1012,8 @@ async def test_followup_resumes_reserved_decision_without_duplicate_submission(
     monkeypatch.setattr(
         "opendde_harness.plugin.protein_design.initial_round.autonomous.evaluate", interrupted_evaluation
     )
-    config = autonomous_config(round_config, max_rounds=1, max_samples=3)
+    config = autonomous_config(round_config)
+    config.generators.pop("torchcraft")
     config.autonomous.min_refold_score = 0.95
     transport, calls = fake_services
     with pytest.raises(RuntimeError, match="interrupted"):
@@ -1016,7 +1021,7 @@ async def test_followup_resumes_reserved_decision_without_duplicate_submission(
     before = calls[("ppiflow", "POST")]
     result = await InitialRoundRunner(config, transport=transport).run()
     assert calls[("ppiflow", "POST")] == before == 2
-    assert result["used_samples"] == 3
+    assert result["used_samples"] == 2
     assert result["followup_rounds"] == 1
 
 
@@ -1034,7 +1039,7 @@ async def test_partial_flow_executes_once_then_rescores_child(round_config, fake
     from opendde_harness.plugin.protein_design.initial_round.runner import digest
 
     base, calls = fake_services
-    config = autonomous_config(round_config, max_rounds=1, max_samples=3)
+    config = autonomous_config(round_config)
     config.generators.pop("torchcraft")
     submitted, failed_ids = [], set()
 
@@ -1133,7 +1138,7 @@ def owned_api_config(round_config, tmp_path, monkeypatch):
 
 async def test_completed_round_releases_owned_apis_after_caching_results(round_config, fake_services, owned_api_config):
     names, cancelled = owned_api_config
-    config = autonomous_config(round_config, max_samples=2)
+    config = autonomous_config(round_config)
     first = await InitialRoundRunner(config, transport=fake_services[0]).run()
     assert set(cancelled) == set(names) and len(cancelled) == 4
     assert all(rows[0]["state"] == "cancel_requested" for rows in first["api_cleanup"].values())
@@ -1155,7 +1160,7 @@ async def test_round_keeps_apis_when_inference_outcome_is_unresolved(
         raise TimeoutError("remote work still pending")
 
     monkeypatch.setattr(InitialRoundRunner, "score", interrupted)
-    config = autonomous_config(round_config, max_samples=2)
+    config = autonomous_config(round_config)
     runner = InitialRoundRunner(config, transport=fake_services[0])
     with pytest.raises(RuntimeError, match="resume this run_dir"):
         await runner.run()
@@ -1170,7 +1175,7 @@ async def test_low_confidence_candidate_is_optimized_and_fully_reevaluated(
 ):
     transport, calls = fake_services
     handler_base = transport.handler
-    config = autonomous_config(round_config, max_samples=3, max_rounds=2)
+    config = autonomous_config(round_config)
     config.generators.pop("torchcraft")
     config.evaluation.torchopt = Service(url="https://torchopt.test", poll_interval=0.001)
     files = SharedFiles(config.path_mappings)
@@ -1270,7 +1275,7 @@ def test_paired_antibodies_do_not_route_into_unsupported_optimization(round_conf
         "generation_request": {"mode": "partial_antibody"},
         "diagnostics": {"diagnosis": "low_ptm", "epitope_hit": True},
     }
-    assert all(option["action"] != "torchopt" for option in options_for(runner, [candidate], 1, 2, []))
+    assert all(option["action"] != "torchopt" for option in options_for(runner, [candidate], 1, []))
 
 
 def test_registered_optimization_service_is_reused_without_new_scientific_inputs(round_config):
@@ -1290,7 +1295,7 @@ async def test_torchscore_feedback_uses_registered_scorer_for_ranking_and_resume
     transport, calls = fake_services
     base = transport.handler
     score_requests = []
-    config = autonomous_config(round_config, max_rounds=1, max_samples=3)
+    config = autonomous_config(round_config)
     config.evaluation.scoring_backend = "torchscore"
     config.evaluation.torchscore = Service(url="https://torchscore.test")
     config.evaluation.af3score = None
@@ -1436,7 +1441,7 @@ async def test_resume_retries_only_failed_model_and_reuses_upstream_results(roun
 async def test_autonomous_recovery_pauses_on_scoring_failure_without_consuming_extra_budget(
     round_config, fake_services
 ):
-    config = autonomous_config(round_config, max_samples=2)
+    config = autonomous_config(round_config)
     base, calls = fake_services
     failed = set()
 
@@ -1658,15 +1663,15 @@ def test_legal_menu_uses_energy_fixed_points_and_stage_without_cdr_alignment(rou
         "interface_fixed_positions": {"B": [1, 3]},
         "diagnostics": {"epitope_hit": False},
     }
-    options = options_for(runner, [candidate], 1, 5, [])
+    options = options_for(runner, [candidate], 1, [])
     assert [o["action"] for o in options] == ["partial_flow"]
     assert options[0]["request"]["fixed_positions"] == "B1,B3"
     assert options[0]["request"]["cdr_position"] == "B2,B4-6"
     assert options[0]["region_method"] == "rosetta_interface_residue_energy"
     candidate["generation_request"] = {"mode": "partial_nanobody"}
-    assert [o["action"] for o in options_for(runner, [candidate], 1, 5, [])] == ["torchopt"]
+    assert [o["action"] for o in options_for(runner, [candidate], 1, [])] == ["torchopt"]
     candidate["optimized_by"] = "torchopt"
-    assert options_for(runner, [candidate], 1, 5, []) == []
+    assert options_for(runner, [candidate], 1, []) == []
 
 
 async def test_qwen_can_stop_only_when_all_four_pass_and_without_extra_submission(
@@ -1730,7 +1735,7 @@ async def test_hotspot_miss_does_not_override_the_confidence_route(round_config,
 
     from opendde_harness.plugin.protein_design.initial_round.artifacts import structure
 
-    config = autonomous_config(round_config, max_samples=2, max_rounds=1)
+    config = autonomous_config(round_config)
     config.generators.pop("torchcraft")
     generated = config.work_dir / "ppiflow/generated.pdb"
     atoms = structure(generated)
@@ -1754,7 +1759,7 @@ async def test_hotspot_miss_does_not_override_the_confidence_route(round_config,
 
 
 async def test_energy_fixed_points_remove_the_need_for_a_cdr_question(round_config, fake_services):
-    config = autonomous_config(round_config, max_rounds=1, max_samples=2)
+    config = autonomous_config(round_config)
     config.generators.pop("torchcraft")
     base, calls = fake_services
 
@@ -1788,7 +1793,7 @@ def test_direct_refold_ranking_does_not_require_rosetta():
 
 
 async def test_rosetta_failure_pauses_autonomy_and_retries_only_energy_step(round_config, fake_services):
-    config = autonomous_config(round_config, max_samples=2)
+    config = autonomous_config(round_config)
     base, calls = fake_services
     failed = set()
 
@@ -1806,9 +1811,10 @@ async def test_rosetta_failure_pauses_autonomy_and_retries_only_energy_step(roun
     with pytest.raises(RuntimeError, match="resume this run_dir"):
         await InitialRoundRunner(config, transport=transport).run()
     result = await InitialRoundRunner(config, transport=transport, retry_failed=True).run()
-    assert result["used_samples"] == 2
-    assert calls[("ppiflow", "POST")] == calls[("torchcraft", "POST")] == 1
-    assert calls[("torchscore", "POST")] == 2
+    assert result["used_samples"] == 4
+    assert calls[("ppiflow", "POST")] == 3  # Original generation plus two new Partial Flow children.
+    assert calls[("torchcraft", "POST")] == 1
+    assert calls[("torchscore", "POST")] == 4
     assert calls[("torchfold", "POST")] == 0
     assert calls[("rosetta", "POST")] == 3
 

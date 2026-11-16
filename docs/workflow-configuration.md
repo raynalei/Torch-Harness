@@ -5,7 +5,7 @@ The two configuration files serve different purposes and are loaded together.
 | File | Purpose |
 | --- | --- |
 | Active `config.json` (normally `~/.opendde_harness/config.json`) | LLM/provider settings and `plugins.config.protein-design.model_services`: registered API kinds, ports, sbatch scripts and service protocol settings. |
-| Task YAML, or the natural-language tool's `run_config` object | This experiment's PDB, hotspots, frameworks, generator requests, chain mappings, selected scorer and autonomous budget. |
+| Task YAML, or the natural-language tool's `run_config` object | This experiment's PDB, hotspots, frameworks, generator requests, chain mappings, selected scorer and per-candidate autonomous thresholds. |
 | Run directory `worker-config.json` / `run-config.json` | Resolved configuration saved for launch/resume and execution. Existing runs retain their recorded settings. |
 
 Missing service blocks in a task are filled from a unique registration with the corresponding `kind`. A complete service block explicitly supplied in the task takes precedence; blocks are not merged field by field. Multiple registrations of one kind require an explicit task service. The selected scorer and TorchFold are resolved for every run; autonomous runs also resolve Rosetta and optional TorchOptimization (`kind: torchopt`). Generator service settings are resolved only for generators declared in the task. Registration does not supply scientific inputs or enable an undeclared generator.
@@ -71,7 +71,7 @@ ddeharness protein-design initial-round-resume --run-dir /absolute/path/to/exist
 
 Recovery loads `worker-config.json` directly. Do not change the name or work directory. The original scientific inputs and generated/refolded artifact hashes must still match. Running/completed workers are returned as-is. Foreground users can instead repeat the original `initial-round -c ... --retry-failed` command with the unchanged task configuration.
 
-Successful generation, scoring, refolding and interface-analysis jobs retain their results. On an explicit recovery, confirmed terminal failed jobs are archived under `checkpoint.json:job_attempts` and only those logical steps receive new remote IDs and idempotency keys. Other candidates' successful results are reused. A failed TorchScore step therefore does not rerun PPIFlow. Local DockQ/result-extraction errors are retried from the saved structures and remote results. Partial Flow and TorchOptimization retain the already planned decision and reserved sample budget; infrastructure retries do not reserve the scientific samples again. Attempt history records the additional execution attempts.
+Successful generation, scoring, refolding and interface-analysis jobs retain their results. On an explicit recovery, confirmed terminal failed jobs are archived under `checkpoint.json:job_attempts` and only those logical steps receive new remote IDs and idempotency keys. Other candidates' successful results are reused. A failed TorchScore step therefore does not rerun PPIFlow. Local DockQ/result-extraction errors are retried from the saved structures and remote results. Partial Flow and TorchOptimization retain the already planned decision and recorded sample count; infrastructure retries do not count those samples again. Attempt history records the additional execution attempts.
 
 Autonomous evaluation errors pause the worker rather than consuming subsequent scientific decisions. Unknown, timed-out polling and uncertain submissions keep their original remote IDs and are queried/reconciled, never blindly resubmitted. TorchOptimization retries require scheduler evidence covering every child receipt and showing all children terminal; partial launcher failures or active/unknown children remain blocked for reconciliation.
 
@@ -101,7 +101,8 @@ is rescored and refolded only when both exceed 0.8.
 The Rosetta operation must return a `ResResE` log matching
 `evaluation.rosetta_residue_glob`, not just `dG_separated`. Hotspot evidence remains
 diagnostic. No CDR alignment question is required for energy-derived fixed points.
-Qwen chooses only supported menu actions within the round/sample budget. Missing
+Qwen chooses only supported menu actions until each candidate finishes its finite
+Partial Flow → optimization route; there is no global round/sample/batch limit. Missing
 scientific outputs pause for recovery. Use a new run name for the changed policy;
 never edit checkpoint hashes to force old decisions through it.
 

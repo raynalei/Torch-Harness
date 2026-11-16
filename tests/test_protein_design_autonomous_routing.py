@@ -101,7 +101,7 @@ def test_missing_or_malformed_residue_logs_fail_explicitly(tmp_path, body):
 async def test_initial_stage_submits_only_the_required_services(
     round_config, fake_services, iptm, ptm, folds, energies, terminated
 ):
-    config = autonomous_config(round_config, max_samples=2)
+    config = autonomous_config(round_config)
     base, calls = fake_services
 
     def handler(request):
@@ -114,8 +114,8 @@ async def test_initial_stage_submits_only_the_required_services(
     await runner.run()
     assert calls[("torchfold", "POST")] == folds
     assert calls[("rosetta", "POST")] == energies
-    assert calls[("torchscore", "POST")] == 2
-    for candidate in runner.checkpoint.data["candidates"]:
+    assert calls[("torchscore", "POST")] == (4 if energies else 2)
+    for candidate in [c for c in runner.checkpoint.data["candidates"] if not c.get("parent_id")]:
         assert (candidate["status"] == "terminated") is terminated
         if energies:
             assert candidate["interface_fixed_positions"] == {"B": [1]}
@@ -125,7 +125,7 @@ async def test_initial_stage_submits_only_the_required_services(
 
 
 async def test_partial_flow_is_rescored_and_directly_refolded_without_second_rosetta(round_config, fake_services):
-    config = autonomous_config(round_config, max_samples=2, max_rounds=1)
+    config = autonomous_config(round_config)
     config.generators.pop("torchcraft")
     base, calls = fake_services
 
@@ -158,7 +158,7 @@ async def test_partial_flow_is_rescored_and_directly_refolded_without_second_ros
 
 @pytest.mark.parametrize("energy,has_fixed", [(-5.0, False), (-5.0001, True)])
 async def test_runner_applies_strict_residue_energy_threshold(round_config, fake_services, energy, has_fixed):
-    config = autonomous_config(round_config, max_samples=2)
+    config = autonomous_config(round_config)
     base, calls = fake_services
 
     def handler(request):
@@ -173,14 +173,20 @@ async def test_runner_applies_strict_residue_energy_threshold(round_config, fake
     runner = InitialRoundRunner(config, transport=httpx.MockTransport(handler))
     await runner.run()
     assert all(
-        c["interface_fixed_positions"] == {"B": [1] if has_fixed else []} for c in runner.checkpoint.data["candidates"]
+        c["interface_fixed_positions"] == {"B": [1] if has_fixed else []}
+        for c in runner.checkpoint.data["candidates"]
+        if not c.get("parent_id")
     )
-    assert all((c["status"] == "terminated") is not has_fixed for c in runner.checkpoint.data["candidates"])
+    assert all(
+        (c["status"] == "terminated") is not has_fixed
+        for c in runner.checkpoint.data["candidates"]
+        if not c.get("parent_id")
+    )
     assert calls[("torchfold", "POST")] == 0
 
 
 async def test_partial_output_cannot_mutate_an_energy_selected_fixed_point(round_config, fake_services):
-    config = autonomous_config(round_config, max_samples=2, max_rounds=1)
+    config = autonomous_config(round_config)
     config.generators.pop("torchcraft")
     base, calls = fake_services
 
@@ -204,7 +210,7 @@ async def test_partial_output_cannot_mutate_an_energy_selected_fixed_point(round
 
 
 async def test_retained_rosetta_log_cannot_change_during_resume(round_config, fake_services):
-    config = autonomous_config(round_config, max_samples=2)
+    config = autonomous_config(round_config)
     base, _ = fake_services
 
     def handler(request):
@@ -246,3 +252,132 @@ def test_missing_calpha_cannot_shift_partial_flow_fixed_indices(tmp_path):
     chains = Chains(target=["A"], binder=["B"], refold_map={"A": "A", "B": "B"})
     with pytest.raises(ValueError, match="complete C-alpha"):
         partial_positions(atoms, chains, {"B": [1]})
+
+
+@pytest.mark.parametrize("legacy_stop", [None, "max_rounds", "sample_budget", "no_improvement"])
+async def test_all_lineages_finish_without_round_sample_or_improvement_caps(
+    round_config, fake_services, monkeypatch, legacy_stop
+):
+    from opendde_harness.plugin.protein_design.initial_round import autonomous
+    from opendde_harness.plugin.protein_design.initial_round.config import Service
+
+    config = autonomous_config(round_config)
+    config.generators.pop("torchcraft")
+    # This request alone exceeds the old 100-sample total cap. Four actual
+    # candidates each need both stages, exceeding the old 3-action cap too.
+    config.generators["ppiflow"].request["samples_per_target"] = 105
+    config.evaluation.torchopt = Service(url="https://torchopt.test")
+    paths = [pdb(config.work_dir / "seeds" / f"{i}.pdb", binder=aa + "AAAAA") for i, aa in enumerate("ACDE")]
+    base, calls = fake_services
+    outputs, optimized = {}, []
+
+    def handler(request):
+        response = base.handler(request)
+        if request.url.host == "ppiflow.test" and request.method == "POST":
+            payload = json.loads(request.content)
+            outputs[response.json()["design_id"]] = {
+                "files": [payload["complex_pdb"]]
+                if payload["mode"].startswith("partial_")
+                else [str(path).replace(str(config.work_dir), "/shared", 1) for path in paths]
+            }
+        if request.url.host == "ppiflow.test" and request.url.path.endswith("/results"):
+            return httpx.Response(200, json=outputs[request.url.path.split("/")[-2]])
+        if request.url.host == "torchscore.test" and request.url.path.endswith("/metrics"):
+            return httpx.Response(200, json={"metrics": [{"iptm": 0.7, "ptm": 0.7}]})
+        return response
+
+    async def optimize(self, decision, round_index):
+        parent = next(c for c in self.checkpoint.data["candidates"] if c["candidate_id"] == decision["parent_id"])
+        child = copy.deepcopy(parent)
+        child.update(
+            candidate_id="optimized-" + parent["candidate_id"],
+            parent_id=parent["candidate_id"],
+            optimized_by="torchopt",
+            round_index=round_index,
+            generation_stage=f"round-{round_index}/torchopt",
+            metrics={},
+            status="generated",
+        )
+        optimized.append(parent["candidate_id"])
+        self.checkpoint.data["candidates"].append(child)
+        self.save_candidates()
+        return [child]
+
+    monkeypatch.setattr(InitialRoundRunner, "optimize", optimize)
+    if legacy_stop:
+        original = autonomous.run_autonomous
+
+        async def legacy_state(runner):
+            runner.checkpoint.data["autonomous"] = {
+                "decisions": [],
+                "used_samples": 105,
+                "repaired": [],
+                "stop_reason": legacy_stop,
+                "stale_rounds": 2,
+            }
+            return await original(runner)
+
+        monkeypatch.setattr(autonomous, "run_autonomous", legacy_state)
+    transport = httpx.MockTransport(handler)
+    runner = InitialRoundRunner(config, transport=transport)
+    result = await runner.run()
+    decisions = runner.checkpoint.data["autonomous"]["decisions"]
+    assert len(decisions) == 8
+    assert [d["action"] for d in decisions].count("partial_flow") == 4
+    assert [d["action"] for d in decisions].count("torchopt") == 4
+    assert len(set(d["parent_id"] for d in decisions)) == 8
+    assert len(optimized) == 4
+    assert result["used_samples"] == 113  # Counter only; never a limit.
+    assert result["stop_reason"] == "no_legal_actions"
+    candidates = runner.checkpoint.data["candidates"]
+    assert len(candidates) == 12
+    assert all(c["status"] == "terminated" for c in candidates if c.get("optimized_by"))
+    if not legacy_stop:
+        before = copy.deepcopy(calls)
+        assert await InitialRoundRunner(config, transport=transport).run() == result
+        assert {k: v for k, v in calls.items() if k[1] == "POST"} == {k: v for k, v in before.items() if k[1] == "POST"}
+
+
+async def test_agent_cannot_stop_while_another_candidate_needs_a_followup(round_config, fake_services, monkeypatch):
+    from opendde_harness.plugin.protein_design.initial_round.autonomous import Choice
+
+    config = autonomous_config(round_config, decision_policy="agent")
+    base, calls = fake_services
+    seen_actions = []
+
+    def handler(request):
+        response = base.handler(request)
+        if request.url.host == "torchscore.test" and request.url.path.endswith("/metrics"):
+            # One high-scoring initial candidate, one that needs Partial Flow.
+            score = 0.7 if calls[("torchscore", "POST")] == 2 else 0.9
+            return httpx.Response(200, json={"metrics": [{"iptm": score, "ptm": 0.9}]})
+        return response
+
+    async def choose(context):
+        actions = [o["action"] for o in context["options"]]
+        seen_actions.append(actions)
+        assert "remaining_samples" not in context
+        if "partial_flow" in actions:
+            assert "stop" not in actions
+        return Choice(option_id=0, reason="finish the pending lineage before stopping")
+
+    monkeypatch.setattr("opendde_harness.plugin.protein_design.initial_round.autonomous.agent_choice", choose)
+    result = await InitialRoundRunner(config, transport=httpx.MockTransport(handler)).run()
+    assert result["accepted"] == 2
+    assert seen_actions == [["partial_flow"], ["stop"]]
+
+
+def test_saved_budget_settings_do_not_block_checkpoint_recovery(round_config, tmp_path):
+    from opendde_harness.plugin.protein_design.initial_round.storage import Checkpoint
+
+    current = {"config": autonomous_config(round_config).model_dump(mode="json"), "inputs": {}}
+    previous = copy.deepcopy(current)
+    previous["config"]["autonomous"].update(max_rounds=3, max_samples=100, batch_size=5, max_batch_size=20, patience=2)
+    root = tmp_path / "legacy-checkpoint"
+    root.mkdir()
+    checkpoint = Checkpoint(root, previous)
+    checkpoint.data["jobs"]["existing"] = {"id": "original-remote-id", "state": "completed"}
+    checkpoint.save()
+    resumed = Checkpoint(root, current)
+    assert resumed.data["jobs"]["existing"]["id"] == "original-remote-id"
+    assert resumed.data["config_snapshot"] == current

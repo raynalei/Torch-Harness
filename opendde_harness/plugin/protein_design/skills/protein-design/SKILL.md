@@ -36,7 +36,7 @@ script/input files, but do not claim sbatch-managed services must be running
 before launch. These instructions apply before the legacy workflow below.
 
 
-For a complete authorized PPIFlow initial round, prefer `protein_initial_round_start`. Accept natural-language task instructions: assemble its structured `run_config` from existing registered service metadata, tool arguments and Python-derived results. Do not require the user to write YAML. A configured `initial_round_config` profile or `config_path` is an optional reusable shortcut, not a launch prerequisite. Never invent missing framework paths, deployment addresses or scientific inputs. The detached Python worker handles generation, GET polling, scorer filtering, refold-input construction, TorchFold and design/reference DockQ. Optional autonomous feedback uses bounded decisions from the configured chat provider; GET polling itself never requires repeated chat calls. Report its run directory concisely; query saved progress with `protein_initial_round_status` when asked. Do not manually poll model APIs from repeated chat turns. PPIFlow-only profiles support paired VH/VL antibodies with `mode: antibody`, both heavy/light chains in `chains.binder`, and a complete `refold_map`; TorchCraft cannot be paired with this mode. Reuse known framework, chain, hotspot and shared-path parameters from the conversation or configuration; derive verifiable structure facts with Python. When using inline run_config, the worker saves its own JSON snapshot for recovery. Do not fabricate these inputs from a PDB alone.
+For a complete authorized PPIFlow initial round, prefer `protein_initial_round_start`. Accept natural-language task instructions: assemble its structured `run_config` from existing registered service metadata, tool arguments and Python-derived results. Do not require the user to write YAML. A configured `initial_round_config` profile or `config_path` is an optional reusable shortcut, not a launch prerequisite. Never invent missing framework paths, deployment addresses or scientific inputs. The detached Python worker handles generation, GET polling, scorer filtering, refold-input construction, TorchFold and design/reference DockQ. Optional autonomous feedback chooses finite per-candidate actions through the configured chat provider; GET polling itself never requires repeated chat calls. Report its run directory concisely; query saved progress with `protein_initial_round_status` when asked. Do not manually poll model APIs from repeated chat turns. PPIFlow-only profiles support paired VH/VL antibodies with `mode: antibody`, both heavy/light chains in `chains.binder`, and a complete `refold_map`; TorchCraft cannot be paired with this mode. Reuse known framework, chain, hotspot and shared-path parameters from the conversation or configuration; derive verifiable structure facts with Python. When using inline run_config, the worker saves its own JSON snapshot for recovery. Do not fabricate these inputs from a PDB alone.
 
 Call `protein_model_list` to discover configured aliases, the active config path and request schemas. An empty models list means tool code is installed but no external API endpoints are configured in that instance; it does not mean the tools are missing. The named tools are `protein_model_ppiflow`, `protein_model_torchcraft`, `protein_model_torchfold`, `protein_model_af3score`, `protein_model_torchscore`, `protein_model_torchopt` and `protein_model_rosetta`; each exposes its own request schema. Use the documented `protein-design models register` command to register operator-supplied endpoints in the correct config, then restart Harness. Never invent a working endpoint. Registration is independent of chat-provider configuration and the legacy compute URL. Use only the operations the registry advertises. A configured endpoint or health response is not evidence of successful model inference.
 
@@ -155,12 +155,16 @@ TorchFold/DockQ, otherwise use registered TorchOptimization. Rescore optimized
 output and refold only if both > 0.8; otherwise terminate. Do not substitute scalar
 dG_separated for per-residue energies or route by hotspot contacts. Missing
 scientific outputs require recovery, never invented values or automatic passes.
-See docs/autonomous-feedback.md for the service output contract and limits.
+Process all eligible candidates without a global round, total sample, batch or
+patience cap. Each lineage has at most one Partial Flow followed by at most one
+optimization. Do not stop while an executable follow-up remains. Initial sample
+counts come from generator requests; counters are reporting only.
+See docs/autonomous-feedback.md for the service output contract and supported modes.
 The supplied TorchScore sbatch uses 8070; TorchOptimization remains 8060.
 
 
 Feedback classifications are Python outputs: `hotspot_hit`, `classify`,
-`repair_allowed`, `check_region_encoding`, `torchopt_supported` and `stop_reason`. Use measured values,
+`repair_allowed`, `check_region_encoding` and `torchopt_supported`. Use measured values,
 not prose guesses, to select legal options. The transport rejects loopback hosts,
 absolute URL overrides, redirects and saved endpoints without allocation proof.
 Registry health discovery is deferred and never probes a local port. Missing

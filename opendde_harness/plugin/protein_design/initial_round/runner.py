@@ -202,7 +202,7 @@ class InitialRoundRunner:
                     from .autonomous import sample_count
 
                     if len(set(paths)) > sample_count(source, request):
-                        raise ValueError("generator returned more candidates than the reserved sample budget")
+                        raise ValueError("generator returned more candidates than requested")
                 added = []
                 for path in sorted(set(paths)):
                     sequences = chain_sequences(path)
@@ -314,7 +314,7 @@ class InitialRoundRunner:
                 admitted.append((path, sequences))
         if not admitted:
             raise ValueError("no final optimization structure preserves target and registered residue constraints")
-        # One admitted structure per reserved slot; all native paths remain in the job record.
+        # One admitted structure per optimization action; all native paths remain in the job record.
         path, sequences = admitted[0]
         identity = f"{stage}/{self.files.remote(path)}"
         candidate_id = "torchopt-" + hashlib.sha256(identity.encode()).hexdigest()[:16]

@@ -181,13 +181,20 @@ class Evaluation(RoundModel):
 
 
 class AutonomousRound(RoundModel):
-    """Bounded follow-up experiments; thresholds are prototype defaults."""
+    """Finite per-candidate follow-ups without a global round or sample budget."""
 
-    max_rounds: int = Field(default=3, ge=1, le=20)
-    max_samples: int = Field(default=100, ge=1, le=10000)
-    batch_size: int = Field(default=5, ge=1, le=1000)
-    max_batch_size: int = Field(default=20, ge=1, le=1000)
-    patience: int = Field(default=2, ge=1)
+    @model_validator(mode="before")
+    @classmethod
+    def discard_legacy_budgets(cls, value):
+        # Old profiles/checkpoints may retain obsolete global scheduling knobs.
+        if isinstance(value, dict):
+            return {
+                key: item
+                for key, item in value.items()
+                if key not in {"max_rounds", "max_samples", "batch_size", "max_batch_size", "patience"}
+            }
+        return value
+
     min_ptm: float = Field(default=0.8, ge=0, le=1)
     min_refold_score: float = Field(default=0.8, ge=0, le=1)
     interface_energy_threshold: float = Field(default=-5.0, lt=0)
@@ -227,12 +234,6 @@ class InitialRoundConfig(RoundModel):
                 raise ValueError("autonomous rounds require scoring_backend=torchscore")
             for source, generator in self.generators.items():
                 validate_request(source, {"name": self.name, **generator.request})
-            initial_samples = sum(
-                int(g.request.get("samples_per_target" if source == "ppiflow" else "num_designs", 1))
-                for source, g in self.generators.items()
-            )
-            if initial_samples > self.autonomous.max_samples:
-                raise ValueError("initial generator requests exceed autonomous.max_samples")
         if not self.generators or "ppiflow" not in self.generators:
             raise ValueError("initial round requires ppiflow")
         if "torchcraft" in self.generators:
