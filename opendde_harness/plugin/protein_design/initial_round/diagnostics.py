@@ -1,4 +1,4 @@
-"""Hotspot evidence and the four-metric action table; no RMSD/flexibility gate."""
+"""Hotspot evidence and staged confidence routing; contacts are diagnostic."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import re
 import numpy as np
 
 from .artifacts import chain_sequences, structure
-from .policy import hotspot_hit, rule_actions
+from .policy import candidate_stage, hotspot_hit, rule_actions
 
 
 def _ca(atoms, chain):
@@ -18,20 +18,27 @@ def _ca(atoms, chain):
     return selected
 
 
-def classify(metrics, evidence, options, score_metric="af3score_iptm", *, iptm_threshold=None, ptm_threshold=None):
+def classify(metrics, evidence, options, score_metric="torchscore_iptm", *, stage="initial", fixed_positions=None):
     actions = rule_actions(
         metrics,
         evidence.get("epitope_hit"),
         score_metric,
-        options.min_score if iptm_threshold is None else iptm_threshold,
-        options.min_ptm if ptm_threshold is None else ptm_threshold,
+        options.min_score,
+        options.min_ptm,
         options.min_dockq,
+        stage=stage,
+        min_refold_iptm=options.min_refold_score,
+        fixed_positions=fixed_positions,
     )
-    if actions == ["regenerate"]:
-        return "off_epitope" if evidence.get("epitope_hit") is False else "low_iptm"
-    return {("torchopt",): "low_ptm", ("partial_flow",): "low_dockq", ("partial_flow", "expand", "stop"): "hit"}.get(
-        tuple(actions), "evaluation_incomplete"
-    )
+    if actions == ["terminate"]:
+        return "low_iptm" if stage == "initial" and metrics.get(score_metric, 1) < options.min_score else "terminated"
+    return {
+        ("torchopt",): "needs_optimization",
+        ("partial_flow",): "interface_fixed_points",
+        ("score_interface",): "needs_interface_score",
+        ("refold",): "needs_refold",
+        ("stop",): "hit",
+    }.get(tuple(actions), "evaluation_incomplete")
 
 
 def analyze(runner, candidate):
@@ -101,7 +108,16 @@ def analyze(runner, candidate):
         evidence.update(hotspots=contacts, epitope_hit=hotspot_hit(contacts, options.contact_distance))
     except (ValueError, KeyError, TypeError, OSError) as exc:
         evidence["notes"].append(str(exc))
-    evidence["diagnosis"] = classify(candidate["metrics"], evidence, options, runner.config.evaluation.score_metric)
+    stage = candidate_stage(candidate)
+    fixed = candidate.get("interface_fixed_positions")
+    evidence["diagnosis"] = classify(
+        candidate["metrics"],
+        evidence,
+        options,
+        runner.config.evaluation.score_metric,
+        stage=stage,
+        fixed_positions=fixed,
+    )
     evidence["allowed_actions"] = rule_actions(
         candidate["metrics"],
         evidence["epitope_hit"],
@@ -109,5 +125,9 @@ def analyze(runner, candidate):
         options.min_score,
         options.min_ptm,
         options.min_dockq,
+        stage=stage,
+        min_refold_iptm=options.min_refold_score,
+        fixed_positions=fixed,
     )
+    evidence["stage"] = stage
     return evidence

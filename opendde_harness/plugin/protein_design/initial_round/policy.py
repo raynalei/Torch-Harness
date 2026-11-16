@@ -51,27 +51,46 @@ def score_passes(metrics, metric, iptm_threshold, ptm_threshold=0.8, *, require_
     return metrics[metric] > iptm_threshold and (not needs_ptm or metrics[ptm_metric] > ptm_threshold)
 
 
-def rule_actions(metrics, hotspot, score_metric="torchscore_iptm", min_iptm=0.5, min_ptm=0.8, min_dockq=0.49):
-    """Ordered decision table. Unknown required evidence never passes a row."""
+def candidate_stage(candidate):
+    if candidate.get("optimized_by") == "torchopt":
+        return "torchopt"
+    if candidate.get("generation_request", {}).get("mode", "").startswith("partial_"):
+        return "partial_flow"
+    return "initial"
+
+
+def rule_actions(
+    metrics,
+    hotspot=None,
+    score_metric="torchscore_iptm",
+    min_iptm=0.5,
+    min_ptm=0.8,
+    min_dockq=0.49,
+    *,
+    stage="initial",
+    min_refold_iptm=0.8,
+    fixed_positions=None,
+):
+    """Route by stage; hotspot contacts remain diagnostic, never a routing gate."""
     import math
 
     def finite(key):
         value = metrics.get(key)
         return type(value) in (int, float) and math.isfinite(value) and 0 <= value <= 1
 
-    if hotspot is False:
-        return ["regenerate"]
-    if hotspot is not True or not finite(score_metric):
-        return []
-    if metrics[score_metric] <= min_iptm:
-        return ["regenerate"]
     ptm_metric = score_metric.removesuffix("_iptm") + "_ptm"
-    if not finite(ptm_metric):
+    if not finite(score_metric) or not finite(ptm_metric):
         return []
-    if metrics[ptm_metric] <= min_ptm:
+    if stage == "initial" and metrics[score_metric] < min_iptm:
+        return ["terminate"]
+    if metrics[score_metric] > min_refold_iptm and metrics[ptm_metric] > min_ptm:
+        if not finite("design_refold_dockq"):
+            return ["refold"]
+        return ["stop"] if metrics["design_refold_dockq"] >= min_dockq else ["terminate"]
+    if stage == "partial_flow":
         return ["torchopt"]
-    if not finite("design_refold_dockq"):
-        return []
-    if metrics["design_refold_dockq"] <= min_dockq:
-        return ["partial_flow"]
-    return ["partial_flow", "expand", "stop"]
+    if stage == "torchopt":
+        return ["terminate"]
+    if fixed_positions is None:
+        return ["score_interface"]
+    return ["partial_flow"] if any(fixed_positions.values()) else ["terminate"]

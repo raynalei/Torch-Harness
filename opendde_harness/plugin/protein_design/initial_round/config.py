@@ -120,6 +120,7 @@ class Evaluation(RoundModel):
     # Explicit scalar field in TorchFold confidence JSON, selected by Service.metric_fields.
     fold_confidence_glob: str = "*summary_confidences*.json"
     rosetta_scores_glob: str = "*.sc"
+    rosetta_residue_glob: str = "*.out"
 
     @property
     def score_options(self):
@@ -136,6 +137,8 @@ class Evaluation(RoundModel):
     @model_serializer(mode="wrap")
     def serialize(self, handler):
         value = handler(self)
+        if self.rosetta_residue_glob == "*.out":
+            value.pop("rosetta_residue_glob", None)
         if self.torchopt is None and not self.torchopt_options:
             value.pop("torchopt", None)
             value.pop("torchopt_options", None)
@@ -186,6 +189,9 @@ class AutonomousRound(RoundModel):
     max_batch_size: int = Field(default=20, ge=1, le=1000)
     patience: int = Field(default=2, ge=1)
     min_ptm: float = Field(default=0.8, ge=0, le=1)
+    min_refold_score: float = Field(default=0.8, ge=0, le=1)
+    interface_energy_threshold: float = Field(default=-5.0, lt=0)
+    interface_distance: float = Field(default=12.0, gt=0)
     min_score: float = Field(default=0.5, ge=0, le=1, validation_alias=AliasChoices("min_score", "min_af3score"))
     min_dockq: float = Field(default=0.49, ge=0, le=1)
     contact_distance: float = Field(default=5.0, gt=0)
@@ -217,6 +223,8 @@ class InitialRoundConfig(RoundModel):
         if self.autonomous is not None:
             if self.evaluation.rosetta is None:
                 raise ValueError("autonomous decisions require the registered Rosetta interface scoring service")
+            if self.evaluation.scoring_backend != "torchscore":
+                raise ValueError("autonomous rounds require scoring_backend=torchscore")
             for source, generator in self.generators.items():
                 validate_request(source, {"name": self.name, **generator.request})
             initial_samples = sum(

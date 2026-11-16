@@ -482,12 +482,20 @@ class InitialRoundRunner:
 
     async def score_interface(self, candidate):
         evaluation = self.config.evaluation
-        if evaluation.rosetta is None or "rosetta_interface_dg" in candidate["metrics"]:
+        if evaluation.rosetta is None:
+            return
+        autonomous = self.config.autonomous
+        if autonomous is not None:
+            if "interface_fixed_positions" in candidate:
+                if digest(self.files.local(candidate["rosetta_energy_log"])) != candidate["rosetta_energy_log_sha256"]:
+                    raise ValueError("Rosetta residue-energy log changed while resuming")
+                return
+        elif "rosetta_interface_dg" in candidate["metrics"]:
             return
         key = candidate["candidate_id"]
         generator = self.config.generators[candidate["source"]]
         directory = self.root / key
-        refolded = bool(candidate.get("refold_structure"))
+        refolded = autonomous is None and bool(candidate.get("refold_structure"))
         model = directory / ("refold.pdb" if refolded else "generated-interface.pdb")
         write_pdb(
             self.files.local(candidate["refold_structure"] if refolded else candidate["generated_structure"]), model
@@ -511,6 +519,38 @@ class InitialRoundRunner:
                 "chain_group_b": "".join(chain_map[c] for c in generator.chains.target),
             },
         )
+        if autonomous is not None:
+            from .interface_energy import interface_energies
+
+            logs = [
+                p
+                for p in output_files(result, evaluation.rosetta, self.files)
+                if p.match(evaluation.rosetta_residue_glob)
+            ]
+            if len(logs) != 1:
+                raise ValueError("Rosetta must return exactly one ResResE log matching evaluation.rosetta_residue_glob")
+            energies = interface_energies(logs[0], model, generator.chains, autonomous.interface_distance)
+            candidate["rosetta_structure"] = "generated"
+            snapshot = directory / "rosetta-residue-energy.out"
+            if snapshot.exists() and digest(snapshot) != digest(logs[0]):
+                raise ValueError("Rosetta residue-energy output changed while resuming")
+            if not snapshot.exists():
+                shutil.copy2(logs[0], snapshot)
+            candidate["rosetta_energy_log"] = self.files.remote(snapshot)
+            candidate["rosetta_energy_log_sha256"] = digest(snapshot)
+            candidate["interface_residue_energies"] = energies
+            candidate["interface_fixed_positions"] = {
+                chain: sorted(
+                    int(residue) for residue, energy in scores.items() if energy < autonomous.interface_energy_threshold
+                )
+                for chain, scores in energies.items()
+            }
+            candidate["metrics"]["rosetta_interface_score"] = sum(
+                energy for scores in energies.values() for energy in scores.values()
+            )
+            write_json(directory / "interface-residue-energies.json", energies)
+            self.save_candidates()
+            return
         field = evaluation.rosetta.metric_fields.get("interface_dg", "dG_separated")
         records = metric_records(result, evaluation.rosetta)
         if not any(select(row, field) is not None for row in records):
@@ -560,7 +600,7 @@ class InitialRoundRunner:
             state = self.checkpoint.data["autonomous"]
             result.update(
                 scoring_backend=self.config.evaluation.scoring_backend,
-                ranking_policy=f"100*{self.config.evaluation.score_metric}-rosetta_interface_dg_desc,ptm_desc,dockq_desc",
+                ranking_policy=f"{self.config.evaluation.score_metric}_desc,ptm_desc,dockq_desc",
                 stop_reason=state.get("stop_reason"),
                 used_samples=state["used_samples"],
                 followup_rounds=len(state["decisions"]),
@@ -609,7 +649,7 @@ class InitialRoundRunner:
                     "torchfold_iptm",
                     "design_refold_dockq",
                     "rosetta_interface_dg",
-                    *(["ranking_score"] if self.config.autonomous is not None else []),
+                    *(["rosetta_interface_score", "ranking_score"] if self.config.autonomous is not None else []),
                     "error",
                 ],
             )
@@ -658,6 +698,13 @@ class InitialRoundRunner:
                                 != candidate[f"{kind}_sha256"]
                             ):
                                 raise ValueError(f"{kind} artifact changed: {candidate['candidate_id']}")
+                    for candidate in candidates:
+                        if (
+                            candidate.get("rosetta_energy_log")
+                            and digest(self.files.local(candidate["rosetta_energy_log"]))
+                            != candidate["rosetta_energy_log_sha256"]
+                        ):
+                            raise ValueError(f"Rosetta residue-energy log changed: {candidate['candidate_id']}")
                     await run_autonomous(self)
                     return self.export(candidates)
                 for c in candidates:

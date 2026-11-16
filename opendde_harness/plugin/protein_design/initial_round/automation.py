@@ -57,7 +57,11 @@ def prepare_run(
             generator["service"] = registered_service(kind)
     configured = {kind for kind in ("af3score", "torchscore") if evaluation.get(kind) is not None}
     registered = {item.get("kind") for item in known.values() if item.get("kind") in {"af3score", "torchscore"}}
-    evaluation["scoring_backend"] = choose_scorer(evaluation.get("scoring_backend"), configured, registered)
+    evaluation["scoring_backend"] = choose_scorer(
+        evaluation.get("scoring_backend") or ("torchscore" if value.get("autonomous") is not None else None),
+        configured,
+        registered,
+    )
     selected = evaluation["scoring_backend"]
     kinds = [selected, "torchfold"]
     if value.get("autonomous") is not None:

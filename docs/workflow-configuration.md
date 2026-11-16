@@ -15,7 +15,7 @@ This resolution applies to the CLI, YAML-based natural-language launches and str
 ## Examples
 
 - [`initial_round_sbatch.yaml`](examples/initial_round_sbatch.yaml) is the original paired VH/VL **single-round** task with its own explicit service blocks. It uses PPIFlow, AF3Score, TorchFold and Rosetta. It has no autonomous section. TorchCraft and TorchOptimization currently support VHH/minibinder modes, not this paired VH/VL mode.
-- [`autonomous_round_registered.yaml`](examples/autonomous_round_registered.yaml) is a VHH autonomous task using registered services. It declares both PPIFlow and TorchCraft, selects TorchScore, and allows TorchOptimization through its registration when the decision system finds a legal optimization action. AF3Score can instead be selected with `scoring_backend: af3score`; the two scorers are alternatives for a run.
+- [`autonomous_round_registered.yaml`](examples/autonomous_round_registered.yaml) is a VHH autonomous task using registered services. It declares both PPIFlow and TorchCraft, selects TorchScore, and allows TorchOptimization through its registration when the decision system finds a legal optimization action. Autonomous runs require TorchScore; AF3Score remains available for single-round runs.
 - [`model_services.json`](examples/model_services.json) is a **configuration fragment**, not a replacement for your complete global config. Merge its `model_services` registrations into the active config and replace the example shared paths with your deployment paths. All seven services include sbatch script placeholders. Ports must match the scripts; these example defaults need not match the older task's explicitly configured ports. TorchOptimization uses port 8060.
 
 After configuring the real shared paths and sbatch scripts:
@@ -88,27 +88,22 @@ Task indexing is a prerequisite for submitting work: a detached workflow registe
 `protein_model_list` searches the instance's indexed jobs directories across workspaces, reports `total_requests`, and accepts `limit`/`offset` to browse older records. Status/results tools automatically locate a unique matching request in those directories. Duplicate local IDs in different directories require selecting the original model_jobs_dir; the tools never silently choose between them. Records remain scoped to the same active config instance and require persistent, accessible storage. Direct HTTP requests outside Harness do not create these records.
 
 
-## Four-metric autonomous loop
+## Staged autonomous loop
 
-See [autonomous feedback](autonomous-feedback.md) for the executable decision table.
-Autonomous runs use `autonomous.min_score=0.5`, `min_ptm=0.8` and `min_dockq=0.49`
-for either selected scorer, plus Python hotspot contacts. The single-round TorchScore
-selection continues to use the evaluation thresholds. Autonomous runs require pTM from
-the selected API and registered Rosetta interface scoring. Rosetta is used for
-ranking (100*ipTM-interface_dg) and Qwen comparison, not a new hard threshold.
-Flexibility/local-RMSD gates are not used. Python derives Partial Flow masks; if a
-selected action has unidentifiable CDRs, it pauses and asks the user for region ranges.
+See [autonomous feedback](autonomous-feedback.md) for the executable route table.
+Autonomous generation uses TorchScore: initial ipTM < 0.5 terminates a candidate;
+both ipTM/pTM > 0.8 go directly to TorchFold/DockQ. Other initial candidates use
+Rosetta residue-pair logs to fix binder residues with summed interface energy < -5
+for Partial Flow. Rescored Partial Flow output goes directly to refolding when both
+scores exceed 0.8, otherwise to registered TorchOptimization. Optimization output
+is rescored and refolded only when both exceed 0.8.
 
-Menu actions execute within the authorized budget. CDR uncertainty on a selected
-Partial Flow pauses at awaiting_regions; the agent asks for the actual user answer
-and uses protein_initial_round_regions to validate it and resume. Ordinary resume
-does not invent or supply the answer.
-The per-action approval tools/CLI are removed. Qwen cannot select an action absent
-from the rule/capability-filtered menu. Unknown evidence never satisfies a rule;
-unsupported actions are recorded and a run with no executable action ends safely.
-This changes scientific policy: use a new run name for an existing configuration
-that contained removed rescue/RMSD settings or different thresholds. Do not edit
-checkpoint hashes to force old decisions through a new policy.
+The Rosetta operation must return a `ResResE` log matching
+`evaluation.rosetta_residue_glob`, not just `dG_separated`. Hotspot evidence remains
+diagnostic. No CDR alignment question is required for energy-derived fixed points.
+Qwen chooses only supported menu actions within the round/sample budget. Missing
+scientific outputs pause for recovery. Use a new run name for the changed policy;
+never edit checkpoint hashes to force old decisions through it.
 
 ## Harvest completed work after worker interruption
 

@@ -144,20 +144,23 @@ new paths or asking for extra workflow annotations. Autonomous feedback can use
 this registered service for low-confidence candidates without per-round approval.
 
 
-AF3Score and TorchScore are independent parallel scoring tools. For feedback,
-select one from the registered services and keep that choice throughout the run.
-Honor an explicit user/backend choice; otherwise reuse the configured scorer or
-sole registered scorer kind. Both available without a preference retains the
-AF3Score default. Never reinterpret TorchScore ipTM as AF3Score or silently switch
-after a service failure. Candidate metrics, diagnostics and ranking use the chosen
-scorer's own field. `autonomous.min_score` is the generic feedback threshold; its
-0.8 default is a prototype policy, not a claim of equal model calibration.
+AF3Score and TorchScore remain independent tools for single-round and standalone
+scoring. Autonomous rounds require TorchScore for every generated/refined candidate:
+initial ipTM < 0.5 terminates that candidate; both ipTM and pTM > 0.8 go directly to
+TorchFold/DockQ. Other initial candidates use the uploaded interface-energy
+algorithm on Rosetta ResResE logs: summed negative target–binder contact energies
+below -5 select fixed binder residues for Partial Flow, with all other binder
+residues mutable. Partial Flow output is rescored: both > 0.8 go directly to
+TorchFold/DockQ, otherwise use registered TorchOptimization. Rescore optimized
+output and refold only if both > 0.8; otherwise terminate. Do not substitute scalar
+dG_separated for per-residue energies or route by hotspot contacts. Missing
+scientific outputs require recovery, never invented values or automatic passes.
+See docs/autonomous-feedback.md for the service output contract and limits.
 The supplied TorchScore sbatch uses 8070; TorchOptimization remains 8060.
 
 
-Feedback classifications are Python outputs: `hotspot_hit`, `flexibility`,
-`local_region`, `classify`, `repair_allowed`, `check_region_encoding`,
-`torchopt_supported`, `generation_order` and `stop_reason`. Use measured values,
+Feedback classifications are Python outputs: `hotspot_hit`, `classify`,
+`repair_allowed`, `check_region_encoding`, `torchopt_supported` and `stop_reason`. Use measured values,
 not prose guesses, to select legal options. The transport rejects loopback hosts,
 absolute URL overrides, redirects and saved endpoints without allocation proof.
 Registry health discovery is deferred and never probes a local port. Missing
