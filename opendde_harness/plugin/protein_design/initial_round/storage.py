@@ -10,7 +10,9 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from .config import PathMapping
+from pydantic import ValidationError
+
+from .config import InitialRoundConfig, PathMapping
 
 
 def fingerprint(value: Any) -> str:
@@ -67,11 +69,23 @@ def select(value: Any, field: str, default=None):
 
 
 def status_profile_identity(value):
-    """Ignore only service response-state selectors, never scientific or deployment inputs."""
+    """Compare validated snapshot meaning, allowing response-state selector corrections."""
     normalized = copy.deepcopy(value)
     workflow = normalized.get("config", normalized)
     if not isinstance(workflow, dict):
         return normalized
+    if {"name", "work_dir", "generators", "evaluation"} <= workflow.keys():
+        try:
+            canonical = InitialRoundConfig.model_validate(workflow).model_dump(mode="json")
+        except ValidationError:
+            # Do not drop unknown/removed scientific settings to force an old run through.
+            pass
+        else:
+            if "config" in normalized:
+                normalized["config"] = canonical
+            else:
+                normalized = canonical
+            workflow = canonical
     services = [g.get("service") for g in workflow.get("generators", {}).values() if isinstance(g, dict)]
     evaluation = workflow.get("evaluation", {})
     services.extend(evaluation.get(kind) for kind in ("af3score", "torchscore", "torchfold", "rosetta", "torchopt"))
@@ -79,6 +93,25 @@ def status_profile_identity(value):
         if isinstance(service, dict) and "url" in service:
             service.pop("status_field", None)
     return normalized
+
+
+def config_difference_paths(previous, current, prefix=""):
+    """Report keys only: config values may contain private paths or credentials."""
+    if isinstance(previous, dict) and isinstance(current, dict):
+        paths = []
+        for key in sorted(previous.keys() | current.keys()):
+            child = f"{prefix}.{key}" if prefix else str(key)
+            if key not in previous or key not in current:
+                paths.append(child)
+            else:
+                paths.extend(config_difference_paths(previous[key], current[key], child))
+        return paths
+    if isinstance(previous, list) and isinstance(current, list):
+        paths = [f"{prefix}.length"] if len(previous) != len(current) else []
+        for index, (old, new) in enumerate(zip(previous, current)):
+            paths.extend(config_difference_paths(old, new, f"{prefix}[{index}]"))
+        return paths
+    return [prefix or "<root>"] if previous != current else []
 
 
 def response_state(value, field="status"):
@@ -111,19 +144,25 @@ class Checkpoint:
                         legacy = root / "run-config.json"
                         if legacy.is_file():
                             previous = {"config": json.loads(legacy.read_text()), "inputs": config["inputs"]}
-                    if (
-                        previous is None
-                        or fingerprint(previous) != self.data.get("config_hash")
-                        or status_profile_identity(previous) != status_profile_identity(config)
-                    ):
+                    if previous is None or fingerprint(previous) != self.data.get("config_hash"):
                         raise ValueError(
-                            "configuration changed; use a new work_dir rather than resuming incompatible jobs"
+                            "configuration changed or original hash evidence is missing; preserve checkpoint and run-config.json for recovery"
+                        )
+                    differences = config_difference_paths(
+                        status_profile_identity(previous), status_profile_identity(config)
+                    )
+                    if differences:
+                        raise ValueError(
+                            "configuration changed at "
+                            + ", ".join(differences[:32])
+                            + "; inspect saved inputs/settings before starting a new experiment"
                         )
                     self.data.setdefault("response_profile_history", []).append(
                         {
                             "previous_hash": self.data["config_hash"],
                             "current_hash": signature,
-                            "change": "service.status_field only",
+                            "change": "compatible snapshot serialization/status_field",
+                            "serialized_differences": config_difference_paths(previous, config),
                         }
                     )
                 self.data["config_hash"] = signature

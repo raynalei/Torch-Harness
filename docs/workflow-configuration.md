@@ -133,3 +133,14 @@ legacy runs can use their unchanged run-config.json plus matching input hashes.
 Threshold/sequence/input/URL changes are still rejected. Do not manually rewrite a
 checkpoint hash. A worker already running old code must be stopped/restarted before
 new parsing code takes effect; restarting the TUI alone does not hot-reload the worker.
+
+Snapshot comparisons normalize both configurations through the same current schema
+before comparing identities. An omitted schema default or an equivalent supported
+alias therefore does not by itself reject a resume after model serialization.
+Checkpoint migration still requires the exact original stored hash as evidence;
+its history records the raw serialized field differences. Explicit scientific
+settings, input digests and service URLs remain protected. Failed compatibility
+checks name differing field paths without printing their values. Removed/invalid
+legacy scientific settings are not silently discarded. The launch snapshot check
+in automation.py is a dictionary comparison; the later Checkpoint check separately
+verifies the hash of configuration plus input digests.

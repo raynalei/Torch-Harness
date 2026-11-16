@@ -1923,7 +1923,10 @@ async def test_completed_refold_is_harvested_after_worker_crash_and_status_profi
     assert all(
         c.get("refold_structure") and "torchfold_iptm" in c["metrics"] for c in restored.checkpoint.data["candidates"]
     )
-    assert restored.checkpoint.data["response_profile_history"][-1]["change"] == "service.status_field only"
+    assert (
+        restored.checkpoint.data["response_profile_history"][-1]["change"]
+        == "compatible snapshot serialization/status_field"
+    )
 
 
 @pytest.mark.parametrize(
@@ -2020,3 +2023,49 @@ def test_prefixed_confidence_pairs_with_unique_unprefixed_model_and_rejects_ambi
     result["files"].append(files.remote(another))
     with pytest.raises(ValueError, match="pair with exactly one"):
         refold_output(result, service, files, "*summary_confidences*.json")
+
+
+def test_legacy_checkpoint_resume_normalizes_snapshot_without_losing_remote_jobs(round_config, tmp_path):
+    from opendde_harness.plugin.protein_design.initial_round.storage import fingerprint, write_json
+
+    legacy = round_config.model_dump(mode="json")
+    legacy["generators"]["ppiflow"]["service"].pop("startup_poll_interval")
+    legacy["evaluation"]["torchfold"].pop("slurm_command_timeout")
+    old_payload = {"config": legacy, "inputs": {"input.pdb": "same-digest"}}
+    write_json(tmp_path / "run-config.json", legacy)
+    write_json(
+        tmp_path / "checkpoint.json",
+        {
+            "config_hash": fingerprint(old_payload),
+            "jobs": {"refold/candidate": {"id": "existing-remote-id", "state": "waiting"}},
+            "version": 1,
+        },
+    )
+    new_payload = {"config": round_config.model_dump(mode="json"), "inputs": old_payload["inputs"]}
+    restored = Checkpoint(tmp_path, new_payload)
+    assert restored.data["jobs"]["refold/candidate"]["id"] == "existing-remote-id"
+    assert (
+        "config.evaluation.torchfold.slurm_command_timeout"
+        in restored.data["response_profile_history"][0]["serialized_differences"]
+    )
+    incompatible = {**new_payload, "inputs": {"input.pdb": "different-digest"}}
+    with pytest.raises(ValueError, match=r"inputs\.input\.pdb"):
+        Checkpoint(tmp_path, incompatible)
+
+
+def test_configuration_identity_normalizes_aliases_but_keeps_scientific_changes(round_config):
+    import copy
+
+    from opendde_harness.plugin.protein_design.initial_round.storage import (
+        config_difference_paths,
+        status_profile_identity,
+    )
+
+    config = autonomous_config(round_config).model_dump(mode="json")
+    legacy = copy.deepcopy(config)
+    legacy["autonomous"]["min_af3score"] = legacy["autonomous"].pop("min_score")
+    assert status_profile_identity(legacy) == status_profile_identity(config)
+    legacy["autonomous"]["min_af3score"] = 0.95
+    assert config_difference_paths(status_profile_identity(legacy), status_profile_identity(config)) == [
+        "autonomous.min_score"
+    ]

@@ -528,3 +528,39 @@ def test_detached_resume_accepts_status_selector_fix_but_preserves_scientific_gu
     with pytest.raises(ValueError, match="configuration changed"):
         start_round(config)
     assert len(calls) == 2
+
+
+def test_resume_normalizes_legacy_snapshot_defaults_before_launch_comparison(profile, monkeypatch):
+    from opendde_harness.plugin.protein_design.initial_round import automation
+
+    config = prepare_run(profile)
+    root = config.work_dir / config.name
+    root.mkdir()
+    legacy = config.model_dump(mode="json")
+    legacy["generators"]["ppiflow"]["service"].pop("startup_poll_interval")
+    legacy["evaluation"]["torchfold"].pop("slurm_command_timeout")
+    write_json(root / "worker-config.json", legacy)
+    calls = []
+
+    class Process:
+        pid = 12345
+
+        def wait(self):
+            return 0
+
+    def popen(command, **kwargs):
+        calls.append(command)
+        return Process()
+
+    monkeypatch.setattr(automation.subprocess, "Popen", popen)
+    assert automation.resume_round(root)["state"] == "starting"
+    assert len(calls) == 1
+    assert "--retry-failed" in calls[0]
+    saved = json.loads((root / "worker-config.json").read_text())
+    assert saved == config.model_dump(mode="json")
+    changed = config.model_copy(deep=True)
+    changed.evaluation.min_refold_iptm = 0.1
+    with pytest.raises(ValueError, match=r"evaluation\.min_refold_iptm") as error:
+        automation.start_round(changed)
+    assert "0.1" not in str(error.value)  # Diagnostics contain paths, not configuration values.
+    assert len(calls) == 1

@@ -18,7 +18,12 @@ import yaml
 
 from opendde_harness.plugin.protein_design.initial_round.config import InitialRoundConfig
 from opendde_harness.plugin.protein_design.initial_round.policy import choose_scorer
-from opendde_harness.plugin.protein_design.initial_round.storage import SharedFiles, status_profile_identity, write_json
+from opendde_harness.plugin.protein_design.initial_round.storage import (
+    SharedFiles,
+    config_difference_paths,
+    status_profile_identity,
+    write_json,
+)
 from opendde_harness.utils.portable_lock import file_lock
 
 
@@ -170,10 +175,16 @@ def _start_round(config: InitialRoundConfig, *, attach_jobs: dict[str, str] | No
             raise ValueError("pipeline input contents changed; choose a new run name")
         snapshot = root / "worker-config.json"
         value = config.model_dump(mode="json")
-        if snapshot.exists() and status_profile_identity(json.loads(snapshot.read_text())) != status_profile_identity(
-            value
-        ):
-            raise ValueError("run configuration changed; choose a new run name")
+        if snapshot.exists():
+            differences = config_difference_paths(
+                status_profile_identity(json.loads(snapshot.read_text())), status_profile_identity(value)
+            )
+            if differences:
+                raise ValueError(
+                    "run configuration changed at "
+                    + ", ".join(differences[:32])
+                    + f"; compare {snapshot} with the requested config before choosing a new run name"
+                )
         if (root / "launch.json").exists():
             current = round_status(root)
             if current["state"] in {"starting", "running", "completed"}:
