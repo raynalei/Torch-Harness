@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
@@ -65,6 +66,38 @@ def select(value: Any, field: str, default=None):
     return value
 
 
+def status_profile_identity(value):
+    """Ignore only service response-state selectors, never scientific or deployment inputs."""
+    normalized = copy.deepcopy(value)
+    workflow = normalized.get("config", normalized)
+    if not isinstance(workflow, dict):
+        return normalized
+    services = [g.get("service") for g in workflow.get("generators", {}).values() if isinstance(g, dict)]
+    evaluation = workflow.get("evaluation", {})
+    services.extend(evaluation.get(kind) for kind in ("af3score", "torchscore", "torchfold", "rosetta", "torchopt"))
+    for service in services:
+        if isinstance(service, dict) and "url" in service:
+            service.pop("status_field", None)
+    return normalized
+
+
+def response_state(value, field="status"):
+    """Read status/state aliases, rejecting contradictory evidence."""
+
+    def normalize(raw):
+        parts = str(raw or "UNKNOWN").upper().split()
+        state = parts[0].rstrip("+") if parts else "UNKNOWN"
+        return {"SUCCESS": "COMPLETED", "SUCCEEDED": "COMPLETED", "CANCELED": "CANCELLED"}.get(state, state)
+
+    selected = select(value, field)
+    if field not in {"status", "state"}:
+        return normalize(selected)
+    alternate = select(value, "state" if field == "status" else "status")
+    if selected is not None and alternate is not None and normalize(selected) != normalize(alternate):
+        raise ValueError("API response has conflicting status/state fields; correct the response profile")
+    return normalize(selected if selected is not None else alternate)
+
+
 class Checkpoint:
     def __init__(self, root: Path, config: dict[str, Any]):
         self.path = root / "checkpoint.json"
@@ -73,12 +106,31 @@ class Checkpoint:
             self.data = json.loads(self.path.read_text())
             if self.data.get("config_hash") != signature:
                 if self.data.get("jobs") or self.data.get("candidates"):
-                    raise ValueError("configuration changed; use a new work_dir rather than resuming incompatible jobs")
+                    previous = self.data.get("config_snapshot")
+                    if previous is None and "config" in config and "inputs" in config:
+                        legacy = root / "run-config.json"
+                        if legacy.is_file():
+                            previous = {"config": json.loads(legacy.read_text()), "inputs": config["inputs"]}
+                    if (
+                        previous is None
+                        or fingerprint(previous) != self.data.get("config_hash")
+                        or status_profile_identity(previous) != status_profile_identity(config)
+                    ):
+                        raise ValueError(
+                            "configuration changed; use a new work_dir rather than resuming incompatible jobs"
+                        )
+                    self.data.setdefault("response_profile_history", []).append(
+                        {
+                            "previous_hash": self.data["config_hash"],
+                            "current_hash": signature,
+                            "change": "service.status_field only",
+                        }
+                    )
                 self.data["config_hash"] = signature
-                self.save()
         else:
             self.data = {"version": 1, "config_hash": signature, "jobs": {}}
-            self.save()
+        self.data["config_snapshot"] = copy.deepcopy(config)
+        self.save()
 
     def save(self):
         write_json(self.path, self.data)

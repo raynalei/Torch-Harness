@@ -1,27 +1,13 @@
-"""Local geometry evidence for bounded initial-round decisions, without model calls."""
+"""Hotspot evidence and the four-metric action table; no RMSD/flexibility gate."""
 
 from __future__ import annotations
 
-import math
 import re
 
 import numpy as np
-from pydantic import Field, model_validator
 
 from .artifacts import chain_sequences, structure
-from .config import RoundModel
-from .policy import flexibility, hotspot_hit, local_region, score_passes
-
-
-class DesignRegion(RoundModel):
-    chain: str
-    positions: list[int] = Field(min_length=1)
-
-    @model_validator(mode="after")
-    def sequence_positions(self):
-        if any(p < 1 for p in self.positions) or len(set(self.positions)) != len(self.positions):
-            raise ValueError("design region positions must be unique, one-based sequence positions")
-        return self
+from .policy import hotspot_hit, rule_actions
 
 
 def _ca(atoms, chain):
@@ -32,65 +18,35 @@ def _ca(atoms, chain):
     return selected
 
 
-def _fit(reference, mobile):
-    if len(reference) < 3 or np.linalg.matrix_rank(reference - reference.mean(axis=0)) < 2:
-        raise ValueError("insufficient non-collinear target atoms for alignment")
-    a, b = reference.mean(axis=0), mobile.mean(axis=0)
-    u, _, vt = np.linalg.svd((mobile - b).T @ (reference - a))
-    rotation = u @ np.diag([1.0, 1.0, np.linalg.det(u @ vt)]) @ vt
-    return rotation, a - b @ rotation
-
-
-def _rmsd(displacements):
-    return float(np.sqrt(np.mean(np.square(displacements))))
-
-
-def classify(metrics, evidence, options, score_metric="af3score_iptm", *, iptm_threshold=None, ptm_threshold=0.8):
-    required = (
+def classify(metrics, evidence, options, score_metric="af3score_iptm", *, iptm_threshold=None, ptm_threshold=None):
+    actions = rule_actions(
+        metrics,
+        evidence.get("epitope_hit"),
         score_metric,
-        "design_refold_dockq",
-        "rosetta_interface_dg",
-        *(["torchscore_ptm"] if score_metric == "torchscore_iptm" else []),
+        options.min_score if iptm_threshold is None else iptm_threshold,
+        options.min_ptm if ptm_threshold is None else ptm_threshold,
+        options.min_dockq,
     )
-    if any(
-        isinstance(metrics.get(k), bool)
-        or not isinstance(metrics.get(k), (int, float))
-        or not math.isfinite(metrics[k])
-        for k in required
-    ):
-        return "evaluation_incomplete"
-    if evidence.get("epitope_hit") is False:
-        return "off_epitope"
-    if evidence.get("epitope_hit") is not True:
-        return "uncertain"
-    threshold = (
-        iptm_threshold
-        if iptm_threshold is not None
-        else (0.5 if score_metric == "torchscore_iptm" else options.min_score)
+    if actions == ["regenerate"]:
+        return "off_epitope" if evidence.get("epitope_hit") is False else "low_iptm"
+    return {("torchopt",): "low_ptm", ("partial_flow",): "low_dockq", ("partial_flow", "expand", "stop"): "hit"}.get(
+        tuple(actions), "evaluation_incomplete"
     )
-    if (
-        score_passes(metrics, score_metric, threshold, ptm_threshold)
-        and metrics["design_refold_dockq"] > options.min_dockq
-    ):
-        return "hit"
-    if metrics["design_refold_dockq"] <= options.min_dockq:
-        if evidence.get("local_region"):
-            return "local_change"
-        return "pose_change"
-    return "low_confidence"
 
 
 def analyze(runner, candidate):
-    """Missing/ambiguous mappings yield unknown evidence, never invented regions."""
     options = runner.config.autonomous
-    generator = runner.config.generators[candidate["source"]]
-    chains = generator.chains
-    original = structure(runner.files.local(candidate["generated_structure"]))
-    folded = structure(runner.files.local(candidate["refold_structure"]))
-    if not np.isfinite(original.coord).all() or not np.isfinite(folded.coord).all():
+    chains = runner.config.generators[candidate["source"]].chains
+    refolded = bool(candidate.get("refold_structure"))
+
+    def observed_chain(chain):
+        return chains.refold_map[chain] if refolded else chain
+
+    path = candidate["refold_structure"] if refolded else candidate["generated_structure"]
+    folded = structure(runner.files.local(path))
+    if not np.isfinite(folded.coord).all():
         raise ValueError("non-finite structure coordinates")
-    evidence = {"epitope_hit": None, "local_region": None, "flexibility": "unknown", "notes": []}
-    mapped_hotspots = []
+    evidence = {"epitope_hit": None, "hotspot_structure": "refold" if refolded else "generated", "notes": []}
     try:
         ppiflow = runner.config.generators["ppiflow"].request
         hotspots = ppiflow.get("specified_hotspots", "")
@@ -101,7 +57,7 @@ def analyze(runner, candidate):
         input_sequences = chain_sequences(runner.files.local(input_path))
         contacts = []
         binder_atoms = folded[
-            np.isin(folded.chain_id, [chains.refold_map[c] for c in chains.binder]) & (folded.element != "H")
+            np.isin(folded.chain_id, [observed_chain(c) for c in chains.binder]) & (folded.element != "H")
         ]
         if not len(binder_atoms):
             raise ValueError("missing binder heavy atoms")
@@ -128,8 +84,7 @@ def analyze(runner, candidate):
             if len(target_matches) != 1:
                 raise ValueError("hotspot cannot be mapped uniquely through target cropping/chain renaming")
             target, index = target_matches[0]
-            mapped_hotspots.append((target, index))
-            ca = _ca(folded, chains.refold_map[target])
+            ca = _ca(folded, observed_chain(target))
             if len(ca) != len(candidate["chains"][target]):
                 raise ValueError("incomplete target coordinates")
             residue = ca[index]
@@ -146,97 +101,13 @@ def analyze(runner, candidate):
         evidence.update(hotspots=contacts, epitope_hit=hotspot_hit(contacts, options.contact_distance))
     except (ValueError, KeyError, TypeError, OSError) as exc:
         evidence["notes"].append(str(exc))
-    try:
-        reference, mobile = [], []
-        for chain in chains.target:
-            a, b = _ca(original, chain), _ca(folded, chains.refold_map[chain])
-            if len(a) != len(candidate["chains"][chain]) or len(a) != len(b):
-                raise ValueError("incomplete target C-alpha coordinates")
-            reference.extend(a.coord)
-            mobile.extend(b.coord)
-        reference, mobile = np.asarray(reference), np.asarray(mobile)
-        core = np.ones(len(reference), dtype=bool)
-        for _ in range(3):
-            rotation, translation = _fit(reference[core], mobile[core])
-            deviation = np.linalg.norm(reference - (mobile @ rotation + translation), axis=1)
-            keep = deviation <= options.framework_rmsd
-            if np.array_equal(core, keep):
-                break
-            core = keep
-        rotation, translation = _fit(reference[core], mobile[core])
-        if core.mean() < 0.5:
-            raise ValueError("no majority stable target core")
-        evidence["target_core_fraction"] = float(core.mean())
-        if mapped_hotspots:
-            import biotite.structure as struc
-
-            local_motion, loop_flags = [], []
-            for chain in chains.target:
-                indices = [index for target, index in mapped_hotspots if target == chain]
-                if not indices:
-                    continue
-                a, b = _ca(original, chain), _ca(folded, chains.refold_map[chain])
-                neighborhood = (np.linalg.norm(a.coord[:, None] - a.coord[indices][None, :], axis=-1) < 10).any(axis=1)
-                sse = struc.annotate_sse(original[original.chain_id == chain])
-                if len(sse) != len(a) or np.any(sse[neighborhood] == ""):
-                    continue
-                loop_flags.extend((sse[neighborhood] == "c").tolist())
-                local_motion.extend(np.linalg.norm(a.coord - (b.coord @ rotation + translation), axis=1)[neighborhood])
-            if loop_flags:
-                fraction, motion = float(np.mean(loop_flags)), _rmsd(local_motion)
-                evidence["flexibility_evidence"] = {
-                    "loop_fraction": fraction,
-                    "local_rmsd": motion,
-                    "interpretation": "structure-pair routing hint, not measured dynamics",
-                }
-                evidence["flexibility"] = flexibility(fraction, motion, options.framework_rmsd)
-        from .regions import derive_regions
-
-        deviations, framework, region_rmsd = {}, [], {}
-        for chain in chains.binder:
-            a, b = _ca(original, chain), _ca(folded, chains.refold_map[chain])
-            if len(a) != len(candidate["chains"][chain]) or len(a) != len(b):
-                raise ValueError("incomplete binder C-alpha coordinates")
-            deviations[chain] = np.linalg.norm(a.coord - (b.coord @ rotation + translation), axis=1)
-        request = candidate.get("generation_request", generator.request)
-        regions, origin = derive_regions(original, chains, request, deviations, options.region_rmsd)
-        evidence["region_source"] = origin
-        evidence["repair_regions"] = {name: region.model_dump() for name, region in regions.items()}
-        for chain in chains.binder:
-            mutable = set()
-            for name, region in regions.items():
-                if region.chain == chain:
-                    positions = np.asarray(region.positions) - 1
-                    mutable.update(positions.tolist())
-                    region_rmsd[name] = _rmsd(deviations[chain][positions])
-            framework.extend(d for index, d in enumerate(deviations[chain]) if index not in mutable)
-        evidence["binder_rmsd"] = _rmsd(np.concatenate(list(deviations.values())))
-        if regions and len(framework) >= 3 and len(framework) >= sum(map(len, deviations.values())) / 2:
-            evidence.update(framework_rmsd=_rmsd(framework), region_rmsd=region_rmsd)
-            evidence["local_region"] = local_region(
-                evidence["framework_rmsd"],
-                region_rmsd,
-                len(framework),
-                sum(map(len, deviations.values())),
-                options.framework_rmsd,
-                options.region_rmsd,
-            )
-        else:
-            evidence["notes"].append("no localized mutable loop with a majority stable binder core")
-        if evidence["flexibility"] == "unknown":
-            evidence["notes"].append("flexibility evidence insufficient; use bounded generator trials")
-    except (ValueError, KeyError, TypeError, np.linalg.LinAlgError) as exc:
-        evidence["local_region"] = None
-        evidence["notes"].append(str(exc))
-    evaluation = runner.config.evaluation
-    evidence["diagnosis"] = classify(
+    evidence["diagnosis"] = classify(candidate["metrics"], evidence, options, runner.config.evaluation.score_metric)
+    evidence["allowed_actions"] = rule_actions(
         candidate["metrics"],
-        evidence,
-        options,
-        evaluation.score_metric,
-        iptm_threshold=evaluation.min_torchscore_iptm
-        if evaluation.scoring_backend == "torchscore"
-        else options.min_score,
-        ptm_threshold=evaluation.min_torchscore_ptm,
+        evidence["epitope_hit"],
+        runner.config.evaluation.score_metric,
+        options.min_score,
+        options.min_ptm,
+        options.min_dockq,
     )
     return evidence

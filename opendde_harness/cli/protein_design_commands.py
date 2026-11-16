@@ -92,24 +92,22 @@ def initial_round(
         raise typer.Exit(2)
 
 
-@protein_design_app.command("initial-round-approve")
-def initial_round_approve(
+@protein_design_app.command("initial-round-regions")
+def initial_round_regions(
     run_dir: Path = typer.Option(..., "--run-dir", exists=True, file_okay=False, resolve_path=True),
-    approval_id: str = typer.Option(..., "--approval-id"),
-    confirmed: bool = typer.Option(False, "--approve", help="Explicitly approve the displayed pending action."),
+    question_id: str = typer.Option(..., "--question-id"),
+    cdr_position: str = typer.Option(..., "--cdr-position"),
+    fixed_positions: str | None = typer.Option(None, "--fixed-positions"),
 ):
-    """Approve one pending refinement action and resume the saved workflow."""
-    from opendde_harness.plugin.protein_design.initial_round.approval import approve_action
+    """Supply a user CDR answer for a paused workflow and resume saved steps."""
     from opendde_harness.plugin.protein_design.initial_round.automation import resume_round
+    from opendde_harness.plugin.protein_design.initial_round.region_input import supply_regions
 
-    if not confirmed:
-        error_console.print("Review the pending action and pass --approve to authorize this exact request.")
-        raise typer.Exit(1)
     try:
-        approve_action(run_dir, approval_id)
+        supply_regions(run_dir, question_id, cdr_position, fixed_positions)
         result = resume_round(run_dir)
     except Exception as exc:
-        error_console.print(f"Action approval failed: {exc}", markup=False)
+        error_console.print(f"Region resolution failed: {exc}", markup=False)
         raise typer.Exit(1) from exc
     typer.echo(json.dumps(result, ensure_ascii=False, allow_nan=False))
 

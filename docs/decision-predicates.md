@@ -1,91 +1,43 @@
-# Executable feedback predicates
+# Executable autonomous predicates
 
-All decision inputs come from registered request arguments, API metrics or local
-Python geometry calculations. No human flexibility label or extra region
-annotation is required. These functions are called by the actual router, not
-pseudocode disconnected from execution.
-
-## Function map
-
-| Diagram node | Python entry point | Output / decision |
-| --- | --- | --- |
-| Scoring tool | `policy.choose_scorer(explicit, configured, registered)` | Explicit choice wins; configured/sole registered TorchScore selects TorchScore; otherwise AF3Score |
-| Hotspot contacted | `policy.hotspot_hit(contacts, cutoff=5.0)` | Any minimum heavy-atom distance <5 Å; empty evidence is `None`, not `False` |
-| Neighborhood evidence | `policy.flexibility(loop_fraction, local_rmsd, motion_threshold=2.0)` | `flexible` if fraction >=0.5 and RMSD >2 Å; `rigid` if fraction <0.3 and RMSD <2 Å; otherwise `unknown` |
-| Local problem | `policy.local_region(core_rmsd, region_rmsds, core_count, total_count)` | Exactly one region >3 Å, remaining core <2 Å with at least three residues and >=half the binder; otherwise `None` |
-| Quality class | `diagnostics.classify(metrics, evidence, options, score_metric)` | `hit`, `off_epitope`, `uncertain`, `local_change`, `pose_change`, `low_confidence`, `evaluation_incomplete` |
-| Repair eligibility | `policy.repair_allowed(candidate, repaired)` | Candidate not already repaired and has no `parent_id` |
-| Region encodable | `regions.check_region_encoding(atoms, selections)` | `{"ok": true, "encoded": "A26-33", "reason": null}` or `ok=false` with a reason |
-| Partial request valid | `autonomous._partial_request(...)` | Existing registered PPIFlow schema validates computed masks and inherited parameters; returns request or `None` |
-| TorchOpt supported | `policy.torchopt_supported(chains, mode, registered)` | Registered service, compatible VHH/minibinder mode, one binder/target, one-character IDs |
-| Generator preference | `policy.generation_order(available, best_flexibility, used)` | Flexible -> TorchCraft first; rigid -> PPIFlow first; unknown -> fewer prior uses; absent generators omitted |
-| Stop | `policy.stop_reason(round_index, used_samples, stale_rounds, options)` | `max_rounds`, `sample_budget`, `no_improvement`, or `None` |
-
-Modules live under `opendde_harness.plugin.protein_design.initial_round`.
-`diagnostics.analyze(runner, candidate)` reads retained structures and computes:
-
-- Input hotspot IDs -> unique target sequence mapping -> refold chain mapping.
-- Minimum heavy-atom contact distances; ambiguous mappings remain unknown.
-- Stable-target-core alignment and binder/region C-alpha deviations using that fit.
-- Biotite secondary structure within a 10 Å C-alpha neighborhood of the hotspots;
-  the coil fraction and target displacement feed `flexibility`.
-- Regions from existing `cdr_position` / `fixed_positions`, or Python-computed
-  displaced coil runs when those arguments are absent.
-
-`check_region_encoding` converts one-based internal sequence positions back to
-actual PDB residue IDs. Empty selections, missing coordinates, insertion-coded
-ambiguity, invalid ranges or unsupported chain IDs cannot yield a valid mask.
-Explicit fixed positions always win. A short direct example using computed data:
+All scientific decisions use `policy.rule_actions(metrics, hotspot, score_metric,
+min_iptm=0.5, min_ptm=0.8, min_dockq=0.49)`:
 
 ```python
-from opendde_harness.plugin.protein_design.initial_round.policy import (
-    hotspot_hit, flexibility, local_region,
-)
-
-hit = hotspot_hit([{"distance": 4.2}, {"distance": 6.0}])  # True
-route = flexibility(loop_fraction=0.7, local_rmsd=3.1)    # flexible
-region = local_region(1.1, {"H1": 0.8, "H3": 4.2}, 90, 110)  # H3
+if hotspot is False:
+    return ["regenerate"]
+if hotspot is not True or iptm_is_unknown:
+    return []
+if iptm <= 0.5:
+    return ["regenerate"]
+if ptm_is_unknown:
+    return []
+if ptm <= 0.8:
+    return ["torchopt"]
+if dockq_is_unknown:
+    return []
+if dockq <= 0.49:
+    return ["partial_flow"]
+return ["partial_flow", "expand", "stop"]
 ```
 
-The values in that example are illustrative; production uses measured Python
-results. Flexibility is a routing hint, not measured physical dynamics. The agent
-chooses from the computed legal menu; each selected action records its `basis`,
-request, reason and reserved budget in `decisions.json`.
+| Function | Purpose |
+| --- | --- |
+| `diagnostics.analyze` | Maps hotspot IDs and computes minimum heavy-atom contact distances; records which structure was used |
+| `policy.hotspot_hit` | At least one specified hotspot closer than 5 Å; missing evidence is unknown |
+| `autonomous.evaluate` | Scores every candidate, deduplicates, refolds those passing both confidence gates, computes DockQ and records the rule classification |
+| `autonomous.options_for` | Builds only rule-permitted, capability-valid options for Qwen |
+| `regions.infer_cdr_positions` | Python framework alignment estimates three CDRs and includes inserted query residues |
+| `regions.python_partial_positions` | Encodes CDR/fixed complementary masks from actual candidate PDB numbering |
+| `policy.torchopt_supported` | Requires a registered optimizer, compatible single-chain mode and valid chain IDs |
+| `policy.repair_allowed` | Avoids repeating refinement of the same parent; children remain eligible |
+| `policy.stop_reason` | Enforces extra-round cap, total requested-sample budget and consecutive no-improvement cap |
 
-## Mandatory Slurm gateway
-
-```mermaid
-flowchart LR
-    A[ServiceConnection.get / post] --> B[api_path: reject endpoint overrides]
-    B --> C[require_sbatch: existing script and host resolution enabled]
-    C --> D[sbatch --parsable]
-    D --> E[squeue / sacct: RUNNING allocation]
-    E --> F[scontrol show hostnames]
-    F --> G[remote_api_url: reject loopback / unspecified hosts]
-    G --> H[allocated-node health check]
-    H --> I[bind allocation and resolved URL]
-    I --> J[assert_bound: send API request without redirects]
-    R[Resume] --> S[validate_binding: script hash + allocation + saved node URL]
-    S --> J
-```
-
-This gateway applies to registered PPIFlow, TorchCraft, AF3Score, TorchScore,
-TorchFold, Rosetta and TorchOptimization calls, including status, results,
-metrics, cancellation and submission reconciliation. Each API starts lazily;
-existing verified allocations are reused within the same workflow. A new HTTP
-request does not imply a new sbatch job. Port/protocol/prefix come from the
-registration, while the actual hostname comes only from Slurm.
-
-There is no direct-HTTP fallback, no `sbatch_resolve_host=false` mode and no
-localhost probe. Unbound clients start with a non-routable placeholder host.
-Absolute/protocol-relative API paths and redirects cannot change the allocated
-endpoint. Registry discovery/`--check-health` and workflow `--check` do not submit
-jobs or probe a port. Missing scripts fail before inference rather than starting
-local API processes. URL examples use `slurm-api.invalid` as a placeholder and
-must have the existing deployment's absolute sbatch script.
-
-The control host must already have scheduler access and the shared filesystem.
-Local geometry/DockQ subprocesses are analysis tools, not local HTTP inference
-servers. The chat provider and the legacy separate compute workflow are outside
-this scientific API gateway. Real cluster networking/GPU execution is not claimed
-by the scheduler/HTTP simulation tests.
+No flexibility/local-problem RMSD gate is used. Rosetta interface_dg participates
+in Qwen comparison and 100*ipTM-interface_dg ranking without changing rule branches.
+If a selected Partial Flow has unreliable automatic CDR identification,
+`region_input.request_regions` persists a user question and pauses execution;
+`region_input.supply_regions` validates the actual user ranges, computes their fixed
+complement and resumes. No general action approval is added. Unsupported model modes
+remain unavailable; residue IDs are never fabricated.
+See [autonomous feedback](autonomous-feedback.md) for alignment assumptions and limits.

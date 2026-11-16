@@ -15,25 +15,8 @@ def hotspot_hit(contacts, cutoff=5.0):
     return any(row["distance"] < cutoff for row in contacts)
 
 
-def flexibility(loop_fraction, local_rmsd, motion_threshold=2.0):
-    if loop_fraction is None or local_rmsd is None:
-        return "unknown"
-    if loop_fraction >= 0.5 and local_rmsd > motion_threshold:
-        return "flexible"
-    if loop_fraction < 0.3 and local_rmsd < motion_threshold:
-        return "rigid"
-    return "unknown"
-
-
-def local_region(core_rmsd, region_rmsds, core_count, total_count, core_limit=2.0, region_limit=3.0):
-    changed = [name for name, value in region_rmsds.items() if value > region_limit]
-    if core_count >= 3 and core_count >= total_count / 2 and core_rmsd < core_limit and len(changed) == 1:
-        return changed[0]
-    return None
-
-
 def repair_allowed(candidate, repaired):
-    return candidate["candidate_id"] not in repaired and not candidate.get("parent_id")
+    return candidate["candidate_id"] not in repaired
 
 
 def torchopt_supported(chains, mode, registered):
@@ -47,17 +30,6 @@ def torchopt_supported(chains, mode, registered):
     )
 
 
-def generation_order(available, best_flexibility, used):
-    preferred = "torchcraft" if best_flexibility == "flexible" else "ppiflow"
-    known = best_flexibility in {"rigid", "flexible"}
-    return sorted(
-        available,
-        key=lambda source: (
-            (source != preferred, used.count(source)) if known else (used.count(source), source != preferred)
-        ),
-    )
-
-
 def stop_reason(round_index, used_samples, stale_rounds, options):
     if round_index > options.max_rounds:
         return "max_rounds"
@@ -68,12 +40,38 @@ def stop_reason(round_index, used_samples, stale_rounds, options):
     return None
 
 
-def score_passes(metrics, metric, iptm_threshold, ptm_threshold=0.8):
+def score_passes(metrics, metric, iptm_threshold, ptm_threshold=0.8, *, require_ptm=False):
     import math
 
-    fields = [metric, *(["torchscore_ptm"] if metric == "torchscore_iptm" else [])]
+    ptm_metric = metric.removesuffix("_iptm") + "_ptm"
+    needs_ptm = require_ptm or metric == "torchscore_iptm"
+    fields = [metric, *([ptm_metric] if needs_ptm else [])]
     if any(type(metrics.get(key)) not in (int, float) or not math.isfinite(metrics[key]) for key in fields):
         return False
-    return metrics[metric] > iptm_threshold and (
-        metric != "torchscore_iptm" or metrics["torchscore_ptm"] > ptm_threshold
-    )
+    return metrics[metric] > iptm_threshold and (not needs_ptm or metrics[ptm_metric] > ptm_threshold)
+
+
+def rule_actions(metrics, hotspot, score_metric="torchscore_iptm", min_iptm=0.5, min_ptm=0.8, min_dockq=0.49):
+    """Ordered decision table. Unknown required evidence never passes a row."""
+    import math
+
+    def finite(key):
+        value = metrics.get(key)
+        return type(value) in (int, float) and math.isfinite(value) and 0 <= value <= 1
+
+    if hotspot is False:
+        return ["regenerate"]
+    if hotspot is not True or not finite(score_metric):
+        return []
+    if metrics[score_metric] <= min_iptm:
+        return ["regenerate"]
+    ptm_metric = score_metric.removesuffix("_iptm") + "_ptm"
+    if not finite(ptm_metric):
+        return []
+    if metrics[ptm_metric] <= min_ptm:
+        return ["torchopt"]
+    if not finite("design_refold_dockq"):
+        return []
+    if metrics["design_refold_dockq"] <= min_dockq:
+        return ["partial_flow"]
+    return ["partial_flow", "expand", "stop"]

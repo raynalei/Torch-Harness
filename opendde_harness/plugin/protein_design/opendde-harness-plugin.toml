@@ -106,5 +106,5 @@ name = "protein_initial_round_list"
 factory = "opendde_harness.plugin.protein_design.tools.initial_round:make_initial_round_list_tool"
 
 [[plugin.contributes.tools]]
-name = "protein_initial_round_approve"
-factory = "opendde_harness.plugin.protein_design.tools.initial_round:make_initial_round_approve_tool"
+name = "protein_initial_round_regions"
+factory = "opendde_harness.plugin.protein_design.tools.initial_round:make_initial_round_regions_tool"

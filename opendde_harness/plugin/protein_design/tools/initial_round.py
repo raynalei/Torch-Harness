@@ -20,7 +20,7 @@ class InitialRoundTool(Tool):
     def __init__(self, config: dict, action: str):
         self.config = config
         self.action = action
-        self.external_effects = action in {"start", "resume", "approve"}
+        self.external_effects = action in {"start", "resume", "regions"}
 
     @property
     def name(self):
@@ -28,27 +28,29 @@ class InitialRoundTool(Tool):
 
     @property
     def description(self):
-        if self.action == "approve":
-            return "Approve exactly one pending Partial Flow/TorchOptimization action and resume. First show the pending request and basis and ask the user; user_confirmed=true requires an explicit answer approving this specific action. Prior workflow/budget authorization is insufficient. Never call automatically after status or resume."
+        if self.action == "regions":
+            return "Resolve a pending CDR identification question with the user-provided cdr_position and optional fixed_positions for the exact candidate PDB, then resume. First show pending_regions and ask the user; do not invent CDRs or treat prior compute authorization as a region answer. Python validates numbering and computes fixed positions as the complement."
         if self.action == "list":
             return "Discover existing initial-round/autonomous workflows after TUI/session restart. Reads the persistent instance run index; optional work_dir discovers pre-index runs on shared storage. Returns run_dir and saved status without submitting inference. Call before claiming there is no active task or creating a replacement task."
         if self.action == "resume":
             return "Resume an authorized workflow from its existing run_dir and immutable snapshot. Reuse completed generation/scoring/folding/results; retry confirmed failed steps only, preserving attempt history. Never choose a new run name to recover. Running or uncertain jobs retain their remote IDs; failed infrastructure does not imply scientific failure."
         if self.action == "status":
-            return "Read saved automatic initial-round progress once. The background Python worker already polls Slurm via GET and advances stages; do not use repeated LLM calls to poll."
-        return "Start an authorized PPIFlow -> AF3Score/TorchScore -> TorchFold -> DockQ workflow from natural-language instructions. Build run_config from known registered services, tool parameters and Python-derived data; the user does not need to write YAML. Alternatively reuse config_path or the configured profile. Never invent scientific inputs, mounted paths or service addresses. When autonomous is present, this same worker runs expand/regenerate, Partial Flow for encodable local changes, and TorchOptimization for eligible low-confidence VHH/minibinder candidates with a configured torchopt service. These actions are not the legacy protein_design_start loop. Zero accepted candidates does not by itself stop autonomous feedback; bounded rescue candidates are refolded for diagnostics and legal regeneration/repair actions remain available. Autonomous hit classification uses its selected scorer threshold, DockQ threshold and hotspot evidence; evaluation.min_refold_iptm is not an additional autonomous hit gate. Without autonomous, this tool runs only the single initial round. Generation/expansion stays within the authorized budget; every Partial Flow or TorchOptimization action pauses for explicit user approval. On awaiting_approval, show pending_approval.question, request and basis to the user; never approve it yourself. Return run_dir immediately; the worker polls status and releases its private API allocations after completion. Reuse the exact run configuration/name on retries."
+            return "Read saved automatic initial-round progress once. If pending_regions is present, show its question, candidate PDB and reason to the user and request their CDR ranges. Otherwise the worker already polls Slurm; do not use repeated LLM calls to poll."
+        return "Start the authorized checkpointed workflow. Python applies only hotspot/ipTM/pTM/DockQ rules: hotspot miss or ipTM<=0.5 -> regenerate; hotspot hit and ipTM>0.5 but pTM<=0.8 -> TorchOptimization; all preceding pass but DockQ<=0.49 -> Partial Flow; all pass -> Partial Flow/expand/stop. Qwen chooses only executable menu entries. Partial Flow CDR/fixed positions are derived by Python framework alignment. Actions run within the authorized budget; if a selected Partial Flow has unreliable Python CDR alignment, the worker pauses at awaiting_regions. Ask the user for regions and call protein_initial_round_regions only with their answer. Rosetta interface_dg participates in ranking and Qwen comparison, without a new hard threshold. Do not invent missing regions or bypass Harness. Build run_config from existing scientific inputs and registered services, or reuse config_path. Return run_dir; use status/list/resume after disconnects."
 
     @property
     def parameters(self):
-        if self.action == "approve":
+        if self.action == "regions":
             return {
                 "type": "object",
                 "properties": {
                     "run_dir": {"type": "string"},
-                    "approval_id": {"type": "string"},
+                    "question_id": {"type": "string"},
+                    "cdr_position": {"type": "string"},
+                    "fixed_positions": {"type": "string"},
                     "user_confirmed": {"type": "boolean", "const": True},
                 },
-                "required": ["run_dir", "approval_id", "user_confirmed"],
+                "required": ["run_dir", "question_id", "cdr_position", "user_confirmed"],
                 "additionalProperties": False,
             }
         if self.action == "list":
@@ -93,12 +95,18 @@ class InitialRoundTool(Tool):
 
     async def execute(self, **kwargs):
         try:
-            if self.action == "approve":
+            if self.action == "regions":
                 if kwargs.get("user_confirmed") is not True:
-                    raise ValueError("explicit user approval of this pending refinement action is required")
-                from opendde_harness.plugin.protein_design.initial_round.approval import approve_action
+                    raise ValueError("the user must supply/confirm the CDR answer for this pending question")
+                from opendde_harness.plugin.protein_design.initial_round.region_input import supply_regions
 
-                await asyncio.to_thread(approve_action, Path(kwargs["run_dir"]), kwargs["approval_id"])
+                await asyncio.to_thread(
+                    supply_regions,
+                    Path(kwargs["run_dir"]),
+                    kwargs["question_id"],
+                    kwargs["cdr_position"],
+                    kwargs.get("fixed_positions"),
+                )
                 result = await asyncio.to_thread(resume_round, Path(kwargs["run_dir"]))
             elif self.action == "list":
                 work_dir = kwargs.get("work_dir")
@@ -133,7 +141,11 @@ class InitialRoundTool(Tool):
                 )
                 result = await asyncio.to_thread(start_round, config)
             return ToolResult(
-                json.dumps(result, ensure_ascii=False), f"Automatic initial round {self.action}", retryable=False
+                json.dumps(result, ensure_ascii=False),
+                result["pending_regions"]["question"]
+                if result.get("pending_regions")
+                else f"Automatic initial round {self.action}",
+                retryable=False,
             )
         except Exception as exc:
             return ToolResult(
@@ -157,5 +169,5 @@ def make_initial_round_list_tool(ctx: PluginContext):
     return InitialRoundTool(ctx.config, "list")
 
 
-def make_initial_round_approve_tool(ctx: PluginContext):
-    return InitialRoundTool(ctx.config, "approve")
+def make_initial_round_regions_tool(ctx: PluginContext):
+    return InitialRoundTool(ctx.config, "regions")

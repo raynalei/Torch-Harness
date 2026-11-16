@@ -216,14 +216,11 @@ class InitialRoundRunner:
                         if any(sequences[c] != initial["chains"][c] for c in generator.chains.target):
                             raise ValueError("follow-up generation changed a target sequence")
                         if request.get("mode", "").startswith("partial_"):
-                            from .diagnostics import DesignRegion
-
                             parent = next(c for c in candidates if c["candidate_id"] == parent_id)
                             decision = self.checkpoint.data["autonomous"]["decisions"][round_index - 1]
-                            region = DesignRegion.model_validate(decision["repair_region"])
                             for chain in generator.chains.binder:
                                 before, after = parent["chains"][chain], sequences[chain]
-                                mutable = set(region.positions) if chain == region.chain else set()
+                                mutable = set(decision["repair_regions"].get(chain, []))
                                 if len(before) != len(after) or any(
                                     a != b and position not in mutable
                                     for position, (a, b) in enumerate(zip(before, after), 1)
@@ -360,7 +357,9 @@ class InitialRoundRunner:
             and digest(self.files.local(candidate["refold_structure"])) != candidate["refold_sha256"]
         ):
             raise ValueError(f"refold artifact changed: {key}")
-        if metric in candidate["metrics"] and (scorer != "torchscore" or "torchscore_ptm" in candidate["metrics"]):
+        if metric in candidate["metrics"] and (
+            (scorer != "torchscore" and self.config.autonomous is None) or scorer + "_ptm" in candidate["metrics"]
+        ):
             return
         write_pdb(original, model)
         result = await self.job(
@@ -384,9 +383,9 @@ class InitialRoundRunner:
         write_json(directory / f"{scorer}-metrics.json", metrics)
         field = service.config.metric_fields.get("iptm", "iptm")
         candidate["metrics"][metric] = measured(metric_records(metrics, service.config), field, confidence=True)
-        if scorer == "torchscore":
+        if scorer == "torchscore" or self.config.autonomous is not None:
             ptm_field = service.config.metric_fields.get("ptm", "ptm")
-            candidate["metrics"]["torchscore_ptm"] = measured(
+            candidate["metrics"][scorer + "_ptm"] = measured(
                 metric_records(metrics, service.config), ptm_field, confidence=True
             )
         candidate["scoring_backend"] = scorer
@@ -468,34 +467,8 @@ class InitialRoundRunner:
             candidate["metrics"]["design_refold_dockq"] = measured([scores], "dockq", confidence=True)
             write_json(directory / "dockq.json", scores)
             self.save_candidates()
-        if evaluation.rosetta is not None and "rosetta_interface_dg" not in candidate["metrics"]:
-            model = directory / "refold.pdb"
-            write_pdb(self.files.local(candidate["refold_structure"]), model)
-            chain_map = generator.chains.refold_map
-            if any(len(c) != 1 for c in chain_map.values()):
-                raise ValueError("Rosetta chain groups require single-character chain IDs")
-            result = await self.job(
-                "rosetta",
-                f"interface/{key}",
-                "/v1/tools/interface_analyze",
-                "task_id",
-                {
-                    **evaluation.rosetta_options,
-                    "input_pdb": self.files.remote(model),
-                    "chain_group_a": "".join(chain_map[c] for c in generator.chains.binder),
-                    "chain_group_b": "".join(chain_map[c] for c in generator.chains.target),
-                },
-            )
-            field = evaluation.rosetta.metric_fields.get("interface_dg", "dG_separated")
-            records = metric_records(result, evaluation.rosetta)
-            if not any(select(row, field) is not None for row in records):
-                scores = [
-                    p
-                    for p in output_files(result, evaluation.rosetta, self.files)
-                    if p.match(evaluation.rosetta_scores_glob)
-                ]
-                records = [row for path in scores for row in table_records(path)]
-            candidate["metrics"]["rosetta_interface_dg"] = measured(records, field)
+        if self.config.autonomous is None:
+            await self.score_interface(candidate)
         metrics = candidate["metrics"]
         candidate["status"] = (
             "accepted"
@@ -505,6 +478,50 @@ class InitialRoundRunner:
             )
             else "rejected"
         )
+        self.save_candidates()
+
+    async def score_interface(self, candidate):
+        evaluation = self.config.evaluation
+        if evaluation.rosetta is None or "rosetta_interface_dg" in candidate["metrics"]:
+            return
+        key = candidate["candidate_id"]
+        generator = self.config.generators[candidate["source"]]
+        directory = self.root / key
+        refolded = bool(candidate.get("refold_structure"))
+        model = directory / ("refold.pdb" if refolded else "generated-interface.pdb")
+        write_pdb(
+            self.files.local(candidate["refold_structure"] if refolded else candidate["generated_structure"]), model
+        )
+        chain_map = (
+            generator.chains.refold_map
+            if refolded
+            else {c: c for c in generator.chains.target + generator.chains.binder}
+        )
+        if any(len(c) != 1 for c in chain_map.values()):
+            raise ValueError("Rosetta chain groups require single-character chain IDs")
+        result = await self.job(
+            "rosetta",
+            f"interface/{key}",
+            "/v1/tools/interface_analyze",
+            "task_id",
+            {
+                **evaluation.rosetta_options,
+                "input_pdb": self.files.remote(model),
+                "chain_group_a": "".join(chain_map[c] for c in generator.chains.binder),
+                "chain_group_b": "".join(chain_map[c] for c in generator.chains.target),
+            },
+        )
+        field = evaluation.rosetta.metric_fields.get("interface_dg", "dG_separated")
+        records = metric_records(result, evaluation.rosetta)
+        if not any(select(row, field) is not None for row in records):
+            scores = [
+                p
+                for p in output_files(result, evaluation.rosetta, self.files)
+                if p.match(evaluation.rosetta_scores_glob)
+            ]
+            records = [row for path in scores for row in table_records(path)]
+        candidate["metrics"]["rosetta_interface_dg"] = measured(records, field)
+        candidate["rosetta_structure"] = "refold" if refolded else "generated"
         self.save_candidates()
 
     def export(self, candidates: list[dict]) -> dict:
@@ -520,7 +537,11 @@ class InitialRoundRunner:
             ),
         )
         if self.config.autonomous is not None:
-            accepted.sort(key=lambda c: (-c["metrics"]["ranking_score"], c["candidate_id"]))
+            from .autonomous import quality
+
+            accepted.sort(
+                key=lambda c: tuple(-v for v in quality(c, self.config.evaluation.score_metric)) + (c["candidate_id"],)
+            )
         for rank, candidate in enumerate(accepted, 1):
             candidate["rank"] = rank
         failed = [c["candidate_id"] for c in candidates if c["status"] == "failed"]
@@ -539,7 +560,7 @@ class InitialRoundRunner:
             state = self.checkpoint.data["autonomous"]
             result.update(
                 scoring_backend=self.config.evaluation.scoring_backend,
-                ranking_policy=f"100*{self.config.evaluation.score_metric}-rosetta_interface_dg_desc",
+                ranking_policy=f"100*{self.config.evaluation.score_metric}-rosetta_interface_dg_desc,ptm_desc,dockq_desc",
                 stop_reason=state.get("stop_reason"),
                 used_samples=state["used_samples"],
                 followup_rounds=len(state["decisions"]),
@@ -580,7 +601,11 @@ class InitialRoundRunner:
                     "status",
                     "rank",
                     self.config.evaluation.score_metric,
-                    *(["torchscore_ptm"] if self.config.evaluation.scoring_backend == "torchscore" else []),
+                    *(
+                        [self.config.evaluation.scoring_backend + "_ptm"]
+                        if self.config.autonomous is not None or self.config.evaluation.scoring_backend == "torchscore"
+                        else []
+                    ),
                     "torchfold_iptm",
                     "design_refold_dockq",
                     "rosetta_interface_dg",

@@ -21,7 +21,7 @@ from opendde_harness.plugin.protein_design.core.model_requests import (
 from opendde_harness.plugin.protein_design.initial_round.api_startup import allocation_record, allocation_was_released
 from opendde_harness.plugin.protein_design.initial_round.config import Service
 from opendde_harness.plugin.protein_design.initial_round.services import ServiceConnection
-from opendde_harness.plugin.protein_design.initial_round.storage import fingerprint, select, write_json
+from opendde_harness.plugin.protein_design.initial_round.storage import fingerprint, response_state, select, write_json
 from opendde_harness.plugin.protein_design.initial_round.torchopt import inspect_optimization
 from opendde_harness.utils.portable_lock import file_lock
 
@@ -443,9 +443,7 @@ class ProteinModelRegistry:
             status = await client.get(f"{record['status_base']}/{record['remote_id']}")
         finally:
             await client.close()
-        default_state = "UNKNOWN"
-        raw = str(select(status, model.service.status_field, default_state)).upper().split()
-        raw_state = raw[0].rstrip("+") if raw else "UNKNOWN"
+        raw_state = response_state(status, model.service.status_field)
         exit_code = select(status, model.service.exit_code_field)
         if raw_state in {"COMPLETED", "SUCCEEDED", "SUCCESS"}:
             state = (

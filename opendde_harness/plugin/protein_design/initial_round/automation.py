@@ -18,7 +18,7 @@ import yaml
 
 from opendde_harness.plugin.protein_design.initial_round.config import InitialRoundConfig
 from opendde_harness.plugin.protein_design.initial_round.policy import choose_scorer
-from opendde_harness.plugin.protein_design.initial_round.storage import SharedFiles, write_json
+from opendde_harness.plugin.protein_design.initial_round.storage import SharedFiles, status_profile_identity, write_json
 from opendde_harness.utils.portable_lock import file_lock
 
 
@@ -128,7 +128,7 @@ def round_status(root: Path):
         "worker_host": launch.get("hostname"),
         "jobs": jobs[-8:],
         "total_jobs": len(jobs),
-        "pending_approval": checkpoint.get("pending_approval"),
+        "pending_regions": checkpoint.get("pending_regions"),
         "resume_tool": "protein_initial_round_resume",
         "job_counts": dict(Counter(job["state"] for job in jobs)),
         "api_cleanup": checkpoint.get("api_cleanup", {}),
@@ -170,7 +170,9 @@ def _start_round(config: InitialRoundConfig, *, attach_jobs: dict[str, str] | No
             raise ValueError("pipeline input contents changed; choose a new run name")
         snapshot = root / "worker-config.json"
         value = config.model_dump(mode="json")
-        if snapshot.exists() and json.loads(snapshot.read_text()) != value:
+        if snapshot.exists() and status_profile_identity(json.loads(snapshot.read_text())) != status_profile_identity(
+            value
+        ):
             raise ValueError("run configuration changed; choose a new run name")
         if (root / "launch.json").exists():
             current = round_status(root)

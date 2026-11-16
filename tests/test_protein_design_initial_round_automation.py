@@ -460,39 +460,71 @@ def test_workflow_is_indexed_before_worker_launch_and_fails_closed(profile, monk
     assert calls == [config]
 
 
-def test_worker_saves_approval_question_as_pause_not_failure(profile, monkeypatch):
+def test_worker_persists_cdr_question_without_reporting_inference_failure(profile, monkeypatch):
     from opendde_harness.plugin.protein_design.initial_round import worker
-    from opendde_harness.plugin.protein_design.initial_round.approval import AwaitingActionApprovalError
+    from opendde_harness.plugin.protein_design.initial_round.region_input import AwaitingRegionsError
 
     config = prepare_run(profile)
     root = config.work_dir / config.name
     root.mkdir()
     write_json(root / "worker-config.json", config.model_dump(mode="json"))
-    pending = {"approval_id": "a" * 64, "action": "torchopt", "question": "Approve this optimization?"}
+    pending = {
+        "question_id": "a" * 64,
+        "question": "Provide CDR ranges for this candidate",
+        "candidate_id": "candidate",
+    }
 
     class Runner:
         def __init__(self, *args, **kwargs):
             pass
 
         async def run(self):
-            raise AwaitingActionApprovalError(pending)
+            raise AwaitingRegionsError(pending)
 
     monkeypatch.setattr(worker, "InitialRoundRunner", Runner)
     worker.run(root)
-    saved = json.loads((root / "worker-status.json").read_text())
-    assert saved == {"state": "awaiting_approval", "pending_approval": pending}
+    assert json.loads((root / "worker-status.json").read_text()) == {
+        "state": "awaiting_regions",
+        "pending_regions": pending,
+    }
 
 
-async def test_approval_tool_requires_explicit_user_confirmation(tmp_path, monkeypatch):
+async def test_region_resolution_tool_does_not_invent_user_answer(tmp_path, monkeypatch):
     from opendde_harness.plugin.protein_design.tools.initial_round import InitialRoundTool
 
     calls = []
     monkeypatch.setattr(
         "opendde_harness.plugin.protein_design.tools.initial_round.resume_round", lambda root: calls.append(root)
     )
-    tool = InitialRoundTool({}, "approve")
-    assert tool.external_effects
-    assert "user_confirmed" in tool.parameters["required"]
-    result = await tool.execute(run_dir=str(tmp_path), approval_id="a" * 64)
-    assert "explicit user approval" in json.loads(result.model_text)["error"]
+    tool = InitialRoundTool({}, "regions")
+    result = await tool.execute(run_dir=str(tmp_path), question_id="a" * 64, cdr_position="B5-6")
+    assert "user must supply/confirm" in json.loads(result.model_text)["error"]
     assert not calls
+
+
+def test_detached_resume_accepts_status_selector_fix_but_preserves_scientific_guard(profile, monkeypatch):
+    config = prepare_run(profile)
+    calls = []
+
+    class Process:
+        pid = 12345
+
+        def wait(self):
+            return 0
+
+    def launch(command, **kwargs):
+        calls.append(command)
+        return Process()
+
+    monkeypatch.setattr("opendde_harness.plugin.protein_design.initial_round.automation.subprocess.Popen", launch)
+    start_round(config)
+    root = config.work_dir / config.name
+    write_json(root / "worker-status.json", {"state": "interrupted"})
+    config.evaluation.torchfold.status_field = "state"
+    assert start_round(config)["state"] == "starting"
+    assert len(calls) == 2
+    assert json.loads((root / "worker-config.json").read_text())["evaluation"]["torchfold"]["status_field"] == "state"
+    config.evaluation.min_refold_iptm = 0.6
+    with pytest.raises(ValueError, match="configuration changed"):
+        start_round(config)
+    assert len(calls) == 2

@@ -212,6 +212,12 @@ def refold_output(result: dict, service: Service, files: SharedFiles, confidence
         paired = [
             p for p in paths if p.parent == confidence.parent and p.name in {prefix + "model.cif", prefix + "model.pdb"}
         ]
+        if not paired:
+            # Some API exports retain the job prefix only on the confidence JSON.
+            summaries = [p for p in paths if p.parent == confidence.parent and p.name.endswith(suffix)]
+            unprefixed = [p for p in paths if p.parent == confidence.parent and p.name in {"model.cif", "model.pdb"}]
+            if len(summaries) == 1 and len(unprefixed) == 1:
+                paired = unprefixed
         if len(paired) != 1:
             raise ValueError(f"confidence must pair with exactly one model.cif/model.pdb: {confidence}")
         choices.append((score, paired[0]))

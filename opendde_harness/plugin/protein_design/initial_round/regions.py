@@ -1,4 +1,4 @@
-"""Derive repair selections from registered PPIFlow arguments or local geometry."""
+"""Python antibody framework alignment and PDB residue-range encoding."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import re
 
 import numpy as np
 
-from .diagnostics import DesignRegion, _ca
+from .diagnostics import _ca
 
 
 def selection_positions(value, atoms, binders):
@@ -61,40 +61,6 @@ def encode_positions(atoms, selections):
     return ",".join(tokens)
 
 
-def derive_regions(atoms, chains, request, displacements, threshold):
-    """Fixed tool arguments take precedence over Python-computed loop segments."""
-    fixed = selection_positions(request.get("fixed_positions"), atoms, chains.binder)
-    specified = request.get("cdr_position")
-    if specified:
-        selected = selection_positions(specified, atoms, chains.binder)
-        origin = "registered_cdr_position"
-    else:
-        import biotite.structure as struc
-
-        selected = {}
-        for chain in chains.binder:
-            sse = struc.annotate_sse(atoms[atoms.chain_id == chain])
-            if len(sse) != len(displacements[chain]):
-                raise ValueError("secondary structure cannot be mapped to binder coordinates")
-            selected[chain] = {
-                index + 1
-                for index, (kind, distance) in enumerate(zip(sse, displacements[chain]))
-                if kind == "c" and distance > threshold
-            }
-        origin = "python_displaced_loop"
-    regions = {}
-    for chain, positions in selected.items():
-        remaining = sorted(positions - fixed.get(chain, set()))
-        runs = []
-        for position in remaining:
-            if not runs or position != runs[-1][-1] + 1:
-                runs.append([])
-            runs[-1].append(position)
-        for index, run in enumerate(runs, 1):
-            regions[f"{chain}_region_{index}"] = DesignRegion(chain=chain, positions=run)
-    return regions, origin
-
-
 def check_region_encoding(atoms, selections):
     try:
         encoded = encode_positions(atoms, selections)
@@ -103,3 +69,108 @@ def check_region_encoding(atoms, selections):
         return {"ok": True, "encoded": encoded, "reason": None}
     except ValueError as exc:
         return {"ok": False, "encoded": None, "reason": str(exc)}
+
+
+# Kabat-like reference segments for a deterministic framework-alignment estimate.
+# These are not an IMGT numbering service; ambiguous/truncated domains are rejected.
+CDR_REFERENCES = {
+    "heavy": (
+        "EVQLVESGGGLVQPGGSLRLSCAAS",
+        "GFTFSSYAMS",
+        "WVRQAPGKGLEWVS",
+        "AISGSGGSTYYADSVKG",
+        "RFTISRDNSKNTLYLQMNSLRAEDTAVYYC",
+        "AKDRGYYGMDV",
+        "WGQGTLVTVSS",
+    ),
+    "light": (
+        "DIQMTQSPSSLSASVGDRVTITC",
+        "RASQDVNTAVA",
+        "WYQQKPGKAPKLLIY",
+        "SASFLYS",
+        "GVPSRFSGSRSGTDFTLTISSLQPEDFATYYC",
+        "QQHYTTPPT",
+        "FGQGTKVEIK",
+    ),
+}
+
+
+def infer_cdr_positions(sequence, role):
+    """Map reference CDRs plus query insertions, requiring a conserved framework."""
+    from biotite.sequence import ProteinSequence
+    from biotite.sequence.align import SubstitutionMatrix, align_optimal
+
+    if not 80 <= len(sequence) <= 180:
+        raise ValueError("binder is not a supported complete single antibody variable domain")
+    segments = CDR_REFERENCES[role]
+    reference = "".join(segments)
+    ranges, cursor = [], 0
+    for index, segment in enumerate(segments):
+        if index % 2:
+            ranges.append(set(range(cursor, cursor + len(segment))))
+        cursor += len(segment)
+    cdr = set.union(*ranges)
+    trace = align_optimal(
+        ProteinSequence(reference),
+        ProteinSequence(sequence),
+        SubstitutionMatrix.std_protein_matrix(),
+        gap_penalty=(-10, -1),
+        terminal_penalty=True,
+        max_number=1,
+    )[0].trace
+    mapping = {int(i): int(j) for i, j in trace if i >= 0 and j >= 0}
+    framework = set(range(len(reference))) - cdr
+    coverage = sum(i in mapping for i in framework) / len(framework)
+    identity = sum(i in mapping and reference[i] == sequence[mapping[i]] for i in framework) / len(framework)
+    anchors = [
+        len(segments[0]) - 4 if role == "heavy" else len(segments[0]) - 1,
+        len(segments[0]) + len(segments[1]),
+        sum(map(len, segments[:5])) - 1,
+        sum(map(len, segments[:6])),
+    ]
+    if (
+        coverage < 0.9
+        or identity < 0.7
+        or any(i not in mapping or reference[i] != sequence[mapping[i]] for i in anchors)
+    ):
+        raise ValueError("CDR framework alignment lacks conserved anchors/coverage")
+    selected = set()
+    previous = -1
+    for i, j in trace:
+        if i >= 0:
+            previous = int(i)
+        if j >= 0 and (int(i) in cdr if i >= 0 else previous in cdr):
+            selected.add(int(j) + 1)
+    if any(sum(mapping.get(i, -1) + 1 in selected for i in region) < 2 for region in ranges):
+        raise ValueError("one or more CDRs cannot be mapped reliably")
+    return selected
+
+
+def python_partial_positions(atoms, chains, heavy_chain, light_chain=None):
+    """Derive both CLI selections from sequences and the candidate's real PDB IDs."""
+    # Use the same C-alpha residue traversal as CLI encoding, not assumed PDB numbering.
+    import biotite.structure as struc
+    from biotite.sequence import ProteinSequence
+
+    mutable = {}
+    roles = {heavy_chain: "heavy", **({light_chain: "light"} if light_chain else {})}
+    if set(roles) != set(chains.binder):
+        raise ValueError("antibody chain roles do not match binder chains")
+    for chain, role in roles.items():
+        selected = atoms[atoms.chain_id == chain]
+        sequence = "".join(ProteinSequence.convert_letter_3to1(str(res)) for res in struc.get_residues(selected)[1])
+        ProteinSequence(sequence)
+        if len(_ca(atoms, chain)) != len(sequence):
+            raise ValueError("CDR positions need complete C-alpha coordinates")
+        mutable[chain] = infer_cdr_positions(sequence, role)
+    fixed = {chain: set(range(1, len(_ca(atoms, chain)) + 1)) - positions for chain, positions in mutable.items()}
+    cdr_encoding = check_region_encoding(atoms, mutable)
+    fixed_encoding = check_region_encoding(atoms, fixed)
+    if not cdr_encoding["ok"] or not fixed_encoding["ok"]:
+        raise ValueError("Python-derived CDR/framework positions cannot be encoded by PPIFlow")
+    return {
+        "cdr_position": cdr_encoding["encoded"],
+        "fixed_positions": fixed_encoding["encoded"],
+        "mutable_positions": {chain: sorted(positions) for chain, positions in mutable.items()},
+        "method": "python_reference_framework_alignment",
+    }

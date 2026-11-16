@@ -185,12 +185,10 @@ class AutonomousRound(RoundModel):
     batch_size: int = Field(default=5, ge=1, le=1000)
     max_batch_size: int = Field(default=20, ge=1, le=1000)
     patience: int = Field(default=2, ge=1)
-    rescue_limit: int = Field(default=3, ge=0, le=100)
-    min_score: float = Field(default=0.8, ge=0, le=1, validation_alias=AliasChoices("min_score", "min_af3score"))
+    min_ptm: float = Field(default=0.8, ge=0, le=1)
+    min_score: float = Field(default=0.5, ge=0, le=1, validation_alias=AliasChoices("min_score", "min_af3score"))
     min_dockq: float = Field(default=0.49, ge=0, le=1)
     contact_distance: float = Field(default=5.0, gt=0)
-    framework_rmsd: float = Field(default=2.0, gt=0)
-    region_rmsd: float = Field(default=3.0, gt=0)
     decision_policy: Literal["agent", "rules"] = "agent"
     decision_timeout: float = Field(default=120, gt=0)
 
@@ -218,7 +216,7 @@ class InitialRoundConfig(RoundModel):
             raise ValueError("generator services must be configured or uniquely registered")
         if self.autonomous is not None:
             if self.evaluation.rosetta is None:
-                raise ValueError("autonomous rounds require a scoring backend and Rosetta for the ranking formula")
+                raise ValueError("autonomous decisions require the registered Rosetta interface scoring service")
             for source, generator in self.generators.items():
                 validate_request(source, {"name": self.name, **generator.request})
             initial_samples = sum(

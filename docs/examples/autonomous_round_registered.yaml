@@ -44,5 +44,6 @@ evaluation:
 autonomous:
   max_rounds: 3
   max_samples: 100
-  min_score: 0.8  # AF3Score autonomous threshold; TorchScore uses evaluation thresholds.
+  min_score: 0.5
+  min_ptm: 0.8
   min_dockq: 0.49

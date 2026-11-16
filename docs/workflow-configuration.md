@@ -88,20 +88,48 @@ Task indexing is a prerequisite for submitting work: a detached workflow registe
 `protein_model_list` searches the instance's indexed jobs directories across workspaces, reports `total_requests`, and accepts `limit`/`offset` to browse older records. Status/results tools automatically locate a unique matching request in those directories. Duplicate local IDs in different directories require selecting the original model_jobs_dir; the tools never silently choose between them. Records remain scoped to the same active config instance and require persistent, accessible storage. Direct HTTP requests outside Harness do not create these records.
 
 
-## TorchScore gates and refinement approvals
+## Four-metric autonomous loop
 
-TorchScore selection now requires both `evaluation.min_torchscore_iptm` (default 0.5)
-and `evaluation.min_torchscore_ptm` (default 0.8), using strict greater-than comparisons.
-The API must return both metrics; `metric_fields.ptm` can map an existing API field.
-Missing pTM pauses/fails evaluation instead of assuming a value. Both metrics are saved
-in candidate records and ranking.csv. AF3Score thresholds and ranking formula are unchanged.
+See [autonomous feedback](autonomous-feedback.md) for the executable decision table.
+Autonomous runs use `autonomous.min_score=0.5`, `min_ptm=0.8` and `min_dockq=0.49`
+for either selected scorer, plus Python hotspot contacts. The single-round TorchScore
+selection continues to use the evaluation thresholds. Autonomous runs require pTM from
+the selected API and registered Rosetta interface scoring. Rosetta is used for
+ranking (100*ipTM-interface_dg) and Qwen comparison, not a new hard threshold.
+Flexibility/local-RMSD gates are not used. Python derives Partial Flow masks; if a
+selected action has unidentifiable CDRs, it pauses and asks the user for region ranges.
 
-Partial Flow and TorchOptimization each require explicit approval of the concrete
-pending action. Use status/list to retrieve `pending_approval`, show its question,
-parameters and evidence to the user, then call `protein_initial_round_approve` with
-run_dir, the exact approval_id and user_confirmed=true only after the user approves.
-Plain resume does not approve. Unanswered/rejected actions remain paused. The worker
-saves the pending request and exits; this is not a new-turn push notification to a
-disconnected TUI. Newly connected agents should inspect task status and ask then.
-Existing runs retain their saved thresholds; do not manually edit checkpoint/config
-hashes to retrofit scientific settings. Start a new experiment for changed thresholds.
+Menu actions execute within the authorized budget. CDR uncertainty on a selected
+Partial Flow pauses at awaiting_regions; the agent asks for the actual user answer
+and uses protein_initial_round_regions to validate it and resume. Ordinary resume
+does not invent or supply the answer.
+The per-action approval tools/CLI are removed. Qwen cannot select an action absent
+from the rule/capability-filtered menu. Unknown evidence never satisfies a rule;
+unsupported actions are recorded and a run with no executable action ends safely.
+This changes scientific policy: use a new run name for an existing configuration
+that contained removed rescue/RMSD settings or different thresholds. Do not edit
+checkpoint hashes to force old decisions through a new policy.
+
+## Harvest completed work after worker interruption
+
+A checkpoint `waiting` label does not prove that inference failed: the worker may
+have exited between status retrieval, results retrieval and candidate persistence,
+or a response selector may have read UNKNOWN. Status readers accept the top-level
+`status`/`state` aliases when one is absent. Contradictory fields are rejected;
+missing status or a missing/unsuccessful required exit code never means success.
+
+Once a successful completion response is verified, the workflow saves `collecting`
+and its evidence before GET /results. Temporary transport/409/429/5xx errors retry
+collection. Restarting the same run resumes collection using the original remote
+ID, then validates output paths, confidence/model pairing and chain sequences before
+saving `refold_structure` and metrics. It never POSTs a replacement for this job.
+A prefixed confidence JSON can pair with an unprefixed model only when both are
+unique in that directory; ambiguity remains an error.
+
+Changing only a service's `status_field` is allowed during recovery. Checkpoint
+migration requires proof of the previous configuration hash and identical scientific
+inputs/settings and deployment endpoints. New checkpoints save that config evidence;
+legacy runs can use their unchanged run-config.json plus matching input hashes.
+Threshold/sequence/input/URL changes are still rejected. Do not manually rewrite a
+checkpoint hash. A worker already running old code must be stopped/restarted before
+new parsing code takes effect; restarting the TUI alone does not hot-reload the worker.

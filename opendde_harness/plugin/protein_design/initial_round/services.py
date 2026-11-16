@@ -26,7 +26,7 @@ from .api_startup import (
     validate_binding,
 )
 from .config import Service
-from .storage import Checkpoint, fingerprint, select
+from .storage import Checkpoint, fingerprint, response_state, select
 
 
 class SubmissionUncertainError(RuntimeError):
@@ -200,6 +200,35 @@ class SlurmService(ServiceConnection):
         self.checkpoint.save()
         return True
 
+    def completion_evidence(self, status):
+        if not isinstance(status, dict) or response_state(status, self.config.status_field) != "COMPLETED":
+            return False
+        code = select(status, self.config.exit_code_field)
+        return str(code) in {"0", "0:0"} or (code is None and not self.config.require_exit_code)
+
+    async def collect_completed(self, key, status_route, job):
+        if not self.completion_evidence(job.get("status")):
+            raise ValueError(f"{key}: result collection requires a verified completed status and exit code")
+        job.update(state="collecting", completion_verified=True)
+        self.checkpoint.save()
+        deadline = asyncio.get_running_loop().time() + self.config.job_timeout
+        while asyncio.get_running_loop().time() < deadline:
+            try:
+                results = await self.get(status_route + "/results")
+            except (httpx.TransportError, httpx.HTTPStatusError) as exc:
+                code = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+                if code is not None and code not in {409, 425, 429, 500, 502, 503, 504}:
+                    raise
+                job["collection_error"] = {"error_type": type(exc).__name__, "http_status": code}
+                self.checkpoint.save()
+                await asyncio.sleep(self.config.poll_interval)
+                continue
+            job.update(state="completed", results=results)
+            job.pop("collection_error", None)
+            self.checkpoint.save()
+            return results
+        raise TimeoutError(f"{key}: inference completed but results collection is pending; resume the same run")
+
     async def run(
         self,
         key: str,
@@ -277,6 +306,8 @@ class SlurmService(ServiceConnection):
         if self.config.sbatch_script is not None and not job.get("api_url"):
             raise ValueError("older job has no recorded API endpoint; reconcile it before continuing polling")
         status_route = f"{status_base or route}/{quote(job['id'], safe='')}"
+        if self.completion_evidence(job.get("status")):
+            return await self.collect_completed(key, status_route, job)
         deadline = asyncio.get_running_loop().time() + self.config.job_timeout
         while asyncio.get_running_loop().time() < deadline:
             try:
@@ -286,8 +317,7 @@ class SlurmService(ServiceConnection):
                     raise
                 await asyncio.sleep(self.config.poll_interval)
                 continue
-            states = str(select(status, self.config.status_field, "UNKNOWN")).upper().split()
-            state = states[0].rstrip("+") if states else "UNKNOWN"
+            state = response_state(status, self.config.status_field)
             job.update(state="waiting", remote_status=state, status=status)
             self.checkpoint.save()
             if state == "SUBMISSION_UNCERTAIN":
@@ -319,10 +349,7 @@ class SlurmService(ServiceConnection):
                     job.update(state="failed", retry_safe=True)
                     self.checkpoint.save()
                     raise RemoteJobFailedError(f"{key}: nonzero exit code {exit_code}")
-                results = await self.get(status_route + "/results")
-                job.update(state="completed", results=results)
-                self.checkpoint.save()
-                return results
+                return await self.collect_completed(key, status_route, job)
             # UNKNOWN/accounting lag is neither success nor failure.
             await asyncio.sleep(self.config.poll_interval)
         raise TimeoutError(
