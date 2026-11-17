@@ -12,6 +12,24 @@ metadata:
 
 For registered external model requests, use the tool workflow below. The subsequent YAML instructions describe the legacy evolutionary workflow: antibody design (VHH, scFv or paired VH/VL) and fixed-length single-chain mini binder optimization (`design.type: minibinder`). That legacy workflow does not generate de novo non-antibody backbones. Never relabel a mini binder as an antibody.
 
+## Scientific decision guides
+
+For autonomous decisions, use these references together with the measured Candidate
+JSON and the capability-filtered legal menu:
+
+- [Binder failure diagnosis](references/binder_failure_diagnosis.md): distinguish
+  off-epitope contacts, low structural confidence and missing evidence.
+- [Generation strategy](references/generation_strategy.md): choose among compatible
+  PPIFlow/TorchCraft generation, energy-fixed Partial Flow and TorchOptimization.
+- [Continue or stop](references/continue_or_stop.md): finish finite lineages,
+  distinguish new exploration from an existing legal action, and recover failures.
+
+`scientific_agent/context_builder.py` loads stage-relevant guidance and projects
+structure/interface/hotspot/developability evidence, rule recommendations, executable
+actions, local experiment history and task constraints into bounded Qwen context.
+Missing metrics stay unknown. Compression limits prompt size, never sample counts
+or action execution. Never invent measurements or override the Python router.
+
 ## Registered external model tools
 
 ### Initial-round preflight

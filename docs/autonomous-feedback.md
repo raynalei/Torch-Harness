@@ -82,6 +82,15 @@ binder has no legal Partial Flow action. Unsupported modes/chain mappings are
 reported as unavailable. The current registered Partial Flow supports nanobody
 and antibody modes; minibinders have no compatible Partial Flow mode.
 
+## Qwen evidence context
+
+The [scientific-agent context builder](scientific-agent.md) extracts measured
+structure/interface/hotspot/developability fields, enriches them with current rule
+recommendations, actual legal actions, history and task constraints, then compresses
+them for Qwen. `autonomous.decision_context_tokens` defaults to 4096. This controls
+prompt size, not scientific sample counts. Skill references explain diagnosis,
+generation strategy and stopping; the Python router remains authoritative.
+
 ## Decisions, per-candidate stages and recovery
 
 Qwen can choose only executable `partial_flow`, `torchopt` or `stop` menu entries.

@@ -204,6 +204,7 @@ class AutonomousRound(RoundModel):
     contact_distance: float = Field(default=5.0, gt=0)
     decision_policy: Literal["agent", "rules"] = "agent"
     decision_timeout: float = Field(default=120, gt=0)
+    decision_context_tokens: int = Field(default=4096, ge=256, le=32768)
 
 
 class InitialRoundConfig(RoundModel):
