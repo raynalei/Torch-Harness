@@ -99,13 +99,12 @@ def test_schedule_defaults_gaps_and_exact_weights_roundtrip():
     assert defaults == original_defaults
 
 
-def test_yaml_loader_and_cli_summary_expose_schedule():
-    from opendde_harness.cli.protein_design_commands import _workflow_summary
+def test_legacy_yaml_loader_preserves_schedule():
 
     data = yaml.safe_load((Path(__file__).parents[1] / "docs/examples/crlf2_quickstart.yaml").read_text())
     data["design"]["cycle_schedule"] = [dict(start_cycle=0, end_cycle=2, num_sequences=16)]
     config = WorkflowConfigLoader._normalize_config(data)
-    assert _workflow_summary(config)["cycle_schedule"][0]["num_sequences"] == 16
+    assert config.cycle_schedule[0].num_sequences == 16
     data["design"].update(parent_fitness_temperature=1, parent_fitness_temperature_end=0.1)
     with pytest.raises(ValueError, match="either"):
         WorkflowConfigLoader._normalize_config(data)

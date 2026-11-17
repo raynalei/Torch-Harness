@@ -1,191 +1,70 @@
 ---
 name: protein-design
-description: Prepare, run and interpret antibody or minibinder workflows, including registered PPIFlow, TorchCraft, AF3Score, TorchScore, Torch Optimization, TorchFold and Rosetta model tools.
+description: Run Torch-Harness model workflows and native scientific evidence functions without an OpenDDE compute service.
 metadata:
   opendde:
     always: false
 ---
 
-# Protein design
+# Torch-Harness protein design
 
-## Design scope
+## Start and recover
 
-For registered external model requests, use the tool workflow below. The subsequent YAML instructions describe the legacy evolutionary workflow: antibody design (VHH, scFv or paired VH/VL) and fixed-length single-chain mini binder optimization (`design.type: minibinder`). That legacy workflow does not generate de novo non-antibody backbones. Never relabel a mini binder as an antibody.
+Call `protein_design_context` for configured model kinds and native capabilities.
+Use `protein_model_list` for actual model aliases and request schemas. Assemble
+run_config from known scientific inputs and registrations or reuse workflow_config.
+Do not require the user to write YAML or choose an initial-round mode.
+Call `protein_design_start` when inputs/model execution are authorized. Reuse the
+same run_dir with `protein_design_status`, `protein_design_resume`,
+`protein_design_list` and `protein_design_candidates` after interruption.
+If status reports pending_regions, show the exact question and candidate PDB; use
+`protein_design_regions` with the user-supplied CDR ranges and question_id to resume.
+CLI equivalents are `ddeharness protein-design start/status/resume/list/candidates`.
+The OpenDDE compute service, compute_url/worker pools, Docker setup and old OpenDDE
+model checkpoints are not part of this workflow. Do not start them or fall back to
+their endpoints. Model environment activation belongs in each registered sbatch.
 
-## Scientific decision guides
+## Models and finite routing
 
-For autonomous decisions, use these references together with the measured Candidate
-JSON and the capability-filtered legal menu:
+PPIFlow/TorchCraft generate compatible candidates. TorchScore supplies ipTM/pTM.
+Initial ipTM<0.5 terminates that candidate. Both ipTM>0.8 and pTM>0.8 go directly
+to TorchFold/DockQ. Other initial candidates use Rosetta residue energies to fix
+positions with energy<-5 for compatible Partial Flow. Rescore Partial Flow output:
+both>0.8 refold, otherwise TorchOptimization if actually supported. Rescore optimized
+output: both>0.8 refold, otherwise terminate. Thresholds come from the task config.
+There is no global rounds, samples, batch or patience limit. Qwen prioritizes legal
+actions and cannot invent another route. Unknown metrics/logs pause for recovery.
 
-- [Binder failure diagnosis](references/binder_failure_diagnosis.md): distinguish
-  off-epitope contacts, low structural confidence and missing evidence.
-- [Generation strategy](references/generation_strategy.md): choose among compatible
-  PPIFlow/TorchCraft generation, energy-fixed Partial Flow and TorchOptimization.
-- [Continue or stop](references/continue_or_stop.md): finish finite lineages,
-  distinguish new exploration from an existing legal action, and recover failures.
+Use dedicated `protein_model_*` tools for authorized standalone requests, preserving
+request_id and uncertain remote IDs. A model registration is not proof of inference.
+PPIFlow supports configured antibody/nanobody/binder modes; TorchCraft and the current
+optimizer do not support paired VH/VL. Mini-binder Partial Flow is unavailable.
+Inverse-folding and ESM2 skills remain capability-gated references, not executable
+operations in the current registered model set. Do not mislabel another model as them.
 
-`scientific_agent/context_builder.py` loads stage-relevant guidance and projects
-structure/interface/hotspot/developability evidence, rule recommendations, executable
-actions, local experiment history and task constraints into bounded Qwen context.
-Missing metrics stay unknown. Compression limits prompt size, never sample counts
-or action execution. Never invent measurements or override the Python router.
+## Native evidence tools
 
-## Registered external model tools
+Use `protein_design_analyze` with one of these actions:
 
-### Initial-round preflight
+- `developability`: chemical PTM motifs, method-labelled PSH/PNC/PSC and EpiMatrix
+  availability. Supply sequences and optional structure_path/binder_chains.
+- `structure` / `epitope`: native heavy-atom contacts, explicit chain roles and
+  true PDB hotspot residue IDs. Read confidence from real scoring artifacts.
+- `evolution`: recorded parent/child lineage; no invented ancestry.
+- `mutations`: apply validated one-based substitutions while preserving fixed points.
+- `rank`: list complete measured confidence tuples without changing acceptance.
+- `lookup`: read public PDB/UniProt/PubMed metadata by validated identifier.
 
-Use `ddeharness protein-design initial-round -c <profile> --check` for preflight,
-not ad hoc package imports or shell network probes. The runner executes the
-bundled `initial_round/dockq.py --check` with the YAML's `evaluation.dockq_python`.
-The Python module is **`DockQ.DockQ`**, case-sensitive; `import dockq` is not a
-valid test. Do not use the active shell's python/python3 to judge this isolated
-interpreter. If preflight fails, read the reported `dockq-check.log` and diagnose
-the actual exception before proposing an installation. Do not grep the config
-directory or repeatedly search for the package source to perform this check.
+These are backed by scientific_agent/backends, not a remote OpenDDE compute API.
+Missing evidence stays unavailable, never fabricated by the LLM. EpiMatrix is a
+reserved licensed adapter; it is not currently configured. Surface descriptors are
+not official TAP calibration; preserve the algorithm and parameter labels.
 
-For any service with `sbatch_script`, preflight checks no local ports and submits
-no Slurm job. It reports `reachable: null` and startup deferred. This is expected,
-not an unhealthy-service failure. Do not run curl, socket probes, registry health
-checks or a local-port scan to second-guess this result. After authorization,
-launch the worker; each new run starts fresh API allocations for its stages, resolves
-the Slurm node, and checks that node's API before its HTTP task. Never treat the
-configured URL host as the allocated service address. No localhost probing or direct-HTTP fallback is allowed. Resolve real missing
-script/input files, but do not claim sbatch-managed services must be running
-before launch. These instructions apply before the legacy workflow below.
+## Decision references
 
-
-For a complete authorized PPIFlow initial round, prefer `protein_initial_round_start`. Accept natural-language task instructions: assemble its structured `run_config` from existing registered service metadata, tool arguments and Python-derived results. Do not require the user to write YAML. A configured `initial_round_config` profile or `config_path` is an optional reusable shortcut, not a launch prerequisite. Never invent missing framework paths, deployment addresses or scientific inputs. The detached Python worker handles generation, GET polling, scorer filtering, refold-input construction, TorchFold and design/reference DockQ. Optional autonomous feedback chooses finite per-candidate actions through the configured chat provider; GET polling itself never requires repeated chat calls. Report its run directory concisely; query saved progress with `protein_initial_round_status` when asked. Do not manually poll model APIs from repeated chat turns. PPIFlow-only profiles support paired VH/VL antibodies with `mode: antibody`, both heavy/light chains in `chains.binder`, and a complete `refold_map`; TorchCraft cannot be paired with this mode. Reuse known framework, chain, hotspot and shared-path parameters from the conversation or configuration; derive verifiable structure facts with Python. When using inline run_config, the worker saves its own JSON snapshot for recovery. Do not fabricate these inputs from a PDB alone.
-
-Call `protein_model_list` to discover configured aliases, the active config path and request schemas. An empty models list means tool code is installed but no external API endpoints are configured in that instance; it does not mean the tools are missing. The named tools are `protein_model_ppiflow`, `protein_model_torchcraft`, `protein_model_torchfold`, `protein_model_af3score`, `protein_model_torchscore`, `protein_model_torchopt` and `protein_model_rosetta`; each exposes its own request schema. Use the documented `protein-design models register` command to register operator-supplied endpoints in the correct config, then restart Harness. Never invent a working endpoint. Registration is independent of chat-provider configuration and the legacy compute URL. Use only the operations the registry advertises. A configured endpoint or health response is not evidence of successful model inference.
-
-TorchCraft `monomer_unconditional` requires an existing remote `json_path` and a `design_length`; it does not require a target, hotspots or framework. TorchCraft `mini_binder` and `vhh` do require their target inputs, and `target_full_seq` is the remote sequence CSV path, not the sequence text. Do not apply target-binding or legacy minibinder requirements to unconditional monomer generation.
-
-Resolve scientific inputs and the compute scope with the user. Reuse existing authorization for the same inputs and scope rather than repeatedly asking. Call `protein_model_submit` with a unique, stable `request_id` and `user_confirmed: true` only when authorized. Submission returns immediately. Preserve the request ID and query `protein_model_status` when needed; never poll in a tight loop. Read completed artifacts with `protein_model_results`. For ordinary successful model requests, status automatically caches artifacts/metrics before requesting cancellation of that request's private API allocation; later status/results reads use the retained data. Full workflows release owned APIs when their remote jobs are terminal. Externally managed APIs, unresolved submissions and unresolved TorchOptimization child jobs are not cancelled automatically. Cleanup reports cancellation requested, not confirmed scheduler termination. A lost submission response is uncertain: do not submit again under a new request ID; ask the service operator to reconcile it. `protein_model_cancel` currently supports AF3Score only, and reports cancellation requested rather than claiming the remote job stopped.
-
-AF3Score `pdb` mode can perform fast scoring or database searches plus inference. Pipeline-only tasks (`run_data_pipeline=true`, `run_inference=false`) produce prepared inputs and no metrics. `prepared` mode does not rewrite supplied MSA/templates or automatically extract metrics; use a separate `metrics` task with the original PDB directory and AF3Score output directory when required. `init_guess` is independent of structural templates. Never fabricate scores or compare fast/MSA scoring as if their protocols were identical. Use absolute paths on the service's filesystem; these tools do not upload files or activate Conda interactively. Every scientific API must have an existing `service.sbatch_script`; direct HTTP is disabled. Slurm must allocate and resolve a non-loopback node before any HTTP request; environment activation belongs in that script.
-
-For external-only requests, proceed through these tools; do not apply the legacy YAML/Docker/checkpoint prerequisites below. Predicted structures, confidence and Rosetta energies are not experimentally measured affinity.
-
-For mini binders, read [references/minibinder.md](references/minibinder.md) instead of antibody-framework guidance. Accept a complete or X-masked starting sequence of a confirmed length and explicit mutable positions; every X must be mutable. Full redesign resolves X before folding; do not invent CDR annotations. Apply the shared target preparation and launch approval steps below, substituting mini binder design/fixed regions for antibody format/CDR/framework questions. If identity is ambiguous, resolve the designed binder's type before preparing the configuration.
-
-## Read preparation context first
-
-Call `protein_design_context` once at the start of configuration preparation. If unavailable, run `ddeharness protein-design context --json`. Use its verified example paths, configured compute placement, folding/MSA policy, and default loss weights before searching files or writing YAML. Do not dump config.json, inspect tokens, or keep retrying the context call without a configuration change. Its readiness is `not_checked` and worker placement is not yet bound; do not claim the service has been tested. Display URLs are redacted and must not be copied back into YAML.
-
-Choose the workflow from the user's input:
-
-- **Run an example or supplied YAML:** read the selected file first. Preserve its scientific settings, reuse its target/scaffold/CDR annotations, and do not restart scaffold selection when these are already specified. Research only missing/contradictory evidence or verification explicitly requested by the user. Copy bundled files to the task configuration directory before requested adaptations. Review and validate the final copy, then ask one combined launch-confirmation question if nothing is unresolved.
-- **Create a new design:** a target-only request is not automatically a request to run an example. Read [references/yaml-configuration.md](references/yaml-configuration.md), resolve missing target/epitope evidence, and ask only unresolved scientific choices. For an antibody missing its scaffold, read [references/antibody-frameworks.md](references/antibody-frameworks.md). For a mini binder, read [references/minibinder.md](references/minibinder.md) and help find public non-antibody starting sequences/structures with provenance. If none is suitable, explain the missing input rather than refusing research or switching to an antibody. Offer compatible choices for confirmation; do not silently substitute example material.
-
-## Resolve example paths
-
-The only bundled YAMLs are `docs/examples/crlf2_quickstart.yaml` (CRLF2, complete starting VHH) and `docs/examples/cacng1_quickstart.yaml` (CACNG1, masked CDRs). Read the exact absolute path returned by the context tool; no README is required. The TUI workspace may differ from the checkout. If unavailable, ask for the real checkout or YAML path and pass that checkout to the context tool once. Do not perform repeated global wildcard searches, invent a path, or fabricate an example as a fallback.
-
-If the intended example is ambiguous, ask which target the user wants. Resolve relative resource paths according to the loader, not the TUI working directory. Verify required inputs and output placement without searching for optional PDB/A3M files that the chosen mode does not need. Locating an example is not launch authorization.
-
-## Inherit configured compute and scoring
-
-When the user requests their configured compute service and folding mode, omit `compute` placement and `fold.execution_mode`/`fold.api_url` overrides so the normal configuration loader inherits them. Do not hard-code a URL found in a prior example or copy redacted display URLs. Omit `design.loss_weights` to use defaults unless different weights are explicitly requested. For an existing YAML with user-specified overrides, surface conflicts rather than silently discarding them.
-
-Set `compute.placement` only when the user names GPUs, for example "run ESM on GPU 0 and OpenDDE candidates on 1-3". Otherwise omit it and let the compute service distribute fold candidates over available GPUs inside one container. Map the request onto the `compute.gpus` inventory from `protein_design_context`: `fold` is a list of GPU indices for independent single-GPU candidate workers; `esm` and `mpnn` are one index each. `cp_degree` defaults to 1 (Fold-CP off) and must only be raised when the user explicitly requests context parallelism; then `fold` must list exactly `cp_degree` GPUs. Confirm the mapping with the user and validate the YAML with `ddeharness protein-design validate --config <absolute-path> --json`.
-
-Resolve MSA policy before file searches or MSA questions. In API mode, MSA is service-managed: do not search for local A3M files or offer disabling MSA. When adapting a local quickstart to the user's configured API mode, remove its local-only MSA switches from the task copy and use service-managed MSA; disclose this adaptation in the final plan. Do not silently discard user-supplied MSA files. If the mode is `service_default` and mode-specific choices matter, resolve that ambiguity rather than assuming local or API mode.
-
-## Target discovery by Web search
-
-When the user gives only a target name, such as “design a VHH against PD-L1,” actively search the Web for the missing target information instead of immediately asking the user to provide it. Prefer authoritative records: UniProt or NCBI for identity, species, isoform, domain boundaries, and sequence; RCSB PDB and primary literature for experimentally supported epitopes or interaction residues. Search results are evidence for configuration preparation, not launch authorization.
-
-For every resolved value, retain the source URL or accession, sequence version or residue numbering scheme when available, and any domain truncation applied. Reconcile biological numbering with the one-based YAML positions explicitly. Never convert a reported epitope into `hotspots` until the isoform and numbering mapping are unambiguous. If sources disagree or several isoforms, extracellular constructs, or epitopes are plausible, present the alternatives rather than choosing silently. If no supported epitope is found, say so; use `hotspots: []` only after the user accepts an unconstrained target surface. Cache evidence within the conversation and do not repeat identical fetches without a specific missing fact; an example is not proof of an experimentally validated epitope.
-
-Web search does not create local MSA or structure files. Verify required file references are accessible to the selected compute worker. For local folding only, if MSA policy is unresolved, combine these choices with other missing target information: disable MSA, provide existing paired/unpaired A3M paths, or explicitly authorize online search with `protein_design_search_target_msa`. Do not re-ask when the reviewed YAML or user has already settled the choice. Call the MSA tool only after authorization, pass target/antigen sequences only, and omit `compute_url` unless the reviewed design specifies one. Copy returned A3M paths into the target chain and bind the final YAML to the returned worker because those files live on that worker.
-
-## Mandatory review gate
-
-Starting a design consumes compute and fixes scientific choices. A request to prepare or launch an unseen configuration is not final launch approval. Review these categories, but do not turn them into three mandatory conversational rounds. Ask only unresolved choices, combine related questions, and retain confirmed answers. A complete example can proceed directly to one final plan and launch-confirmation question.
-
-1. **Target / antigen** — target identity, sequence/provenance, domain boundaries, epitope/hotspot numbering, mode-compatible MSA policy, and any supplied initial complex.
-2. **Binder** — design type, starting sequences, chain types, fixed/designable positions, and seed provenance. For antibodies, also review format (`VHH`, `scFv`, or `VH/VL`), CDRs and framework; for mini binders, require a complete single chain without CDR annotations. Reuse confirmed inputs instead of asking the user to pick a scaffold again.
-3. **Final plan and launch** — after unresolved choices are settled, write the task YAML and run `ddeharness protein-design validate --config <absolute-path> --json`. Show a compact confirmation card: target/epitope, scaffold and fixed/designable regions, objective/default weights or overrides, cycles/candidates, inherited folding mode and MSA policy, configured compute placement (not a claimed bound worker), output location, PostFilter, and YAML path. State what was validated versus still untested. Ask explicitly: "Do you approve this configuration and authorize starting this design?" Do not end with a vague invitation to ask to start later.
-
-Use `ask_user` for related unresolved questions or the final approval when available; otherwise ask in the normal reply and stop. Mark inferred values and sources. Do not repeat validation without changed input/configuration or a validation error. An absent reply, a generic earlier "run it," and validation success are not final approval. If the user changes the plan, validate the changed configuration and renew approval of that exact plan; do not reuse stale consent.
-
-Call `protein_design_start` only after an explicit affirmative reply to the final launch review, and pass `user_confirmed: true`. If any required field is unresolved, contradictory, or unconfirmed, do not call the tool.
-
-## Prepare a configuration
-
-Use one-based sequence positions in YAML and agent-facing residue fields:
-the first residue is 1, the last is the chain length, and ranges include both
-endpoints. PDB/mmCIF author residue IDs need an explicit sequence mapping.
-
-Resolve target identity, species, sequence, domain boundaries, epitope, binder format, and seed provenance from the user's input and available authoritative search tools. Use Web search whenever required target facts are absent, and cite the evidence in the staged review. Never fabricate a sequence, MSA path, structure path, hotspot, or chain mapping. Ask only when an unresolved ambiguity would materially change the experiment.
-
-Write the generated configuration under the resolved user-home directory at `$HOME/.opendde_harness/protein_design/configs/` unless the user chooses another location, and pass its absolute path to validation and launch. Use OpenDDE for the primary `fold.model`. Preserve framework residues: `fixed_residues` overrides every design permission, while `cdr_regions` limits design to the named CDR residues when no narrower `designable_residues` is supplied.
-
-Validate the file before launch using `ddeharness protein-design validate --config` followed by the actual, shell-quoted absolute YAML path. Never pass a documentation placeholder as a filename.
-
-During review, report resolved values, provenance, assumptions, and unresolved choices. The final validated plan is not authorized for execution until the combined launch review is explicitly approved. Validation does not replace user confirmation.
-
-## Run and control a task
-
-Call `protein_design_start` only with the validated YAML path and `user_confirmed: true` after the mandatory review gate. The orchestration loop is deterministic: analyze, design, and reflection sessions make bounded decisions, while folding, scoring, population updates, and selection remain Python-controlled.
-
-After successful launch, report the returned task ID, target, total cycles, compute backend, actual bound compute URL, and actual output directory. Do not present a default or guessed URL/path as an observed binding; if the response omits it, check task status and report any remaining unknown value honestly.
-
-Use `protein_design_status` before changing a running task. Report both the optimization objective and its diagnostic components. A lower loss is better when `minimize` is true; a higher ipTM is better when ipTM is the direct objective. Do not interpret pLDDT as binding confidence.
-
-Use `protein_design_adjust` only for the cycle-boundary fields
-`num_sequences` and `reflection_interval`. Do not change the target, objective
-direction, fold backend, framework sequence, or residue permissions during a
-running task.
-
-Use `protein_design_candidates` to inspect ranked candidates. Before recommending experimental sequences, require canonical amino acids, preserved framework residues, successful structure prediction, gate compliance, and metric provenance. Prefer a diverse shortlist over near-duplicate sequences with indistinguishable scores.
-
-Use `protein_design_stop` when the user asks to stop or continuing would violate an explicit resource or safety constraint. The stop is cooperative and takes effect at a safe cycle boundary.
-
-
-TorchScore is an independent `torchscore` model kind, not an AF3Score alias. For
-initial-round choose `evaluation.scoring_backend: torchscore`, provide the
-`torchscore` service, `torchscore_options`, and `min_torchscore_iptm`; do not change
-an existing run to another scorer. It supports PDB scoring and metrics extraction
-with seed=10/one sample, not AF3Score's full preprocessing protocol.
-TorchOptimization (`torchopt`) uses only `/v1/optimizations`: submit registered
-`pdb_paths`, `binder_type` (`vhh` or `mini-binder`), chains and method. Reuse the
-local request_id; the client persists an idempotency key. The API returns an ID
-before launching and verifies Slurm receipts itself. PREPARING/SUBMITTED/RUNNING/
-UNKNOWN/COLLECTING are not success. Only SUCCEEDED with completed scheduler jobs,
-zero exit codes and native final artifacts establishes optimization completion;
-PREPARED is preparation only. Read native CSV/PDB paths with the results tool,
-then independently score final structures. Never claim affinity from optimizer
-completion. Paired VH/VL is unsupported. The bundled deployment uses port 8060;
-reuse the registered deployment and its model environment rather than inventing
-new paths or asking for extra workflow annotations. Autonomous feedback can use
-this registered service for low-confidence candidates without per-round approval.
-
-
-AF3Score and TorchScore remain independent tools for single-round and standalone
-scoring. Autonomous rounds require TorchScore for every generated/refined candidate:
-initial ipTM < 0.5 terminates that candidate; both ipTM and pTM > 0.8 go directly to
-TorchFold/DockQ. Other initial candidates use the uploaded interface-energy
-algorithm on Rosetta ResResE logs: summed negative target–binder contact energies
-below -5 select fixed binder residues for Partial Flow, with all other binder
-residues mutable. Partial Flow output is rescored: both > 0.8 go directly to
-TorchFold/DockQ, otherwise use registered TorchOptimization. Rescore optimized
-output and refold only if both > 0.8; otherwise terminate. Do not substitute scalar
-dG_separated for per-residue energies or route by hotspot contacts. Missing
-scientific outputs require recovery, never invented values or automatic passes.
-Process all eligible candidates without a global round, total sample, batch or
-patience cap. Each lineage has at most one Partial Flow followed by at most one
-optimization. Do not stop while an executable follow-up remains. Initial sample
-counts come from generator requests; counters are reporting only.
-See docs/autonomous-feedback.md for the service output contract and supported modes.
-The supplied TorchScore sbatch uses 8070; TorchOptimization remains 8060.
-
-
-Feedback classifications are Python outputs: `hotspot_hit`, `classify`,
-`repair_allowed`, `check_region_encoding` and `torchopt_supported`. Use measured values,
-not prose guesses, to select legal options. The transport rejects loopback hosts,
-absolute URL overrides, redirects and saved endpoints without allocation proof.
-Registry health discovery is deferred and never probes a local port. Missing
-sbatch deployment metadata is a configuration issue, not permission to run an API
-locally or bypass Slurm. The language-provider connection is separate from these
-scientific compute APIs.
+Read [binder_failure_diagnosis.md](references/binder_failure_diagnosis.md),
+[generation_strategy.md](references/generation_strategy.md) and
+[continue_or_stop.md](references/continue_or_stop.md). The scientific context builder
+extracts measured Candidate JSON, enriches with actual actions/history/constraints,
+and compresses the stage-relevant evidence for Qwen. Evidence and skill reasoning
+do not override the Python router. Predicted outcomes need experimental validation.

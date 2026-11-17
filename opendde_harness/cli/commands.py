@@ -13,7 +13,6 @@ group. The actual implementations live in per-feature modules:
   ``compare`` is defined in this module.
 
 - Subcommand groups (each exposes a typer ``*_app`` instance):
-    - ``compute``        → ``opendde_harness/cli/compute_commands.py``
     - ``provider``       → ``opendde_harness/cli/provider_commands.py``
     - ``protein-design`` → ``opendde_harness/cli/protein_design_commands.py``
     - ``sessions``       → ``opendde_harness/cli/session_commands.py``
@@ -111,12 +110,10 @@ upgrade_commands.register(app)
 # Subcommand registrations
 # ============================================================================
 
-from opendde_harness.cli.compute_commands import compute_app
 from opendde_harness.cli.protein_design_commands import protein_design_app
 from opendde_harness.cli.provider_commands import provider_app
 from opendde_harness.cli.skill_commands import skill_app
 
-app.add_typer(compute_app, name="compute")
 app.add_typer(provider_app, name="provider")
 app.add_typer(protein_design_app, name="protein-design")
 app.add_typer(skill_app, name="skill")

@@ -1,45 +1,33 @@
 [plugin]
 id = "protein-design"
 version = "1.0.0"
-display_name = "Protein Design"
+display_name = "Torch-Harness Protein Design"
 opendde_harness = ">=0.1"
 bundled = true
 enabled_by_default = true
 
 [plugin.contributes]
 skills_dirs = ["skills"]
-readiness = "opendde_harness.plugin.protein_design.readiness:compute_configured"
+readiness = "opendde_harness.plugin.protein_design.readiness:models_configured"
 
 [plugin.contributes.tool_description_notes]
-bash = "Protein Design models run through their configured compute service; this shell does not enter that container. Use protein_design_context and the Protein Design tools for model execution."
+bash = "Protein models run through registered Slurm model APIs; analysis uses native backends. Use protein_design_context and protein_design_start. No OpenDDE compute service is used."
 
 [[plugin.contributes.tools]]
 name = "protein_design_context"
-factory = "opendde_harness.plugin.protein_design.tools.control:make_context_tool"
+factory = "opendde_harness.plugin.protein_design.tools.workflow:make_context_tool"
 
 [[plugin.contributes.tools]]
 name = "protein_design_start"
-factory = "opendde_harness.plugin.protein_design.tools.control:make_start_tool"
+factory = "opendde_harness.plugin.protein_design.tools.workflow:make_start_tool"
 
 [[plugin.contributes.tools]]
 name = "protein_design_status"
-factory = "opendde_harness.plugin.protein_design.tools.control:make_status_tool"
-
-[[plugin.contributes.tools]]
-name = "protein_design_adjust"
-factory = "opendde_harness.plugin.protein_design.tools.control:make_adjust_tool"
-
-[[plugin.contributes.tools]]
-name = "protein_design_stop"
-factory = "opendde_harness.plugin.protein_design.tools.control:make_stop_tool"
+factory = "opendde_harness.plugin.protein_design.tools.workflow:make_status_tool"
 
 [[plugin.contributes.tools]]
 name = "protein_design_candidates"
-factory = "opendde_harness.plugin.protein_design.tools.control:make_candidates_tool"
-
-[[plugin.contributes.tools]]
-name = "protein_design_search_target_msa"
-factory = "opendde_harness.plugin.protein_design.tools.control:make_target_msa_search_tool"
+factory = "opendde_harness.plugin.protein_design.tools.workflow:make_candidates_tool"
 
 [[plugin.contributes.tools]]
 name = "protein_model_list"
@@ -89,22 +77,19 @@ factory = "opendde_harness.plugin.protein_design.tools.models:make_torchscore_to
 name = "protein_model_torchopt"
 factory = "opendde_harness.plugin.protein_design.tools.models:make_torchopt_tool"
 
-[[plugin.contributes.tools]]
-name = "protein_initial_round_start"
-factory = "opendde_harness.plugin.protein_design.tools.initial_round:make_initial_round_start_tool"
 
 [[plugin.contributes.tools]]
-name = "protein_initial_round_status"
-factory = "opendde_harness.plugin.protein_design.tools.initial_round:make_initial_round_status_tool"
+name = "protein_design_resume"
+factory = "opendde_harness.plugin.protein_design.tools.workflow:make_resume_tool"
 
 [[plugin.contributes.tools]]
-name = "protein_initial_round_resume"
-factory = "opendde_harness.plugin.protein_design.tools.initial_round:make_initial_round_resume_tool"
+name = "protein_design_list"
+factory = "opendde_harness.plugin.protein_design.tools.workflow:make_list_tool"
 
 [[plugin.contributes.tools]]
-name = "protein_initial_round_list"
-factory = "opendde_harness.plugin.protein_design.tools.initial_round:make_initial_round_list_tool"
+name = "protein_design_analyze"
+factory = "opendde_harness.plugin.protein_design.tools.workflow:make_analysis_tool"
 
 [[plugin.contributes.tools]]
-name = "protein_initial_round_regions"
-factory = "opendde_harness.plugin.protein_design.tools.initial_round:make_initial_round_regions_tool"
+name = "protein_design_regions"
+factory = "opendde_harness.plugin.protein_design.tools.workflow:make_regions_tool"

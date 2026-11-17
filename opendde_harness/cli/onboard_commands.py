@@ -9,7 +9,7 @@ Steps:
   1. LLM provider (required; the TUI's ``/login`` at a terminal, then the
      connectivity check, the default model and a test message)
   2. Long-term memory (optional; one question -- it runs on the default model)
-  3. Protein Design compute and folding configuration
+  3. Protein Design model API configuration
   4. Web search (optional)
   5. Done
 
@@ -1709,29 +1709,10 @@ def _step1_provider(
 
 
 def _protein_design_recap() -> str:
-    """Where Protein Design compute runs and whether it answers, for the recap.
-
-    Read from disk and probed the same way ``ddeharness doctor`` does, so the
-    recap reports the state the user will find rather than what the step
-    intended.
-    """
-    from opendde_harness.cli.onboard_compute import inspect_compute, load_protein_design_config
-
-    config = load_protein_design_config()
-    if not config:
-        return _t("[warn]not configured[/warn]", "[warn]未配置[/warn]")
-    report = inspect_compute(config)
-    placement = {
-        "local_docker": _t("local Docker", "本地 Docker"),
-        "remote_service": _t("remote service", "远程服务"),
-        "worker_pool": _t("worker pool", "计算节点池"),
-    }.get(str(report.get("placement")), str(report.get("placement") or "—"))
-    readiness = (
-        _t("[ok]ready[/ok]", "[ok]就绪[/ok]")
-        if report.get("ready")
-        else _t("[warn]unreachable[/warn]", "[warn]未就绪[/warn]")
-    )
-    return f"{placement}, {readiness}"
+    """Report registered model configuration without probing any compute endpoint."""
+    config = _load_raw_config().get("plugins", {}).get("config", {}).get("protein-design", {})
+    count = len(config.get("model_services", {}))
+    return _t(f"{count} registered model APIs", f"已注册 {count} 个模型 API")
 
 
 def _print_next_steps(*, warnings: list[str], show_next_steps: bool = True) -> None:
@@ -1789,7 +1770,7 @@ def _print_next_steps(*, warnings: list[str], show_next_steps: bool = True) -> N
         console,
         [
             ("ddeharness", _t("start the antibody design TUI", "启动抗体设计 TUI")),
-            ("ddeharness doctor", _t("check configuration and compute readiness", "检查配置与计算就绪状态")),
+            ("ddeharness doctor", _t("check configuration and provider readiness", "检查配置与模型提供方状态")),
             ("ddeharness tracing", _t("open the results dashboard", "打开结果面板")),
         ],
         key_style="accent",
@@ -1850,13 +1831,15 @@ def run_wizard(
 
 
 def _step3_protein_design(*, skip: bool, non_interactive: bool, warnings: list[str]) -> object:
-    """Step 3 -- Protein Design compute settings."""
+    """Point to registered model setup; never provision an OpenDDE service."""
     _step_header(3, _t("Protein Design", "蛋白设计配置"))
-    if skip or non_interactive:
-        return None
-    from opendde_harness.cli.onboard_protein_design import configure_protein_design
-
-    configure_protein_design()
+    if not skip and not non_interactive:
+        console.print(
+            _t(
+                "Register model APIs with ddeharness protein-design models register. No OpenDDE compute service is used.",
+                "使用 ddeharness protein-design models register 注册模型 API；不再配置 OpenDDE compute service。",
+            )
+        )
     return None
 
 
@@ -2139,7 +2122,7 @@ def register(app: typer.Typer) -> None:
         ),
         skip_memory: bool = typer.Option(False, "--skip-memory", help="Skip Step 2 (Persistent Memory)"),
         skip_protein_design: bool = typer.Option(
-            False, "--skip-protein-design", help="Skip Step 3 (Protein Design compute settings)"
+            False, "--skip-protein-design", help="Skip Step 3 (Protein Design model registration)"
         ),
         brave_api_key: Optional[str] = typer.Option(
             None,
@@ -2164,7 +2147,7 @@ def register(app: typer.Typer) -> None:
             "understands its shape",
         ),
     ) -> None:
-        """Configure LLM, memory, Protein Design compute and web search."""
+        """Configure LLM, memory, Protein Design model APIs and web search."""
         run_wizard(
             provider=provider,
             api_key=api_key,

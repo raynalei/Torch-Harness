@@ -1,15 +1,14 @@
-"""Setup readiness for the protein-design plugin."""
+"""Readiness for registered Torch-Harness model workflows."""
 
 from __future__ import annotations
 
 from typing import Any
 
 
+def models_configured(config: dict[str, Any]) -> bool:
+    return bool(config.get("model_services"))
+
+
 def compute_configured(config: dict[str, Any]) -> bool:
-    """True once a compute service is configured, by URL or by local workers."""
-    return bool(
-        config.get("compute_url")
-        or config.get("compute_workers")
-        or config.get("model_services")
-        or config.get("initial_round_config")
-    )
+    """Compatibility import only; legacy compute URLs no longer establish readiness."""
+    return models_configured(config)

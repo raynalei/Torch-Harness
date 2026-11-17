@@ -1,6 +1,7 @@
 """Protein-design tools integrate with the main assistant's built-in prompt."""
 
 import re
+import tomllib
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -10,21 +11,19 @@ from opendde_harness.memory_engine.skill_local.registry import SkillRegistry
 from opendde_harness.plugin import active_registry
 from opendde_harness.plugin.protein_design.agents.skills import BUILTIN_PROTEIN_DESIGN_SKILLS, ProteinDesignSkillCatalog
 from opendde_harness.plugin.protein_design.readiness import compute_configured
-from opendde_harness.plugin.protein_design.tools import control
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_SKILLS = REPO_ROOT / "opendde_harness" / "plugin" / "protein_design" / "skills"
-PLUGIN_NOTE = (
-    "Protein Design models run through their configured compute service; this shell does not enter "
-    "that container. Use protein_design_context and the Protein Design tools for model execution."
-)
+MANIFEST = tomllib.loads((PLUGIN_SKILLS.parent / "opendde-harness-plugin.toml").read_text())["plugin"]["contributes"]
+PLUGIN_NOTE = MANIFEST["tool_description_notes"]["bash"]
 CONTROL_TOOLS = (
     "protein_design_context",
     "protein_design_start",
     "protein_design_status",
     "protein_design_candidates",
-    "protein_design_adjust",
-    "protein_design_stop",
+    "protein_design_resume",
+    "protein_design_list",
+    "protein_design_analyze",
 )
 
 
@@ -47,12 +46,11 @@ def test_identity_prompt_keeps_the_antibody_block_in_place(tmp_path):
     assert headings[:4] == ["## Scope", "## Preparing a design", "## Running and reading a design", "## Runtime"]
 
 
-def test_scope_names_the_bundled_examples_and_the_context_tool():
+def test_scope_uses_registered_models_without_compute_service():
     scope = render.PROTEIN_DESIGN_SCOPE
-    assert "Load the `protein-design` skill and call `protein_design_context` once" in scope
-    for example in ("docs/examples/crlf2_quickstart.yaml", "docs/examples/cacng1_quickstart.yaml"):
-        assert example in scope
-        assert (REPO_ROOT / example).is_file()
+    assert "protein_design_context" in scope
+    assert "TorchScore" in scope
+    assert "OpenDDE compute service is not used" in scope
 
 
 def test_identity_without_design_plugin_preserves_other_contributions(monkeypatch, tmp_path):
@@ -73,8 +71,7 @@ def test_identity_without_design_plugin_preserves_other_contributions(monkeypatc
 
 
 def test_scope_only_names_tools_the_plugin_registers():
-    source = Path(control.__file__).read_text(encoding="utf-8")
-    registered = set(re.findall(r'return "(protein_design_\w+)"', source))
+    registered = {tool["name"] for tool in MANIFEST["tools"]}
     assert set(CONTROL_TOOLS) <= registered
     assert set(re.findall(r"protein_design_\w+", render.PROTEIN_DESIGN_SCOPE)) <= registered
 
@@ -121,10 +118,10 @@ def test_skills_are_discovered_from_the_plugin_directory(tmp_path):
     assert ProteinDesignSkillCatalog.builtin().names() == BUILTIN_PROTEIN_DESIGN_SKILLS
 
 
-def test_readiness_needs_a_compute_url_or_workers():
+def test_readiness_needs_registered_models():
     assert compute_configured({}) is False
-    assert compute_configured({"compute_url": "http://127.0.0.1:8080"}) is True
-    assert compute_configured({"compute_workers": 2}) is True
+    assert compute_configured({"compute_url": "http://127.0.0.1:8080"}) is False
+    assert compute_configured({"compute_workers": 2}) is False
     assert compute_configured({"compute_url": "", "compute_workers": 0}) is False
 
 
@@ -145,3 +142,7 @@ def test_quickstart_examples_resolve_without_a_source_checkout(monkeypatch, tmp_
 
     assert [example["available"] for example in examples] == [True, True]
     assert all(str(packaged) in example["path"] for example in examples)
+
+
+def test_registered_models_satisfy_readiness():
+    assert compute_configured({"model_services": {"score": {"kind": "torchscore"}}})

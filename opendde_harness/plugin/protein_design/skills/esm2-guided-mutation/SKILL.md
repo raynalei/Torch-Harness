@@ -1,46 +1,18 @@
 ---
 name: esm2-guided-mutation
-description: Generate one-step CDR mutation proposals from ESM-2 deep-mutational-scan log-likelihood ratios, then pass those proposals to the normal fold and gate pipeline.
+description: Capability-gated ESM2 likelihood guidance; not an affinity predictor.
 ---
 
-# ESM-2 Guided Mutation
+# esm2-guided-mutation
 
-Use this as the primary proposal skill only when the parent is a complete, materialized sequence and the Router exposes it.
+Use registered Torch-Harness model APIs and native evidence tools. Do not call
+an OpenDDE compute service, install its Docker image or request a compute URL.
+Call `protein_design_context` to inspect actual capabilities. Missing evidence is
+unknown; never replace a measurement with an LLM-generated score.
 
-The runtime performs the ESM-2 DMS and materializes the highest positive LLR
-substitutions at mutable CDR positions. The Design Agent must still select this
-skill explicitly and provide a valid top-level portfolio. ESM-2 is a sequence
-plausibility model, not an affinity predictor.
-
-## Output contract
-
-The Agent only selects this Python-executed skill. Return exactly one JSON
-object with no prose or code fence before or after it:
-
-```json
-{
-  "skill_id": "esm2-guided-mutation",
-  "selection_reason": "ESM-2 sequence-plausibility rescue best matches the current bottleneck.",
-  "candidates": []
-}
-```
-
-Do not invent mutations or placeholder candidates; Python performs the DMS and
-materializes the proposals.
-
-## Contract
-
-- Python proposes substitutions only at the listed mutable positions using the
-  configured semantic chain IDs. Agent-facing sequence positions are one-based;
-  the runtime uses zero-based indices internally.
-- The runtime records `esm2_llr`, the parent residue, and the selected rank in
-  candidate metadata before folding.
-
-## Guardrails
-
-- Never use this skill for a parent containing `X` or an unmaterialized CDR;
-  full redesign must materialize the sequence first.
-- A positive LLR does not imply better antigen binding. Keep OpenDDE metrics,
-  contact-fraction gates, and developability checks authoritative.
-- Treat the generated mutations as proposals; all candidates still undergo
-  folding, admission, and population selection.
+The current registered models do not include an ESM2 scoring/DMS backend.
+Do not invoke the retired compute endpoint or invent LLR/PLL values. Native
+capability discovery reports ESM2 unavailable until a real backend and weights
+are configured. A validated native substitution is not an ESM2 inference result.
+Use existing measured evidence for supported TorchOptimization requests instead,
+without relabeling them as ESM2-guided sampling.

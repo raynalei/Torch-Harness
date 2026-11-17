@@ -38,6 +38,9 @@ INTERFACE_METRICS = (
 DEVELOPABILITY_FIELDS = (
     "available",
     "reason",
+    "ptm_risks",
+    "surface_patches",
+    "immunogenicity",
     "pi",
     "pI",
     "net_charge",

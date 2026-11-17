@@ -1,12 +1,17 @@
 ---
 name: minibinder-point-mutation
-description: Propose bounded sequence mutations to an existing non-antibody mini binder using its measured interface and fold evidence.
+description: Validate substitutions in an existing mini-binder sequence.
 ---
 
-# Mini binder point mutation
+# minibinder-point-mutation
 
-Use only the provided chain IDs and one-based mutable sequence positions. Preserve chain length, every fixed residue, and the configured mutation budget. Output the requested number of distinct candidates using the supplied schema; each mutation uses `chain_id`, `position`, `from_aa`, and `to_aa`.
+Use registered Torch-Harness model APIs and native evidence tools. Do not call
+an OpenDDE compute service, install its Docker image or request a compute URL.
+Call `protein_design_context` to inspect actual capabilities. Missing evidence is
+unknown; never replace a measurement with an LLM-generated score.
 
-Choose mutations from current target-interface, hotspot, fold-confidence and prior-cycle evidence. Distinguish interface improvement from disruption of the binder core. Do not infer buried positions or specific contacts without structural evidence. Preserve user-specified motifs; there are no CDRs, antibody frameworks or humanization objectives in this mode.
-
-Describe trade-offs and uncertainty. Predicted confidence is not measured affinity, solubility or experimental success. This skill optimizes an existing sequence; it does not generate new backbones or change sequence length.
+There are no antibody CDR or framework assumptions for mini-binders. Keep the
+provided binder length, fixed residues and target. Use native action `mutations`
+to validate explicit one-based substitutions. Use compatible registered
+TorchOptimization for actual optimization, with new TorchScore evaluation of
+its outputs. Never reinterpret a sequence plausibility hypothesis as binding.

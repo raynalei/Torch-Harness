@@ -212,9 +212,13 @@ def test_worker_reports_uncertain_submission_as_recoverable(profile, monkeypatch
 
 
 async def test_qwen_pipeline_tool_launches_once_and_does_not_poll_apis(profile, tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "opendde_harness.plugin.protein_design.tools.workflow.prepare_workflow",
+        lambda value, **kwargs: prepare_run(Path(value) if isinstance(value, str) else value, **kwargs),
+    )
     registry = active_registry()
     tool = registry.build_tool(
-        "protein_initial_round_start",
+        "protein_design_start",
         config={"initial_round_config": str(profile)},
         services=ServiceLocator(workspace=tmp_path, user_id="test", agent_id="test"),
     )
@@ -226,19 +230,23 @@ async def test_qwen_pipeline_tool_launches_once_and_does_not_poll_apis(profile, 
         launched.append(config)
         return {"state": "starting", "run_dir": str(config.work_dir / config.name)}
 
-    monkeypatch.setattr("opendde_harness.plugin.protein_design.tools.initial_round.start_round", launch)
+    monkeypatch.setattr("opendde_harness.plugin.protein_design.tools.workflow.start_round", launch)
     result = await tool.execute(pdb_path=str(pdb), name="run1", user_confirmed=True)
     assert json.loads(result.model_text)["state"] == "starting"
     assert len(launched) == 1 and launched[0].generators["ppiflow"].request["antigen_pdb"] == "/shared/input.pdb"
-    assert "protein_initial_round_status" in registry.tool_names()
+    assert "protein_design_status" in registry.tool_names()
 
 
 def test_cli_detach_returns_without_running_foreground(profile, monkeypatch):
     monkeypatch.setattr(
-        "opendde_harness.plugin.protein_design.initial_round.automation.start_round",
-        lambda _: {"state": "starting", "run_dir": "/shared/run"},
+        "opendde_harness.cli.protein_design_commands.start_round",
+        lambda *args, **kwargs: {"state": "starting", "run_dir": "/shared/run"},
     )
-    result = CliRunner().invoke(protein_design_app, ["initial-round", "-c", str(profile), "--detach"])
+    monkeypatch.setattr(
+        "opendde_harness.cli.protein_design_commands.prepare_workflow",
+        lambda value, **kwargs: prepare_run(Path(value) if isinstance(value, str) else value, **kwargs),
+    )
+    result = CliRunner().invoke(protein_design_app, ["start", "-c", str(profile), "--detach"])
     assert result.exit_code == 0, result.output
     assert json.loads(result.output)["state"] == "starting"
 
@@ -255,8 +263,12 @@ def test_status_on_another_login_node_does_not_treat_remote_pid_as_dead(profile,
 
 
 async def test_natural_language_tool_accepts_inline_config_without_yaml(profile, tmp_path, monkeypatch):
-    from opendde_harness.plugin.protein_design.tools.initial_round import InitialRoundTool
+    from opendde_harness.plugin.protein_design.tools.workflow import WorkflowTool as InitialRoundTool
 
+    monkeypatch.setattr(
+        "opendde_harness.plugin.protein_design.tools.workflow.prepare_workflow",
+        lambda value, **kwargs: prepare_run(value, **kwargs),
+    )
     value = prepare_run(profile).model_dump(mode="json")
     profile.unlink()  # The tool must not read a YAML file on this path.
     tool = InitialRoundTool({}, "start")
@@ -266,7 +278,7 @@ async def test_natural_language_tool_accepts_inline_config_without_yaml(profile,
         launched.append(config)
         return {"state": "starting", "run_dir": str(config.work_dir / config.name)}
 
-    monkeypatch.setattr("opendde_harness.plugin.protein_design.tools.initial_round.start_round", launch)
+    monkeypatch.setattr("opendde_harness.plugin.protein_design.tools.workflow.start_round", launch)
     result = await tool.execute(run_config=value, name="spoken_task", user_confirmed=True)
     assert json.loads(result.model_text)["state"] == "starting"
     assert launched[0].name == "spoken_task"
@@ -281,16 +293,20 @@ async def test_natural_language_tool_accepts_inline_config_without_yaml(profile,
 
 
 async def test_inline_launch_still_validates_inputs_and_authorization(profile, monkeypatch):
-    from opendde_harness.plugin.protein_design.tools.initial_round import InitialRoundTool
+    from opendde_harness.plugin.protein_design.tools.workflow import WorkflowTool as InitialRoundTool
 
     tool = InitialRoundTool({}, "start")
     launched = []
     monkeypatch.setattr(
-        "opendde_harness.plugin.protein_design.tools.initial_round.start_round", lambda config: launched.append(config)
+        "opendde_harness.plugin.protein_design.tools.workflow.start_round", lambda config: launched.append(config)
+    )
+    monkeypatch.setattr(
+        "opendde_harness.plugin.protein_design.tools.workflow.prepare_workflow",
+        lambda value, **kwargs: prepare_run(value, **kwargs),
     )
     value = prepare_run(profile).model_dump(mode="json")
     result = await tool.execute(run_config=value, user_confirmed=False)
-    assert "authorization" in json.loads(result.model_text)["error"]
+    assert "authorize" in json.loads(result.model_text)["error"]
     value["generators"]["ppiflow"]["chains"]["binder"] = []
     result = await tool.execute(run_config=value, user_confirmed=True)
     assert "error" in json.loads(result.model_text) and not launched
@@ -355,7 +371,7 @@ def test_explicit_service_wins_and_ambiguous_registration_is_rejected(profile):
 
 def test_resume_uses_saved_snapshot_and_enables_failed_step_retry(profile, monkeypatch):
     from opendde_harness.plugin.protein_design.initial_round import automation
-    from opendde_harness.plugin.protein_design.tools.initial_round import InitialRoundTool
+    from opendde_harness.plugin.protein_design.tools.workflow import WorkflowTool as InitialRoundTool
 
     config = prepare_run(profile)
     root = config.work_dir / config.name
@@ -490,11 +506,11 @@ def test_worker_persists_cdr_question_without_reporting_inference_failure(profil
 
 
 async def test_region_resolution_tool_does_not_invent_user_answer(tmp_path, monkeypatch):
-    from opendde_harness.plugin.protein_design.tools.initial_round import InitialRoundTool
+    from opendde_harness.plugin.protein_design.tools.workflow import WorkflowTool as InitialRoundTool
 
     calls = []
     monkeypatch.setattr(
-        "opendde_harness.plugin.protein_design.tools.initial_round.resume_round", lambda root: calls.append(root)
+        "opendde_harness.plugin.protein_design.tools.workflow.resume_round", lambda root: calls.append(root)
     )
     tool = InitialRoundTool({}, "regions")
     result = await tool.execute(run_dir=str(tmp_path), question_id="a" * 64, cdr_position="B5-6")

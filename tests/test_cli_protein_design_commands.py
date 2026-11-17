@@ -1,223 +1,97 @@
-"""Protein-design YAML validation summaries expose reviewed cycle policies."""
+"""Public Torch-Harness CLI bypasses the retired compute-service workflow."""
 
 import json
-from pathlib import Path
 
 import pytest
-import yaml
 from typer.testing import CliRunner
 
 from opendde_harness.cli import protein_design_commands as commands
-from opendde_harness.plugin.protein_design.core.contracts import Placement
-from opendde_harness.plugin.protein_design.core.detached import DetachedDesignTaskController, TaskFileStore
-
-
-@pytest.mark.parametrize("degree", [3])
-def test_placement_rejects_silently_unused_or_missing_devices(degree):
-    with pytest.raises(ValueError, match="exactly cp_degree"):
-        Placement(fold=[0, 1], cp_degree=degree)
-
-
-def test_placement_default_does_not_silently_discard_extra_gpus():
-    assert Placement(fold=[0, 1]).fold == [0, 1]
-
-
-def test_validation_reports_candidate_parallelism_by_default():
-    source = Path(__file__).parents[1] / "docs/examples/crlf2_scheduled.yaml"
-    data = yaml.safe_load(source.read_text())
-    data["compute"] = {"placement": {"fold": [0, 1, 2]}}
-    workflow = commands.WorkflowConfigLoader._normalize_config(data)
-    summary = commands._workflow_summary(workflow)
-    assert summary["compute"]["fold_gpu_count"] == 3
-    assert summary["compute"]["fold_parallelism"] == "candidate_parallel"
-    assert summary["compute"]["candidate_data_parallelism"] is True
-
-
-def test_validation_exposes_parallelism_and_external_hotspots():
-    source = Path(__file__).parents[1] / "docs/examples/crlf2_scheduled.yaml"
-    data = yaml.safe_load(source.read_text())
-    data["compute"] = {"placement": {"fold": [0, 1], "cp_degree": 2, "esm": 0, "mpnn": 0}}
-    chain = next(iter(data["target"]["chains"]))
-    data["target"]["chains"][chain]["hotspots"] = [1, 39]
-    workflow = commands.WorkflowConfigLoader._normalize_config(data)
-    summary = commands._workflow_summary(workflow)
-    assert summary["target_hotspots_1based"][chain] == [1, 39]
-    assert summary["compute"]["fold_gpu_count"] == 2
-    assert summary["compute"]["fold_parallelism"] == "context_parallel"
-    assert summary["compute"]["candidate_data_parallelism"] is False
 
 
 @pytest.fixture
-def task_store(tmp_path, monkeypatch):
-    store = TaskFileStore(tmp_path)
-    controller = DetachedDesignTaskController({}, store=store)
-    monkeypatch.setattr(commands, "DetachedDesignTaskController", lambda _: controller)
-    return store
+def source(tmp_path, monkeypatch):
+    path = tmp_path / "workflow.yaml"
+    path.write_text("name: test")
+    monkeypatch.setattr(commands, "prepare_workflow", lambda *args, **kwargs: object())
+    return path
 
 
-def test_status_reports_snapshot_in_text_and_json(task_store):
-    task_id = "a" * 32
-    task_store.task_dir(task_id).mkdir()
-    snapshot = commands.TaskSnapshot(
-        task_id=task_id,
-        status="failed",
-        target="example",
-        cycle=2,
-        total_cycles=5,
-        phase="design",
-        error="example failure",
-    )
-    task_store.write_snapshot(snapshot)
-    runner = CliRunner()
-    result = runner.invoke(commands.protein_design_app, ["status", "--task-id", task_id])
-    assert result.exit_code == 0, result.output
-    assert "cycle 2/5" in result.output and "example failure" in result.output
-    result = runner.invoke(commands.protein_design_app, ["status", "--task-id", task_id, "--json"])
-    assert result.exit_code == 0, result.output
-    assert json.loads(result.output) == snapshot.model_dump(mode="json")
-    result = runner.invoke(commands.protein_design_app, ["status", "--json"])
-    assert json.loads(result.output) == [snapshot.model_dump(mode="json")]
-
-
-def test_status_empty_list(task_store):
-    runner = CliRunner()
-    assert json.loads(runner.invoke(commands.protein_design_app, ["status", "--json"]).output) == []
-    assert "No protein-design tasks" in runner.invoke(commands.protein_design_app, ["status"]).output
-
-
-@pytest.mark.parametrize("task_id", ["b" * 32, "../../invalid"])
-def test_status_missing_or_invalid_task_is_a_clean_error(task_store, task_id):
-    result = CliRunner().invoke(commands.protein_design_app, ["status", "--task-id", task_id, "--json"])
-    assert result.exit_code == 1
-    assert "Protein-design status failed" in result.output
-    assert "Traceback" not in result.output
-
-
-def test_validate_displays_cycle_schedule(tmp_path, monkeypatch):
-    source = Path(__file__).parents[1] / "docs/examples/crlf2_scheduled.yaml"
-    monkeypatch.setattr(commands, "_load_plugin_config", lambda _: {})
-    result = CliRunner().invoke(commands.protein_design_app, ["validate", "--config", str(source), "--json"])
-    assert result.exit_code == 0, result.output
-    summary = json.loads(result.output)
-    assert summary["router_selection_strategy"] == "weighted"
-    assert [stage["num_sequences"] for stage in summary["cycle_schedule"]] == [8, 4, 2]
-
-
-def test_validate_rejects_overlapping_stages(tmp_path, monkeypatch):
-    source = Path(__file__).parents[1] / "docs/examples/crlf2_scheduled.yaml"
-    data = yaml.safe_load(source.read_text())
-    data["design"]["cycle_schedule"][1]["start_cycle"] = 3
-    path = tmp_path / "overlap.yaml"
-    path.write_text(yaml.safe_dump(data))
-    monkeypatch.setattr(commands, "_load_plugin_config", lambda _: {})
-    result = CliRunner().invoke(commands.protein_design_app, ["validate", "--config", str(path), "--json"])
-    assert result.exit_code == 1
-    assert "overlap" in result.output
-
-
-def test_initial_round_cli_loads_separate_config_and_check_mode(tmp_path, monkeypatch):
-    from opendde_harness.plugin.protein_design.initial_round.config import InitialRoundConfig
-    from opendde_harness.plugin.protein_design.initial_round.runner import InitialRoundRunner
-
-    source = tmp_path / "initial.yaml"
-    source.write_text("name: example")
-    sentinel = object()
-    monkeypatch.setattr(InitialRoundConfig, "load", lambda path: sentinel)
+def test_start_detaches_with_recovery_ids(source, monkeypatch):
     seen = {}
 
-    def initialize(self, config, *, attach_jobs):
-        seen.update(config=config, attach_jobs=attach_jobs)
+    def launch(config, **kwargs):
+        seen.update(kwargs)
+        return {"state": "starting"}
 
-    async def run(self, *, check_only):
-        seen["check_only"] = check_only
-        return {"status": "checked", "inference_verified": False}
-
-    monkeypatch.setattr(InitialRoundRunner, "__init__", initialize)
-    monkeypatch.setattr(InitialRoundRunner, "run", run)
+    monkeypatch.setattr(commands, "start_round", launch)
     result = CliRunner().invoke(
-        commands.protein_design_app,
-        ["initial-round", "-c", str(source), "--check", "--attach-job", "generate/ppiflow=known"],
+        commands.protein_design_app, ["start", "-c", str(source), "--attach-job", "generate/ppiflow=42"]
     )
     assert result.exit_code == 0, result.output
-    assert seen == {"config": sentinel, "attach_jobs": {"generate/ppiflow": "known"}, "check_only": True}
+    assert seen == {"retry_failed": False, "attach_jobs": {"generate/ppiflow": "42"}}
+
+
+@pytest.mark.parametrize("attachment", ["bad", "=42", "key="])
+def test_invalid_recovery_does_not_launch(source, monkeypatch, attachment):
+    monkeypatch.setattr(commands, "start_round", lambda *a, **kw: pytest.fail("unexpected launch"))
+    result = CliRunner().invoke(commands.protein_design_app, ["start", "-c", str(source), "--attach-job", attachment])
+    assert result.exit_code == 1
+
+
+def test_check_does_not_claim_inference(source, monkeypatch):
+    class Runner:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def run(self, *, check_only):
+            assert check_only
+            return {"status": "checked", "inference_verified": False}
+
+    monkeypatch.setattr(commands, "InitialRoundRunner", Runner)
+    result = CliRunner().invoke(commands.protein_design_app, ["start", "-c", str(source), "--check"])
+    assert result.exit_code == 0, result.output
     assert json.loads(result.output)["inference_verified"] is False
 
 
-def test_initial_round_cli_invalid_config_is_nonzero(tmp_path):
-    source = tmp_path / "initial.yaml"
-    source.write_text("name: missing-fields")
-    result = CliRunner().invoke(commands.protein_design_app, ["initial-round", "-c", str(source)])
+def test_foreground_partial_is_nonzero(source, monkeypatch):
+    class Runner:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def run(self, **kw):
+            return {"status": "partial"}
+
+    monkeypatch.setattr(commands, "InitialRoundRunner", Runner)
+    result = CliRunner().invoke(commands.protein_design_app, ["start", "-c", str(source), "--foreground"])
+    assert result.exit_code == 2
+    assert json.loads(result.output)["status"] == "partial"
+
+
+def test_status_and_resume_use_existing_checkpoint(tmp_path, monkeypatch):
+    for action, function in [("status", "round_status"), ("resume", "resume_round")]:
+        monkeypatch.setattr(commands, function, lambda path: {"run_dir": str(path)})
+        result = CliRunner().invoke(commands.protein_design_app, [action, "--run-dir", str(tmp_path)])
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output)["run_dir"] == str(tmp_path)
+
+
+def test_native_analysis_needs_no_model_or_compute_service(tmp_path):
+    path = tmp_path / "request.json"
+    path.write_text(json.dumps({"action": "developability", "sequences": {"B": "ANGSM"}}))
+    result = CliRunner().invoke(commands.protein_design_app, ["analyze", "--request", str(path)])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["immunogenicity"]["scores"] is None
+
+
+def test_initial_round_is_not_a_public_command():
+    result = CliRunner().invoke(commands.protein_design_app, ["--help"])
+    assert "initial-round" not in result.output
+    assert "analyze" in result.output
+
+
+def test_invalid_configuration_is_clean_error(tmp_path):
+    path = tmp_path / "invalid.yaml"
+    path.write_text("name: missing-fields")
+    result = CliRunner().invoke(commands.protein_design_app, ["start", "-c", str(path)])
     assert result.exit_code == 1
-    assert "Initial round failed" in result.output
-
-
-def test_initial_round_cli_detached_recovery_passes_attachments(tmp_path, monkeypatch):
-    from opendde_harness.plugin.protein_design.initial_round.config import InitialRoundConfig
-
-    source = tmp_path / "initial.yaml"
-    source.write_text("name: example")
-    sentinel = object()
-    monkeypatch.setattr(InitialRoundConfig, "load", lambda _: sentinel)
-    seen = {}
-
-    def launch(config, *, attach_jobs):
-        seen.update(config=config, attach_jobs=attach_jobs)
-        return {"state": "starting"}
-
-    monkeypatch.setattr("opendde_harness.plugin.protein_design.initial_round.automation.start_round", launch)
-    result = CliRunner().invoke(
-        commands.protein_design_app,
-        ["initial-round", "-c", str(source), "--detach", "--attach-job", "generate/ppiflow=known"],
-    )
-    assert result.exit_code == 0, result.output
-    assert seen == {"config": sentinel, "attach_jobs": {"generate/ppiflow": "known"}}
-
-
-def test_initial_round_cli_partial_result_is_nonzero(tmp_path, monkeypatch):
-    from opendde_harness.plugin.protein_design.initial_round.config import InitialRoundConfig
-    from opendde_harness.plugin.protein_design.initial_round.runner import InitialRoundRunner
-
-    source = tmp_path / "initial.yaml"
-    source.write_text("name: example")
-    monkeypatch.setattr(InitialRoundConfig, "load", lambda path: object())
-    monkeypatch.setattr(InitialRoundRunner, "__init__", lambda *args, **kwargs: None)
-
-    async def run(self, *, check_only):
-        return {"status": "partial", "failed": ["candidate"]}
-
-    monkeypatch.setattr(InitialRoundRunner, "run", run)
-    result = CliRunner().invoke(commands.protein_design_app, ["initial-round", "-c", str(source)])
-    assert result.exit_code == 2 and json.loads(result.output)["status"] == "partial"
-
-
-def test_initial_round_resume_cli_uses_run_directory_without_yaml(tmp_path, monkeypatch):
-    observed = []
-
-    def resume(root):
-        observed.append(root)
-        return {"state": "starting", "run_dir": str(root)}
-
-    monkeypatch.setattr("opendde_harness.plugin.protein_design.initial_round.automation.resume_round", resume)
-    result = CliRunner().invoke(commands.protein_design_app, ["initial-round-resume", "--run-dir", str(tmp_path)])
-    assert result.exit_code == 0, result.output
-    assert json.loads(result.output)["state"] == "starting"
-    assert observed == [tmp_path]
-
-
-def test_cli_supplies_regions_to_the_pending_question_then_resumes(tmp_path, monkeypatch):
-    calls = []
-    monkeypatch.setattr(
-        "opendde_harness.plugin.protein_design.initial_round.region_input.supply_regions",
-        lambda *args: calls.append(args),
-    )
-    monkeypatch.setattr(
-        "opendde_harness.plugin.protein_design.initial_round.automation.resume_round",
-        lambda root: {"state": "starting", "run_dir": str(root)},
-    )
-    result = CliRunner().invoke(
-        commands.protein_design_app,
-        ["initial-round-regions", "--run-dir", str(tmp_path), "--question-id", "a" * 64, "--cdr-position", "B5-6"],
-    )
-    assert result.exit_code == 0, result.output
-    assert calls == [(tmp_path, "a" * 64, "B5-6", None)]
-    assert json.loads(result.output)["state"] == "starting"
+    assert "Traceback" not in result.output

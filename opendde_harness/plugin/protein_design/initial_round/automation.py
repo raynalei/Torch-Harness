@@ -138,7 +138,7 @@ def round_status(root: Path):
         "jobs": jobs[-8:],
         "total_jobs": len(jobs),
         "pending_regions": checkpoint.get("pending_regions"),
-        "resume_tool": "protein_initial_round_resume",
+        "resume_tool": "protein_design_resume",
         "job_counts": dict(Counter(job["state"] for job in jobs)),
         "api_cleanup": checkpoint.get("api_cleanup", {}),
         "summary_path": str(root / "summary.json"),
@@ -287,7 +287,7 @@ def list_rounds(work_dir: Path | None = None):
                         "run_dir": str(root),
                         "name": root.name,
                         "state": value.get("status", "foreground_unverified"),
-                        "resume_tool": "protein_initial_round_resume",
+                        "resume_tool": "protein_design_resume",
                     }
                 )
                 continue
@@ -295,7 +295,7 @@ def list_rounds(work_dir: Path | None = None):
     return {
         "index_path": str(path),
         "runs": runs,
-        "hint": "Use run_dir with protein_initial_round_status/resume; no new task name is needed. "
+        "hint": "Use run_dir with protein_design_status/protein_design_resume; no new task name is needed. "
         "Remote worker liveness cannot be proven from a different host. "
         "If this instance has no index, provide the original shared work_dir to discover older runs.",
     }

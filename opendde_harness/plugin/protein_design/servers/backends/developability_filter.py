@@ -1,19 +1,26 @@
-"""Developability filter stub — public build.
-
-The objective developability backend is not included in the open-source
-distribution. Assessments are delegated to the LLM agent instead.
-"""
+"""Compatibility function for the native Torch-Harness developability backend."""
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from opendde_harness.plugin.protein_design.scientific_agent.backends.developability import assess_developability
 
 
 def check_antibody_developability(
     heavy_chain: str,
-    name: str = "candidate",
-    output_dir: Optional[str] = None,
-    structure_path: str = "",
-    heavy_chain_id: str = "",
-) -> dict[str, Any]:
-    return {"available": False}
+    name="candidate",
+    output_dir=None,
+    structure_path="",
+    heavy_chain_id="",
+    light_chain="",
+    light_chain_id="",
+):
+    if structure_path and (not heavy_chain_id or (light_chain and not light_chain_id)):
+        raise ValueError("explicit structural chain IDs are required")
+    sequences = {heavy_chain_id or "H": heavy_chain}
+    if light_chain:
+        if light_chain_id and light_chain_id == heavy_chain_id:
+            raise ValueError("heavy and light chains must have distinct IDs")
+        sequences[light_chain_id or "L"] = light_chain
+    return assess_developability(
+        sequences, structure_path=structure_path or None, binder_chains=list(sequences) if structure_path else None
+    )

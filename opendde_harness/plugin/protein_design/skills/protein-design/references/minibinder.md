@@ -1,11 +1,21 @@
-# Existing mini binder optimization
+# Mini-binder design in Torch-Harness
 
-Use `design.type: minibinder`. Supply exactly one binder chain with `chain_type: minibinder`, a canonical amino-acid sequence or X-masked sequence of the confirmed length, explicit `designable_residues`, and optional `fixed_residues`. Positions are one-based sequence indices; fixed positions override design permissions. `cdr_regions` is invalid in this mode. Length and target sequence remain fixed.
+Use an actually registered PPIFlow binder or compatible TorchCraft mini-binder
+mode. Inspect its request schema with protein_model_list. Supply the target
+structure, explicit chain roles, authorized lengths and generation parameters.
+Existing seed structures must be real files accessible to the model service.
+The registered model sbatch activates its environment; no OpenDDE compute
+service, Docker setup or OpenDDE checkpoint is required.
 
-Available primary strategies are `minibinder-full-redesign`, `minibinder-point-mutation` and `minibinder-inverse-folding`. Every X must be mutable, never fixed. Masked seeds require full redesign before folding; complete seeds can be folded first. Inverse folding requires a successful parent structure. Optional `design.initial_structure_path` must name a real structure accessible on the compute host. `bootstrap_full_redesign_cycles` and `stagnation_full_redesign_threshold` select minibinder full redesign in this mode. It assigns every mutable position once and is not limited by `num_mutations`; fixed positions and length remain unchanged.
+Use TorchScore for confidence and TorchFold for the direct high-confidence
+DockQ route. Current PPIFlow Partial Flow supports nanobody/antibody modes, not
+mini-binder mode; do not fabricate an available redesign route. TorchOptimization
+requires the compatible single-target/single-binder mode exposed by the actual
+registration and legal routing stage. Mini-binder inverse folding has no current
+backend and is unavailable.
 
-Use local/docker OpenDDE folding with explicit `fold.checkpoint_path` naming a compatible general protein checkpoint on the compute host (for example the installed `opendde.pt`, not `opendde_abag.pt`). The supplied checkpoint is not downloaded or verified as scientifically suitable by YAML validation. API checkpoint selection is not supported for this mode. If configured defaults use API mode, explain the incompatibility and obtain the user's choice of a local/docker compute setup rather than silently switching.
-
-The structure gate requires binder–target contacts and, when hotspots are supplied, contact with at least one configured hotspot. It does not require CDR3 or penalize framework contacts. Antibody developability tools are not called; the quality agent uses available sequence/structure evidence, leaving unsupported properties Unknown. There is no validated general developability model in this first implementation.
-
-Post-MPNN/refold and final ranking reuse the existing workflow with the same mutable mask. Tracing labels binder contacts and design regions; CDR-only measurements are not applicable. Computational scores are not measured affinity. No de novo backbone generation, indels or experimental validation are performed.
+Explicit point substitutions can be checked by the native mutations action,
+preserving length, target and fixed residues. These edits are unscored proposals
+until an authorized model request evaluates them. Chemical motifs and native
+surface descriptors can be computed for mini-binders; EpiMatrix stays unknown
+until connected. Antibody CDR terminology is not a mini-binder region annotation.

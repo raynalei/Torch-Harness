@@ -26,6 +26,7 @@ low structural confidence. Neither diagnosis implies the other.
 
 Rosetta contact energies identify favorable residue contributions, not affinity.
 DockQ measures consistency with the generated reference pose. Developability
-metrics may help compare legal candidates only when actually computed. Missing
-pI/TAP/liability/solubility evidence remains unavailable; sequence prose or a
+metrics may help compare legal candidates only when actually computed. Read chemical PTM motifs, method-labelled surface PSH/PNC/PSC descriptors and
+EpiMatrix availability from native developability evidence. EpiMatrix is not
+connected. Missing measurements remain unavailable; sequence prose or a
 Qwen opinion must not become a fabricated numerical measurement or routing gate.

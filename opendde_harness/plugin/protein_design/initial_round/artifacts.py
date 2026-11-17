@@ -35,7 +35,7 @@ def structure(path: Path):
         from biotite.structure.io import load_structure
     except ImportError as exc:
         raise RuntimeError(
-            "install initial round dependencies: uv sync --locked --extra dev --extra initial-round"
+            "install analysis dependencies: uv sync --locked --extra dev --extra native-analysis"
         ) from exc
     atoms = load_structure(str(path), model=1)
     atoms = atoms[struc.filter_amino_acids(atoms)]

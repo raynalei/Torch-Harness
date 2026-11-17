@@ -1,4 +1,9 @@
-# OpenDDE Harness
+# Torch-Harness
+
+This fork uses registered Torch model APIs and native scientific analysis. See
+[the current skill/backend guide](docs/torch_skills.md) for supported tools and
+workflow commands. The OpenDDE compute service is retired from active entry points;
+upstream installation and compute examples below describe the original project.
 
 
 [![Python](https://img.shields.io/badge/python-3.12%2B-blue)](pyproject.toml)

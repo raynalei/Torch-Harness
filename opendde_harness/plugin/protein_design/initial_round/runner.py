@@ -52,7 +52,9 @@ class InitialRoundRunner:
     def validate_files(self):
         self.input_hashes = {}
         if importlib.util.find_spec("biotite") is None:
-            raise RuntimeError("install optional dependencies with uv sync --locked --extra dev --extra initial-round")
+            raise RuntimeError(
+                "install optional dependencies with uv sync --locked --extra dev --extra native-analysis"
+            )
         if not self.config.evaluation.dockq_python.is_absolute() or not self.config.evaluation.dockq_python.is_file():
             raise ValueError(
                 "evaluation.dockq_python must name an existing absolute interpreter path in an isolated DockQ environment"

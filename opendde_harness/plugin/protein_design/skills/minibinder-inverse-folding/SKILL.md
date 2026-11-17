@@ -1,12 +1,17 @@
 ---
 name: minibinder-inverse-folding
-description: Select constrained SolubleMPNN sequence redesign for an existing mini binder with an available parent structure.
+description: Capability-gated reference for mini-binder inverse folding.
 ---
 
-# Mini binder inverse folding
+# minibinder-inverse-folding
 
-Requires the actual parent structure path supplied in context. Select this skill when backbone-conditioned sequence sampling is appropriate. Never invent a structure path or reconstruct it from a filename.
+Use registered Torch-Harness model APIs and native evidence tools. Do not call
+an OpenDDE compute service, install its Docker image or request a compute URL.
+Call `protein_design_context` to inspect actual capabilities. Missing evidence is
+unknown; never replace a measurement with an LLM-generated score.
 
-Return one anchor candidate with `mutations: []` and optional `metadata.soluble_mpnn_parameters`. Supported controls are `temperature` (0.01–1), `relax_radius` (0–8), `wt_bias` (0–20), `omit_aas`, `bias_aas`, and `design_positions` (chain to one-based position list). Omit controls when no evidence supports changing their defaults. Do not set `num_sequences`: Python uses the configured cycle candidate count, retries missing unique samples for at most three sampling rounds, and reports an error if the batch remains incomplete.
-
-Design positions must be a subset of the supplied mutable mask. The executor owns chain mapping, fixed residues, chain length, deduplication and total candidate count. It generates sequences; do not claim that generation or validation already happened. Re-fold and evaluate candidates before interpreting them as improvements. This changes sequence on an existing backbone, not the backbone topology.
+The current registered model contracts do not provide SolubleMPNN inverse
+folding. Keep this scientific distinction explicit; native capability discovery
+reports it unavailable. Do not substitute a new-backbone TorchCraft generation
+or an LLM sequence for a fixed-backbone inverse-folding result. Use a separately
+authorized supported redesign/optimization workflow when that is the intended goal.

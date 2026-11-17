@@ -3,16 +3,14 @@
 The static checks reach no vendor. The one child they start is the model
 service, asked what it knows about the default model and closed again -- a
 catalogue read, with no credential store written and no key seeded. The store is
-read, though, because "is this provider signed in" has no other answer. Memory
-and, when Protein Design is configured, the compute service are probed over
-HTTP; without a Protein Design configuration doctor touches neither Docker nor
-the network. ``--probe`` sends one chat exchange via
+read, though, because "is this provider signed in" has no other answer. Memory is probed over local HTTP. Protein model services are configured separately;
+doctor never probes the retired OpenDDE compute service. ``--probe`` sends one chat exchange via
 :func:`opendde_harness.cli._helpers.send_probe`.
 
 Exit codes:
   0  — all green (and probe ok if requested)
   1  — static check failed (config missing / schema invalid / unresolved routing)
-  2  — static checks ok but ``--probe``, memory or compute readiness failed
+  2  — static checks ok but ``--probe``, memory readiness failed
 """
 
 from __future__ import annotations
@@ -732,33 +730,9 @@ def register(app: typer.Typer) -> None:
             help="LLM probe timeout in seconds.",
             min=1,
         ),
-        compute_only: bool = typer.Option(
-            False, "--compute-only", help="Check Protein Design compute only; skip LLM and memory checks."
-        ),
-        verify_hashes: bool = typer.Option(
-            False, "--verify-hashes", help="Read every required weight and verify its SHA256."
-        ),
     ) -> None:
-        """Check configuration, and the Protein Design compute setup when one is configured."""
-        from opendde_harness.cli.onboard_compute import inspect_compute, load_protein_design_config
-
-        config = load_protein_design_config()
-        if compute_only:
-            if not config:
-                console.print(
-                    "[red]✗ Protein Design is not configured.[/red] Run [cyan]ddeharness onboard[/cyan] to set it up."
-                )
-                raise typer.Exit(1)
-            compute = inspect_compute(config, verify_hashes=verify_hashes)
-            if json_output:
-                console.print_json(json.dumps(compute))
-            else:
-                _render_compute(compute)
-            raise typer.Exit(0 if compute["ready"] else 2)
-
+        """Check provider and runtime configuration without an OpenDDE compute probe."""
         report = _gather_static_checks()
-        if config:
-            report.compute = inspect_compute(config, verify_hashes=verify_hashes)
 
         if report.config_loaded:
             from opendde_harness.config.opendde_harness import load_opendde_harness_config

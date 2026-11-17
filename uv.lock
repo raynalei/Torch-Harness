@@ -1952,6 +1952,9 @@ dev = [
 initial-round = [
     { name = "biotite" },
 ]
+native-analysis = [
+    { name = "biotite" },
+]
 protein-design = [
     { name = "biotite" },
     { name = "fastapi" },
@@ -1979,6 +1982,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "biotite", marker = "extra == 'initial-round'", specifier = ">=1.2,<2" },
+    { name = "biotite", marker = "extra == 'native-analysis'", specifier = ">=1.2,<2" },
     { name = "biotite", marker = "extra == 'protein-design'", specifier = ">=1.2,<2.0" },
     { name = "everos", extras = ["multimodal"], specifier = "==1.3.1" },
     { name = "fastapi", marker = "extra == 'protein-design'", specifier = ">=0.116,<1.0" },
@@ -2010,7 +2014,7 @@ requires-dist = [
     { name = "uvicorn", marker = "extra == 'protein-design'", specifier = ">=0.35,<1.0" },
     { name = "watchfiles", specifier = ">=0.21,<2.0" },
 ]
-provides-extras = ["dev", "protein-design", "initial-round"]
+provides-extras = ["dev", "protein-design", "initial-round", "native-analysis"]
 
 [package.metadata.requires-dev]
 dev = [

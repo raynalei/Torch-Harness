@@ -1,5 +1,10 @@
 # Reference antibody frameworks
 
+The sequences below are reference data. Their historical initial_binders YAML
+fragments are not Torch workflow configuration; materialize the chosen framework
+using the actual registered generator request schema. X masks are not valid
+inputs to the native developability scanner.
+
 Read this reference only when a user wants an antibody-design configuration but has not supplied a starting binder scaffold. These are convenient variable-region starting points, not target-specific binders and not evidence that a framework is suitable for a particular antigen.
 
 ## Selection rules
