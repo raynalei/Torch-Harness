@@ -44,6 +44,34 @@ HYDROPHOBICITY = dict(
         ),
     )
 )
+# Kyte & Doolittle hydropathy: positive is hydrophobic, negative hydrophilic.
+HYDROPATHY = dict(
+    zip(
+        "ACDEFGHIKLMNPQRSTVWY",
+        (
+            1.8,
+            2.5,
+            -3.5,
+            -3.5,
+            2.8,
+            -0.4,
+            -3.2,
+            4.5,
+            -3.9,
+            3.8,
+            1.9,
+            -3.5,
+            -1.6,
+            -3.5,
+            -4.5,
+            -0.8,
+            -0.7,
+            4.2,
+            -0.9,
+            -1.3,
+        ),
+    )
+)
 MAX_ASA = dict(
     zip(
         "ARNDCQEGHILKMFPSTWYV",
@@ -124,6 +152,7 @@ def surface_patches(structure_path, binder_chains, *, distance_cutoff=7.5, expos
         raise ValueError("SASA could not be computed for every binder atom")
     starts = struc.get_residue_starts(atoms, add_exclusive_stop=True)
     exposed, sequences = [], {chain: "" for chain in binder_chains}
+    residues = []
     for start, end in zip(starts[:-1], starts[1:]):
         residue = atoms[start:end]
         if len(set(residue.atom_name.tolist())) != len(residue):
@@ -131,7 +160,31 @@ def surface_patches(structure_path, binder_chains, *, distance_cutoff=7.5, expos
         aa = ProteinSequence.convert_letter_3to1(str(residue.res_name[0]))
         chain = str(residue.chain_id[0])
         sequences[chain] += aa
-        rsa = float(np.sum(sasa[start:end])) / MAX_ASA[aa]
+        asa = float(np.sum(sasa[start:end]))
+        rsa = asa / MAX_ASA[aa]
+        hydropathy = HYDROPATHY[aa]
+        residues.append(
+            {
+                "chain": chain,
+                "sequence_position": len(sequences[chain]),
+                "residue_id": int(residue.res_id[0]),
+                "insertion_code": str(residue.ins_code[0]),
+                "amino_acid": aa,
+                "hydropathy": hydropathy,
+                "hydropathy_class": "hydrophobic" if hydropathy > 0 else "hydrophilic" if hydropathy < 0 else "neutral",
+                "patch_hydrophobicity": HYDROPHOBICITY[aa],
+                "sasa_angstrom2": asa,
+                "relative_asa": rsa,
+                "surface_exposed": rsa >= exposure_cutoff,
+                "charge_class": "negative"
+                if aa in "DE"
+                else "positive"
+                if aa in "KR"
+                else "unassigned"
+                if aa == "H"
+                else "uncharged",
+            }
+        )
         if rsa < exposure_cutoff:
             continue
         side = residue[~np.isin(residue.atom_name, ["N", "CA", "C", "O", "OXT"])]
@@ -164,6 +217,13 @@ def surface_patches(structure_path, binder_chains, *, distance_cutoff=7.5, expos
         "exposed_residues": len(exposed),
         "scored_pairs": pairs,
         "sequences": sequences,
+        "residues": residues,
+        "residue_scales": {
+            "hydropathy": "Kyte-Doolittle; >0 hydrophobic, <0 hydrophilic, =0 neutral",
+            "patch_hydrophobicity": "Black-Mould normalized; used by PSH",
+            "relative_asa": "residue SASA / Tien maximum ASA; not clamped",
+            "position_semantics": "sequence_position is one-based in observed chain; residue_id and insertion_code retain PDB numbering",
+        },
         "calibration": "Explicit native descriptors; not the official TAP implementation or calibrated risk thresholds.",
     }
 

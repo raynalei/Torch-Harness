@@ -134,3 +134,39 @@ def test_public_lookup_only_calls_fixed_source_hosts(source, identifier, host):
     assert lookup_public(source, identifier, transport=httpx.MockTransport(respond))["data"] == {"id": identifier}
     with pytest.raises(ValueError):
         lookup_public(source, "../../secret")
+
+
+def test_residue_hydropathy_preserves_pdb_numbering_and_buried_residues(complex_pdb, monkeypatch):
+    import biotite.structure as struc
+    import numpy as np
+    from biotite.structure.io.pdb import PDBFile
+
+    pdb = PDBFile.read(complex_pdb)
+    atoms = pdb.get_structure(model=1)
+    atoms.res_id[:4] = [42, 42, 57, 57]
+    atoms.ins_code[:4] = ["A", "A", "", ""]
+    atoms.res_name[:2] = "LEU"
+    pdb = PDBFile()
+    pdb.set_structure(atoms)
+    pdb.write(complex_pdb)
+    monkeypatch.setattr(struc, "sasa", lambda atoms, **kwargs: np.array([30.0, 30.0, 0.0, 0.0]))
+    output = assess_developability({"B": "LK"}, structure_path=complex_pdb, binder_chains=["B"])
+    surface = output["surface_patches"]
+    hydrophobic, hydrophilic = surface["residues"]
+    assert (
+        hydrophobic["chain"],
+        hydrophobic["residue_id"],
+        hydrophobic["insertion_code"],
+        hydrophobic["sequence_position"],
+    ) == ("B", 42, "A", 1)
+    assert hydrophobic["hydropathy"] == 3.8
+    assert hydrophobic["hydropathy_class"] == "hydrophobic"
+    assert hydrophobic["sasa_angstrom2"] == 60.0
+    assert hydrophobic["relative_asa"] == pytest.approx(60.0 / 201)
+    assert hydrophobic["surface_exposed"] is True
+    assert hydrophilic["sequence_position"] == 2
+    assert hydrophilic["hydropathy"] == -3.9
+    assert hydrophilic["hydropathy_class"] == "hydrophilic"
+    assert hydrophilic["charge_class"] == "positive"
+    assert hydrophilic["surface_exposed"] is False
+    assert surface["scores"] == {"PSH": 0, "PNC": 0, "PSC": 0}

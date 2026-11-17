@@ -52,3 +52,12 @@ The context builder accepts these domains in Candidate `developability` or
 `metadata.developability_evidence`, compresses them into Qwen's decision context,
 and preserves unknown measurements. Analysis calls return evidence; they do not
 silently rewrite checkpoints or change the score-based routing rules.
+
+
+Surface output also includes a `residues` array for all observed binder residues,
+including buried ones. Each row retains chain, PDB residue_id/insertion_code,
+one-based observed sequence_position, amino_acid, Kyte-Doolittle hydropathy and
+hydropathy_class, Black-Mould patch_hydrophobicity, sasa_angstrom2, relative_asa,
+surface_exposed and charge_class. Positive/negative Kyte-Doolittle values label
+hydrophobic/hydrophilic residues; this is separate from exposure and from the
+Black-Mould PSH weighting scale. Structure-missing residues are not inferred.

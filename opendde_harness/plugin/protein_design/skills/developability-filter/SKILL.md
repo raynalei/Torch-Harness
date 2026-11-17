@@ -33,6 +33,17 @@ scores. **These are explicit native descriptors, not the official TAP algorithm,
 clinical thresholds or a validated TAP pass/fail result.** Do not compare methods
 as if calibrated identically. Missing structures make this domain unavailable.
 
+The `residues` array reports every observed binder residue, including buried
+ones: chain, one-based observed sequence_position, PDB residue_id/insertion_code,
+amino_acid, Kyte-Doolittle hydropathy, hydropathy_class (positive hydrophobic,
+negative hydrophilic), Black-Mould patch_hydrophobicity, sasa_angstrom2,
+relative_asa, surface_exposed and charge_class. These scales differ: aromatic
+residues such as W/Y have negative Kyte-Doolittle values but high Black-Mould
+patch weights. Always retain scale labels. Hydropathy describes residue chemistry;
+surface_exposed is separate structure evidence. Neither predicts binding affinity.
+Histidine charge remains unassigned. Sequence positions refer to observed residues,
+not missing coordinates or antibody numbering schemes.
+
 ## 3. Immunogenicity: EpiMatrix
 
 EpiMatrix is not installed/configured in this deployment. The backend exposes an
