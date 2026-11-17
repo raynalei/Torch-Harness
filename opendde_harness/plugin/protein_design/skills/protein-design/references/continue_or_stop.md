@@ -6,14 +6,18 @@ before that judgment. Rule recommendations remain available for fallback.
 
 ## Continue
 
-Use continue to obtain TorchFold/DockQ when missing, then reconsider all evidence.
-After those measurements exist, continue completes the candidate as a computational
-planner acceptance. A poor structure may be stopped regardless of its stage.
-Analysis can be selected before or after optimization to investigate chemical PTM,
-surface patches, hotspot contacts or other missing evidence. EpiMatrix is uncomputed.
-Use mutation_selector before either optimizer. Fixed points and masks must preserve
-inherited task constraints. Optimizers may be chosen in either order when supported;
-no global round/sample/batch limit is imposed. Do not repeat exact unchanged designs.
+In the default two-stage layout, stage one evaluates only TorchScore and Rosetta.
+First-stage continue/analysis advances to full second-stage evaluation; either
+compatible optimizer can instead create a stage-two child. Stage-two continue
+requests final TorchFold/DockQ. A second-stage optimization child is freshly
+TorchScored and sent directly to final validation, without a third Qwen decision.
+Final validation retains measured acceptance checks. Stop discards a poor candidate
+at either stage. EpiMatrix remains uncomputed.
+
+Use mutation_selector before either optimizer. Fixed points and masks preserve
+inherited task constraints. There are two scientific stages per continuing lineage,
+not a global sample/batch cap. Existing iterative planner snapshots retain their
+previous analysis/continue loop and explicit rules mode retains its staged routing.
 
 ## Explore a new candidate
 

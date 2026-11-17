@@ -52,6 +52,7 @@ async def planner_choice(context, *, model=None):
                 messages.system_message(
                     "You are the scientific protein-design planner. Before every decision consult the supplied evaluation skills and scientific context. "
                     "Choose only an offered executable option. Thresholds/rule_recommendation are advisory, not mandatory routes. "
+                    "If scientific_decision_stage is present, there are two scientific stages: stage 1 evaluates only TorchScore/Rosetta; continue or analysis advances to full stage-2 evaluation. Stage-2 continue requests final TorchFold/DockQ validation; stage-2 optimization is rescored and finally validated without a third planner decision. "
                     "Use stop to discard a scientifically poor candidate; continue to obtain TorchFold/DockQ or complete a measured candidate. "
                     "Use analysis to obtain missing evidence (including developability) before deciding whether to optimize. "
                     "partial_flow and torchopt require an explicit residue selection through protein_design_mutation_selector: "
@@ -142,6 +143,22 @@ def planner_options(runner, candidates):
         try:
             sequences, fixed, allowed = mutation_constraints(runner, candidate)
             selectable = any(set(allowed[c]) - set(fixed[c]) for c in sequences)
+            energy_index = {}
+            if candidate.get("interface_residue_energies"):
+                from ..initial_round.diagnostics import _ca
+
+                atoms = structure(runner.files.local(candidate["generated_structure"]))
+                for chain in chains.binder:
+                    ca = _ca(atoms, chain)
+                    if len(ca) != len(sequences[chain]):
+                        continue
+                    energy_index[chain] = {
+                        str(atom.res_id): i + 1
+                        for i, atom in enumerate(ca)
+                        if str(atom.res_id) in candidate["interface_residue_energies"].get(chain, {})
+                        and not atom.ins_code
+                    }
+            candidate["planner_energy_index"] = energy_index
             candidate["planner_constraints"] = {
                 "fixed_positions": fixed,
                 "allowed_positions": allowed,
@@ -406,6 +423,10 @@ async def execute_decision(runner, decision, index):
 
 
 async def run_planner(runner):
+    if runner.config.autonomous.planner_layout == "two_stage":
+        from .two_stage import run_two_stage
+
+        return await run_two_stage(runner)
     state = runner.checkpoint.data.setdefault(
         "autonomous",
         {

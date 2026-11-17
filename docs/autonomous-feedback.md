@@ -1,51 +1,75 @@
-# Qwen scientific planner
+# Two-stage Qwen scientific planner
 
-The default `autonomous.decision_policy` is `planner`. PPIFlow/TorchCraft first
-generate candidates, then TorchScore measures complex ipTM and pTM. No confidence
-threshold silently rejects or routes a candidate before Qwen considers it.
+New generic workflow starts default to `decision_policy: planner` with
+`planner_layout: two_stage`. Each continuing candidate lineage gets two scientific
+decision stages; a first-stage rejection ends early. This is workflow structure,
+not the removed global round/sample/batch budget. Qwen still judges candidates
+using scientific context, while rules remain fallback.
 
 ```yaml
 autonomous:
   decision_policy: planner
-  # Optional qualified model ID; otherwise use the configured chat model (configure Qwen).
+  planner_layout: two_stage
   # planner_model: your-provider/your-qwen-model
   decision_context_tokens: 16384
   decision_timeout: 120
 ```
 
-Existing immutable run snapshots keep their original policy. Start a new run to
-change a saved scientific policy. Set `decision_policy: rules` to explicitly use
-the deterministic workflow. The legacy `agent` setting retains its historical
-rule-constrained prioritization behavior for checkpoint compatibility.
+## Stage 1: TorchScore and Rosetta only
 
-## Planner actions
+PPIFlow/TorchCraft generates initial candidates. Every candidate is measured by
+TorchScore (ipTM/pTM) and Rosetta (interface residue energies) before Qwen judges it.
+Even high- or low-confidence candidates get both evaluations; there is no automatic
+confidence gate before Qwen. Native developability, contacts and lineage analyses
+are not performed in this stage or included as first-stage evidence.
 
-| Action | Behavior |
-| --- | --- |
-| `stop` | Discard the selected poor candidate; other candidates continue |
-| `continue` | Obtain real TorchFold/DockQ if missing, then reconsider; a later `continue` completes and accepts that measured candidate |
-| `analysis` | Run a selected evaluation skill, save its evidence, and ask Qwen again |
-| `partial_flow` | Call the validated mutation selector, encode fixed/masked positions for compatible PPIFlow Partial Flow, generate a child, then TorchScore |
-| `torchopt` | Call the mutation selector, run a compatible TorchOptimization job, reject out-of-mask outputs, then TorchScore the admitted child |
+Qwen can stop a poor candidate, advance without optimization (`continue` or
+`analysis`), or choose compatible Partial Flow/TorchOptimization via the mutation
+selector. All first-stage decisions in the initial batch finish before stage-two
+evaluation begins. Fixed points and masks use actual sequence/PDB position mapping.
 
-Qwen chooses acceptance using the full measured evidence; the configured confidence
-and DockQ thresholds are recommendations in planner mode. Accepted means a
-computational planner decision, not measured affinity or experimental validation.
-There is no global round/sample/batch cap or mandatory Partial Flow → optimization
-order. A parent is closed after a scored optimization child is produced; its child
-gets a fresh decision. Exact unchanged sequence/structure children are duplicates.
+## Stage 2: full evaluation, then final validation
+
+Evaluate the current candidate: the initial candidate if stage 1 skipped optimization,
+or the actual scored optimization child otherwise. Stage 2 uses TorchScore,
+Rosetta and the installed developability/structure/epitope/evolution/post-filter
+backends. Same-structure cached measurements can be reused; parent measurements
+are not relabelled as child evidence. EpiMatrix remains uncomputed; IgLM, RFdiffusion
+and MPNN are not silently added as backends.
+
+Qwen makes the second scientific decision: stop, continue to final validation, or
+perform one selected mask/fixed-point optimization. A stage-two optimization child
+gets its own TorchScore and then TorchFold/DockQ; no third Qwen decision is opened.
+Final acceptance uses the existing measured final-validation checks. A child does
+not inherit the parent's developability evidence as if recomputed on the child.
+These are computational checks, not measured affinity or experimental validation.
+
+Counters distinguish `scientific_decision_stages=2`, `followup_rounds` (stages
+actually reached) and `planner_decisions` (individual per-candidate decisions).
+Two surviving candidates can therefore generate four Qwen choices across two stages.
+
+## Existing runs and explicit rule mode
+
+Existing immutable run snapshots keep their original policy. The internal layout
+default remains `iterative` and is omitted from legacy serialization so existing
+checkpoint hashes remain compatible. Generic `protein_design_start` / CLI `start`
+inserts `two_stage` for new planner tasks; explicit `planner_layout: iterative`
+retains the preceding planner behavior. Use a new run to change a saved policy.
+`decision_policy: rules` preserves the deterministic staged workflow; legacy
+`agent` preserves its historical rule-constrained prioritization.
 
 ## Evaluation skills and scientific context
 
-Before every planner decision the context builder reads trusted installed guidance
-for developability-filter, structure-analysis, epitope-analysis, evolutionary-analysis
-and post-filter. It supplies available analysis choices, rule recommendations,
+Before stage-one decisions the builder loads only TorchScore/Rosetta evaluation
+guidance and mutation-selector instructions. Before stage-two decisions it reads
+trusted installed guidance for developability-filter, structure-analysis,
+epitope-analysis, evolutionary-analysis and post-filter. It supplies available analysis choices, rule recommendations,
 mutation constraints, history, measured confidence, interface/hotspot evidence and
 compressed analysis results. Skill text is compressed; the context budget bounds
 the serialized evidence. Oversized essential evidence causes a recorded rule
 fallback rather than an invented measurement or unbounded prompt.
 
-Analysis is chosen explicitly, not automatically run in full on every candidate:
+Stage-two evaluation runs these available backends before the second decision:
 
 - Developability: chemical PTM motifs, surface PSH/PNC/PSC and residue-level
   hydropathy/SASA. EpiMatrix stays unavailable until connected.
@@ -53,12 +77,12 @@ Analysis is chosen explicitly, not automatically run in full on every candidate:
   hotspot mapping is unknown, not an off-epitope conclusion.
 - Evolution: actual recorded parent IDs.
 - Post-filter: measured confidence ranking; incomplete tuples remain unranked.
-- Rosetta interface: optional registered ResResE energy analysis. Its per-residue
+- Rosetta interface: required registered ResResE energy analysis in the two-stage layout. Its per-residue
   energies and < -5 fixed-point suggestions inform Qwen, but do not force its mask.
 
 Results are persisted in Candidate `analysis_results`, developability in
 `metadata.developability_evidence`, and per-skill JSON under the candidate directory.
-Every subsequent decision sees updated evidence. New children do not inherit their
+The second scientific decision sees updated evidence. New children do not inherit their
 parent's measured scores or developability as if measured on the child.
 
 ## Mutation selector

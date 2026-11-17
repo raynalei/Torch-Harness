@@ -188,6 +188,8 @@ class AutonomousRound(RoundModel):
         value = handler(self)
         if self.planner_model is None:
             value.pop("planner_model", None)
+        if self.planner_layout == "iterative":
+            value.pop("planner_layout", None)
         return value
 
     @model_validator(mode="before")
@@ -211,6 +213,7 @@ class AutonomousRound(RoundModel):
     contact_distance: float = Field(default=5.0, gt=0)
     decision_policy: Literal["planner", "agent", "rules"] = "planner"
     planner_model: str | None = None
+    planner_layout: Literal["iterative", "two_stage"] = "iterative"
     decision_timeout: float = Field(default=120, gt=0)
     decision_context_tokens: int = Field(default=16384, ge=256, le=32768)
 
@@ -237,7 +240,9 @@ class InitialRoundConfig(RoundModel):
         if any(g.service is None for g in self.generators.values()):
             raise ValueError("generator services must be configured or uniquely registered")
         if self.autonomous is not None:
-            if self.autonomous.decision_policy != "planner" and self.evaluation.rosetta is None:
+            if (
+                self.autonomous.decision_policy != "planner" or self.autonomous.planner_layout == "two_stage"
+            ) and self.evaluation.rosetta is None:
                 raise ValueError("autonomous decisions require the registered Rosetta interface scoring service")
             if self.evaluation.scoring_backend != "torchscore":
                 raise ValueError("autonomous rounds require scoring_backend=torchscore")

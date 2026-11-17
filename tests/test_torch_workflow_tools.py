@@ -32,7 +32,7 @@ def test_prepare_workflow_defaults_autonomous_without_mutating_input(monkeypatch
 
     monkeypatch.setattr("opendde_harness.plugin.protein_design.tools.workflow.prepare_run", prepare)
     prepare_workflow(value, registrations={})
-    assert seen["autonomous"] == {}
+    assert seen["autonomous"] == {"planner_layout": "two_stage"}
     assert "autonomous" not in value
 
 

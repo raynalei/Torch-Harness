@@ -618,6 +618,18 @@ class InitialRoundRunner:
                 if self.config.evaluation.torchopt
                 else {"torchopt": "no registered optimization service"},
             )
+        if (
+            self.config.autonomous is not None
+            and self.config.autonomous.decision_policy == "planner"
+            and self.config.autonomous.planner_layout == "two_stage"
+        ):
+            decisions = self.checkpoint.data["autonomous"]["decisions"]
+            result.update(
+                planner_layout="two_stage",
+                scientific_decision_stages=2,
+                planner_decisions=len(decisions),
+                followup_rounds=max((d.get("scientific_decision_stage", 0) for d in decisions), default=0),
+            )
         if self.checkpoint.data.get("api_cleanup"):
             result["api_cleanup"] = self.checkpoint.data["api_cleanup"]
         write_json(self.root / "summary.json", result)

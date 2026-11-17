@@ -7,7 +7,7 @@ modules and examples remain as inactive compatibility sources; they are not a
 fallback. Configure the actual model services with `protein-design models`.
 
 Use `ddeharness protein-design start --config workflow.yaml`; this enables the
-Qwen scientific planner by default (see [planner actions and rules fallback](autonomous-feedback.md)). `--check` validates availability without
+two-stage Qwen scientific planner by default (see [planner actions and rules fallback](autonomous-feedback.md)). `--check` validates availability without
 claiming inference. Recover with `status`, `resume`, `list`, `candidates`, and
 `regions --run-dir ... --question-id ... --cdr-position ...` for pending user
 region answers. The internal `initial_round` package and saved checkpoint names
@@ -50,9 +50,10 @@ predictor or LLM score may be labelled EpiMatrix.
 
 The context builder accepts these domains in Candidate `developability` or
 `metadata.developability_evidence`, compresses them into Qwen's decision context,
-and preserves unknown measurements. Standalone analysis returns evidence. The planner
-executes selected evaluation skills, persists their results, then rebuilds context
-before its next decision. Rules remain an explicit mode and fallback.
+and preserves unknown measurements. Standalone analysis returns evidence. Stage one evaluates only TorchScore/Rosetta. Before the second decision the planner
+evaluates the current candidate with full available native skills and persists the
+results. Stage-two optimization is followed by fresh TorchScore and final Fold/DockQ,
+without a third Qwen decision. Rules remain an explicit mode and fallback.
 
 
 Surface output also includes a `residues` array for all observed binder residues,

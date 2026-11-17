@@ -26,13 +26,17 @@ their endpoints. Model environment activation belongs in each registered sbatch.
 
 ## Qwen planner and fallback
 
-Default decision_policy=planner: PPIFlow/TorchCraft generate initial candidates,
-then TorchScore measures ipTM/pTM. Before every decision the context builder loads
-trusted evaluation skills and combines all available metrics, analysis, history
-and task constraints. Rule recommendations are advisory, not menu gates.
+New generic starts default to decision_policy=planner, planner_layout=two_stage: PPIFlow/TorchCraft generate initial candidates,
+then TorchScore measures ipTM/pTM. First evaluate only TorchScore and Rosetta, then let Qwen stop, advance or select
+one compatible optimization. Finish the batch first-stage decisions before stage two.
+Second evaluate the current candidate using TorchScore, Rosetta and full native
+evaluation skills; then let Qwen stop, optimize or request final TorchFold/DockQ.
+The context builder loads stage-specific skills and metrics, history and constraints. Rule recommendations are advisory, not menu gates.
 Qwen chooses stop (discard poor candidate), continue (TorchFold/DockQ then final
 completion), analysis (one selected evaluation skill), partial_flow or torchopt.
-Analysis results are saved and passed into the next decision. Optimization children
+Stage-one continue/analysis advances to full stage-two evaluation. Results are saved
+and passed into the second scientific decision. A second-stage optimization child
+is freshly TorchScored and finally validated without a third Qwen decision. Optimization children
 are scored afresh before replanning; never carry parent scores as child measurements.
 
 Before either optimizer call use protein_design_mutation_selector with explicit
@@ -46,9 +50,10 @@ Planner timeout, malformed or invalid choices use recorded staged rule fallback.
 Set decision_policy=rules to run rules explicitly. Legacy agent profiles preserve
 their earlier rule-constrained priority mode. Model execution failures pause the
 planned action for recovery; they do not trigger another scientific submission.
-There is no global round, sample, batch or patience cap, and no forced optimizer
-order in planner mode. Continue completes acceptance only after real TorchFold/DockQ;
-Qwen judges scientific suitability from measured evidence, not fixed pass thresholds.
+There is no global round, sample, batch or patience cap; each surviving lineage has
+two scientific decision stages and either optimizer may be selected when compatible.
+Final acceptance requires real TorchFold/DockQ validation. Existing iterative planner
+snapshots remain compatible; new generic starts use the two-stage layout.
 
 Use dedicated `protein_model_*` tools for authorized standalone requests, preserving
 request_id and uncertain remote IDs. A model registration is not proof of inference.

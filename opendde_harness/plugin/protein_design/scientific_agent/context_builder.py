@@ -311,6 +311,7 @@ def build_context(
     unavailable=None,
     max_tokens=4096,
     planner=False,
+    evaluation_stage=None,
 ):
     """Extract → enrich → compress. Inputs and executable requests are never mutated."""
     thresholds = thresholds or {}
@@ -361,7 +362,10 @@ def build_context(
         context["guidance"] = {
             "planner": "Choose stop (discard poor candidate), continue (TorchFold/DockQ, then completion), partial_flow, torchopt or analysis from actual capabilities. Rule recommendations are fallback advice only. Read all measured evidence and preserve task constraints. Optimization requires the mutation selector. Missing evidence is unknown."
         }
-        context["evaluation_skills"] = evaluation_skill_guidance()
+        context["evaluation_skills"] = evaluation_skill_guidance(evaluation_stage)
+        if evaluation_stage is not None:
+            context["scientific_decision_stage"] = evaluation_stage
+            context["scientific_decision_stages"] = 2
         by_id = {c["candidate_id"]: c for c in candidates}
         for row in projected:
             candidate = by_id[row["candidate_id"]]
@@ -376,6 +380,34 @@ def build_context(
             row["completed_analysis"] = sorted(candidate.get("analysis_results", {}))
             row["interface"]["lowest_residue_energies"] = extract(candidate, score_metric=score_metric)["interface"][
                 "lowest_residue_energies"
+            ]
+        if evaluation_stage == 1:
+            for row in projected:
+                row["structure"] = {"basis": "generated", "path": row["structure"]["path"]}
+                row["hotspot"] = {"available": False, "reason": "not evaluated in first stage"}
+                row["developability"] = {"available": False, "reason": "second-stage evaluation only"}
+                row["analysis"] = {k: v for k, v in row["analysis"].items() if k == "rosetta-interface"}
+                row["completed_analysis"] = [k for k in row["completed_analysis"] if k == "rosetta-interface"]
+                row["measured_metrics"] = {
+                    k: v
+                    for k, v in row["measured_metrics"].items()
+                    if k in {score_metric, score_metric.removesuffix("_iptm") + "_ptm", "rosetta_interface_score"}
+                }
+                row["interface"]["metrics"] = {
+                    k: v for k, v in row["interface"]["metrics"].items() if k.startswith("rosetta_")
+                }
+            context["guidance"] = {
+                "planner": "First of two scientific decisions. Evaluation evidence is exclusively TorchScore and Rosetta. Choose stop, advance to stage-two analysis (continue/analysis), or one compatible optimization. Native developability/contact/lineage assessments are not performed until stage two. Rule recommendations are advisory."
+            }
+        elif evaluation_stage == 2:
+            context["guidance"] = {
+                "planner": "Second scientific decision. Use current candidate's full second-stage evaluation and historical first-stage evidence. Choose stop, final TorchFold/DockQ validation (continue), or a compatible mask/fixed-point optimization."
+            }
+        for row in projected:
+            mapping = by_id[row["candidate_id"]].get("planner_energy_index", {})
+            row["interface"]["energy_sequence_positions"] = [
+                {"chain": chain, "residue_id": residue, "sequence_position": mapping.get(chain, {}).get(str(residue))}
+                for chain, residue, _ in row["interface"]["lowest_residue_energies"]
             ]
         for i, option in enumerate(options):
             option.update(_fields(legal_options[i], ("evaluation_skill", "phase", "mask_enforcement")))
@@ -428,20 +460,29 @@ def analysis_summary(result):
     return summary
 
 
-def evaluation_skill_guidance():
+def evaluation_skill_guidance(stage=None):
     """Load installed evaluation skills on every planner decision, from trusted paths."""
     skills = REFERENCES.parent.parent
     result = {}
     for name in (
-        "developability-filter",
-        "structure-analysis",
-        "epitope-analysis",
-        "evolutionary-analysis",
-        "post-filter",
+        ()
+        if stage == 1
+        else (
+            "developability-filter",
+            "structure-analysis",
+            "epitope-analysis",
+            "evolutionary-analysis",
+            "post-filter",
+        )
     ):
         text = (skills / name / "SKILL.md").read_text(encoding="utf-8")
         body = text.split("---", 2)[-1].strip()
         result[name] = {"source": f"{name}/SKILL.md", "guidance": body[:600], "compressed": len(body) > 600}
+    if stage == 1:
+        result["torchscore"] = {
+            "source": "protein-design/references/binder_failure_diagnosis.md",
+            "guidance": "Use measured TorchScore ipTM and pTM. Confidence is not binding affinity. Rule cutoffs remain recommendations, not mandatory planner routes.",
+        }
     result["rosetta-interface"] = {
         "source": "protein-design/references/generation_strategy.md",
         "guidance": "Registered Rosetta ResResE analysis measures residue contact energies; values below -5 are fixed-point recommendations, not mandatory planner constraints. No energies are guessed. Missing service disables this analysis.",
@@ -453,7 +494,7 @@ def evaluation_skill_guidance():
     return result
 
 
-def context_for_runner(runner, options, index):
+def context_for_runner(runner, options, index, *, evaluation_stage=None):
     config = runner.config
     constraints = {
         source: {
@@ -465,7 +506,11 @@ def context_for_runner(runner, options, index):
         for source, generator in config.generators.items()
     }
     return build_context(
-        runner.checkpoint.data["candidates"],
+        [
+            c
+            for c in runner.checkpoint.data["candidates"]
+            if evaluation_stage is None or c["candidate_id"] in {o["parent_id"] for o in options}
+        ],
         options,
         round_index=index,
         score_metric=config.evaluation.score_metric,
@@ -486,4 +531,5 @@ def context_for_runner(runner, options, index):
         unavailable={} if config.evaluation.torchopt else {"torchopt": "no registered optimization service"},
         max_tokens=config.autonomous.decision_context_tokens,
         planner=config.autonomous.decision_policy == "planner",
+        evaluation_stage=evaluation_stage,
     )

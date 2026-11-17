@@ -1,7 +1,8 @@
 # Scientific-agent evidence and skills
 
-Default `decision_policy: planner` lets Qwen choose scientific actions after
-TorchScore and after each subsequent evaluation or optimization. Python validates
+New generic starts use `decision_policy: planner`, `planner_layout: two_stage`.
+Stage one evaluates only TorchScore/Rosetta before Qwen; stage two evaluates the
+current candidate with full evaluation skills before the second Qwen decision. Python validates
 real model capabilities, task constraints and returned artifacts. Rule thresholds
 are advice and fallback; see [the planner guide](autonomous-feedback.md).
 
@@ -9,10 +10,10 @@ are advice and fallback; see [the planner guide](autonomous-feedback.md).
 
 The bundled catalog retains protein-design and 15 specialists. Executable
 analysis skills are developability-filter, structure-analysis, epitope-analysis,
-evolutionary-analysis and post-filter. Before every planner decision, the context
-builder reads their trusted installed SKILL.md files and includes compressed
-guidance plus Rosetta interface and mutation-selector guidance. Qwen chooses which
-missing evaluation to execute; it does not automatically run every skill.
+evolutionary-analysis and post-filter. Before the second-stage decision, the context builder reads their trusted installed
+SKILL.md files. First-stage guidance contains only TorchScore/Rosetta evaluation
+and mutation-selector instructions. The two-stage path completes available native evaluation before stage-two judgment;
+legacy iterative snapshots retain their explicit analysis selection.
 
 Generation and mutation skills use registered Torch model APIs and the native
 mutation selector. Public PDB/UniProt/PubMed lookups remain independent tools.
@@ -41,6 +42,7 @@ never replaced by a fabricated immunogenicity score. No OpenDDE compute is used.
 ```yaml
 autonomous:
   decision_policy: planner
+  planner_layout: two_stage
   decision_context_tokens: 16384
   # planner_model: your-provider/your-qwen-model
 ```
@@ -59,7 +61,9 @@ Planner actions are stop, continue, analysis, partial_flow and torchopt. Analysi
 results return to the context before the next decision. Optimization records the
 mutation selector arguments, validated partition and actual model request. Native
 Partial Flow receives encoded ranges; TorchOptimization masks currently apply to
-output validation only. A new child gets fresh TorchScore and analysis evidence.
+output validation only. A first-stage optimization child gets fresh stage-two evaluation. A second-stage
+optimization child gets fresh TorchScore and final TorchFold/DockQ, without a third
+Qwen decision or inherited parent analysis.
 
 Planner response/schema/selection errors use deterministic fallback. Execution
 errors retain the planned action and remote IDs for recovery, without selecting
