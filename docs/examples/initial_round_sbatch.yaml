@@ -33,7 +33,7 @@ generators:
       light_chain: B
       cdr_length: CDRH1,8-9,CDRH2,7-8,CDRH3,10-20,CDRL1,7-7,CDRL2,3-3,CDRL3,9-11
       config: /lustre/grp/cmclab/share/guoly/app_code/v3_basic/configs/test_antibody_v3.yaml
-      samples_per_target: 5
+      samples_per_target: 100
       num_timesteps: 200
       model_weights: /lustre/grp/cmclab/share/changdr/model/20260618_distill/model_214.ckpt.enc
       output_dir: /lustre/grp/cmclab/leiy/test/
