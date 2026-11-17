@@ -1,6 +1,6 @@
 # Binder failure diagnosis
 
-Separate off-epitope contact evidence from structural confidence. Both can coexist. Missing or ambiguous evidence is unknown, not a pass or failure. Follow Python's legal menu; diagnostics do not override routing.
+Separate off-epitope contact evidence from structural confidence. Both can coexist. Missing or ambiguous evidence is unknown, not a pass or failure. Follow actual tool capabilities and task constraints; Qwen chooses scientific actions while rules remain fallback advice.
 
 ## Off-epitope
 

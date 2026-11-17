@@ -271,6 +271,8 @@ def compress(context, records, options, *, max_tokens):
     if options and not base["options"]:
         # Retry with compact scientific evidence and without optional guide/history
         # text. Essential confidence, rule and actual capabilities stay together.
+        if context.get("decision_mode") == "qwen_planner":
+            raise ContextBudgetError("planner candidate evidence and evaluation skills exceed the context budget")
         reduced = [
             {
                 key: c[key]
@@ -308,6 +310,7 @@ def build_context(
     history=(),
     unavailable=None,
     max_tokens=4096,
+    planner=False,
 ):
     """Extract → enrich → compress. Inputs and executable requests are never mutated."""
     thresholds = thresholds or {}
@@ -327,7 +330,7 @@ def build_context(
     ]
     recent = []
     for row in history[-8:]:
-        item = _fields(row, ("round", "action", "source", "parent_id", "state"))
+        item = _fields(row, ("round", "action", "source", "parent_id", "state", "evaluation_skill"))
         item["results"] = [
             {
                 "candidate_id": c["candidate_id"],
@@ -352,7 +355,102 @@ def build_context(
         "guidance": decision_guidance({o["action"] for o in legal_options}),
         "unavailable": _small(unavailable or {}),
     }
+    if planner:
+        context["decision_mode"] = "qwen_planner"
+        context["thresholds_are_advisory"] = True
+        context["guidance"] = {
+            "planner": "Choose stop (discard poor candidate), continue (TorchFold/DockQ, then completion), partial_flow, torchopt or analysis from actual capabilities. Rule recommendations are fallback advice only. Read all measured evidence and preserve task constraints. Optimization requires the mutation selector. Missing evidence is unknown."
+        }
+        context["evaluation_skills"] = evaluation_skill_guidance()
+        by_id = {c["candidate_id"]: c for c in candidates}
+        for row in projected:
+            candidate = by_id[row["candidate_id"]]
+            row["mutation_constraints"] = candidate.get("planner_constraints")
+            row["developability"] = planner_developability(candidate)
+            row["measured_metrics"] = {
+                k: v for k, v in candidate.get("metrics", {}).items() if type(v) in (int, float) and math.isfinite(v)
+            }
+            row["analysis"] = {
+                name: analysis_summary(result) for name, result in candidate.get("analysis_results", {}).items()
+            }
+            row["completed_analysis"] = sorted(candidate.get("analysis_results", {}))
+            row["interface"]["lowest_residue_energies"] = extract(candidate, score_metric=score_metric)["interface"][
+                "lowest_residue_energies"
+            ]
+        for i, option in enumerate(options):
+            option.update(_fields(legal_options[i], ("evaluation_skill", "phase", "mask_enforcement")))
     return compress(context, projected, options, max_tokens=max_tokens)
+
+
+def planner_developability(candidate):
+    raw = candidate.get("developability") or candidate.get("metadata", {}).get("developability_evidence") or {}
+    projected = _fields(raw, DEVELOPABILITY_FIELDS) or {"available": False}
+    surface = raw.get("surface_patches", {})
+    residues = surface.get("residues", [])
+    if residues:
+        sites = raw.get("ptm_risks", {}).get("sites", [])
+        liabilities = {(s.get("chain"), s.get("position")) for s in sites}
+        selected = sorted(
+            residues,
+            key=lambda r: (
+                (r.get("chain"), r.get("sequence_position")) not in liabilities,
+                not r.get("surface_exposed", False),
+                -r.get("hydropathy", 0),
+            ),
+        )[:12]
+        projected["surface_patches"]["residues"] = _small(selected)
+        projected["surface_patches"]["residues_total"] = len(residues)
+        projected["surface_patches"]["residues_omitted"] = max(0, len(residues) - len(selected))
+        projected["surface_patches"]["residue_selection"] = (
+            "chemical liability sites first, then exposed high hydropathy; omitted positions remain unknown"
+        )
+    return projected
+
+
+def analysis_summary(result):
+    summary = _fields(
+        result,
+        (
+            "available",
+            "method",
+            "reason",
+            "structure_basis",
+            "distance_cutoff_angstrom",
+            "epitope_hit",
+            "confidence",
+            "mapped_hotspot_diagnostics",
+        ),
+    )
+    for key in ("epitope_residues", "nodes", "edges", "ranking", "unranked_missing_metrics"):
+        if key in result:
+            summary[key + "_count"] = len(result[key])
+            summary[key] = _small(result[key][:3])
+    return summary
+
+
+def evaluation_skill_guidance():
+    """Load installed evaluation skills on every planner decision, from trusted paths."""
+    skills = REFERENCES.parent.parent
+    result = {}
+    for name in (
+        "developability-filter",
+        "structure-analysis",
+        "epitope-analysis",
+        "evolutionary-analysis",
+        "post-filter",
+    ):
+        text = (skills / name / "SKILL.md").read_text(encoding="utf-8")
+        body = text.split("---", 2)[-1].strip()
+        result[name] = {"source": f"{name}/SKILL.md", "guidance": body[:600], "compressed": len(body) > 600}
+    result["rosetta-interface"] = {
+        "source": "protein-design/references/generation_strategy.md",
+        "guidance": "Registered Rosetta ResResE analysis measures residue contact energies; values below -5 are fixed-point recommendations, not mandatory planner constraints. No energies are guessed. Missing service disables this analysis.",
+    }
+    result["mutation_selector"] = {
+        "tool": "protein_design_mutation_selector",
+        "guidance": "Select fixed_positions or mask_positions by one-based observed binder sequence indices. Task fixed residues and mutable scope are independently enforced. Partial Flow accepts native encoded ranges. TorchOptimization supports output-validation-only masks. Never equate sequence positions with PDB IDs without the recorded mapping.",
+    }
+    return result
 
 
 def context_for_runner(runner, options, index):
@@ -387,4 +485,5 @@ def context_for_runner(runner, options, index):
         history=runner.checkpoint.data["autonomous"]["decisions"],
         unavailable={} if config.evaluation.torchopt else {"torchopt": "no registered optimization service"},
         max_tokens=config.autonomous.decision_context_tokens,
+        planner=config.autonomous.decision_policy == "planner",
     )

@@ -1,96 +1,73 @@
 # Scientific-agent evidence and skills
 
-The scientific agent prioritizes **existing executable options**. Python retains
-ownership of routing, thresholds, capability validation and execution. The builder
-does not run a model, measure a new property or add a regeneration action.
+Default `decision_policy: planner` lets Qwen choose scientific actions after
+TorchScore and after each subsequent evaluation or optimization. Python validates
+real model capabilities, task constraints and returned artifacts. Rule thresholds
+are advice and fallback; see [the planner guide](autonomous-feedback.md).
 
-## Current skill inventory
+## Skill inventory
 
-The plugin exposes the general `protein-design` skill and 15 specialist skills:
+The bundled catalog retains protein-design and 15 specialists. Executable
+analysis skills are developability-filter, structure-analysis, epitope-analysis,
+evolutionary-analysis and post-filter. Before every planner decision, the context
+builder reads their trusted installed SKILL.md files and includes compressed
+guidance plus Rosetta interface and mutation-selector guidance. Qwen chooses which
+missing evaluation to execute; it does not automatically run every skill.
 
-| Category | Skills |
-| --- | --- |
-| Workflow | `protein-design` |
-| Antibody design | `cdr-point-mutation`, `cdr-full-redesign`, `antibody-inverse-folding`, `esm2-guided-mutation` |
-| Mini-binder design | `minibinder-full-redesign`, `minibinder-point-mutation`, `minibinder-inverse-folding` |
-| Analysis and filtering | `evolutionary-analysis`, `epitope-analysis`, `structure-analysis`, `developability-filter`, `post-filter` |
-| Public-source lookup | `pdb-lookup`, `uniprot-lookup`, `pubmed-lookup` |
-
-Three decision guides are references of the general skill, not extra executable
-model tools:
-
-- [binder_failure_diagnosis.md](../opendde_harness/plugin/protein_design/skills/protein-design/references/binder_failure_diagnosis.md)
-  distinguishes off-epitope evidence from low confidence and missing evidence.
-- [generation_strategy.md](../opendde_harness/plugin/protein_design/skills/protein-design/references/generation_strategy.md)
-  explains initial PPIFlow/TorchCraft, energy-fixed Partial Flow and optimization.
-- [continue_or_stop.md](../opendde_harness/plugin/protein_design/skills/protein-design/references/continue_or_stop.md)
-  explains finite lineages, stopping, recovery and why new exploration needs a
-  separate authorized request under the current menu.
-
-The context builder reads their trusted summaries, plus strategy sections relevant
-to the current menu. Full references remain available through `protein-design`.
+Generation and mutation skills use registered Torch model APIs and the native
+mutation selector. Public PDB/UniProt/PubMed lookups remain independent tools.
+Antibody/mini-binder inverse folding and ESM2 remain explicitly unavailable reference
+skills because there is no registered backend. EpiMatrix is a reserved interface,
+never replaced by a fabricated immunogenicity score. No OpenDDE compute is used.
 
 ## Extract → enrich → compress
 
-`opendde_harness/plugin/protein_design/scientific_agent/context_builder.py` exposes
-three projections and `build_context` / `context_for_runner` entry points:
+`scientific_agent/context_builder.py` projects Candidate JSON:
 
-1. **Extract** reads existing Candidate JSON. Autonomous dictionaries and serialized
-   core Candidates expose structural confidence, interface metrics, hotspot evidence
-   and computed developability fields. Paths identify structures; coordinates,
-   full sequences and raw model responses are not sent. Metric units are retained
-   when supplied. Missing/nonfinite TorchScore values stay unknown; generic ipTM
-   and AF3Score are never relabeled as TorchScore. Legacy `metadata.fold`,
-   `gate_evidence` and `developability_evidence` are supported. No objective
-   developability computation is fabricated when absent.
-2. **Enrich** recomputes the rule recommendation from measured metrics and task
-   thresholds, separately reports capability-filtered actions, and includes inherited
-   fixed/mutable positions, chain roles, task constraints and checkpoint experiment
-   history. History includes action state and actual child result metrics. Planned
-   or failed actions are not described as completed improvements. Availability means
-   configured, validated capability, not proof of remote inference success.
-3. **Compress** includes only candidates behind visible options and bounds detailed
-   residue evidence and recent history. Raw API requests, service credentials,
-   complete energy tables and unrelated metadata never enter the context. Fixed-point
-   summaries explicitly report omitted positions. Strategy detail is stage-specific;
-   optimization decisions do not receive irrelevant per-residue energy rankings.
+1. Extract measured structural confidence, interface energies, mapped hotspots,
+   developability and saved evaluation results. Parent scores are not measurements
+   of a child. Missing/nonfinite values stay unknown. Chemical PTM is distinct from
+   structural pTM. Surface descriptors keep their named scales and method.
+2. Enrich with advisory rule recommendations, actual executable actions, inherited
+   fixed/mutable task constraints, chain lengths, experiment history and installed
+   evaluation skills. `protein_design_mutation_selector` independently validates
+   planner fixed points or masks against saved task constraints before submission.
+3. Compress to the configured context budget. Complete flat finite metrics and
+   the current parent's constraints accompany its visible options. Residue evidence
+   prioritizes chemical-liability positions, then exposed high-hydropathy residues,
+   and explicitly reports omissions. Contacts/lineage/ranking are summarized;
+   original results remain under the candidate directory and in checkpoints.
 
 ```yaml
 autonomous:
-  decision_policy: agent
-  decision_context_tokens: 4096
+  decision_policy: planner
+  decision_context_tokens: 16384
+  # planner_model: your-provider/your-qwen-model
 ```
 
-This is a **per-prompt context limit**, not a round/sample/batch budget. It excludes
-the fixed system message and the separate 1500-token response allowance. Serialized
-UTF-8 bytes conservatively bound byte-tokenized Qwen context without fetching any
-tokenizer vocabulary. Full records remain in the checkpoint.
+The budget limits serialized user evidence, not scientific rounds or samples.
+UTF-8 bytes conservatively bound byte-tokenized payload size. The fixed system
+prompt and separate 2200-token response allowance are additional. Options retain
+their original IDs when paginated. Planner essential evidence and evaluation
+skill guidance are not silently stripped to force a decision into an impossible
+budget; that failure invokes the recorded rule fallback. API credentials and raw
+submission requests are never passed to Qwen.
 
-Menus can be paginated to fit: `option_id` remains the original executable index,
-and omitted counts are reported. Unshown candidates remain available on later
-iterations. Qwen may not select an index absent from the context it received.
-Optional history/guidance/detail is reduced before losing essential confidence,
-lineage constraints, rule recommendations and executable identities. An impossible
-budget, invalid response or unavailable provider records a fallback and uses the
-existing deterministic legal option. `decision_policy: rules` does not call the
-builder or Qwen.
+## Decisions and recovery
 
-## Why initial_round remains
+Planner actions are stop, continue, analysis, partial_flow and torchopt. Analysis
+results return to the context before the next decision. Optimization records the
+mutation selector arguments, validated partition and actual model request. Native
+Partial Flow receives encoded ranges; TorchOptimization masks currently apply to
+output validation only. A new child gets fresh TorchScore and analysis evidence.
 
-The autonomous runtime is not independent of the `initial_round` package:
+Planner response/schema/selection errors use deterministic fallback. Execution
+errors retain the planned action and remote IDs for recovery, without selecting
+another submission. Exact unchanged sequence/structure children are duplicates.
+`rules` explicitly runs the retained staged policy; legacy `agent` snapshots keep
+their historical rule-constrained prioritization and context behavior.
 
-```text
-CLI / protein_initial_round_start
-  → automation / worker
-  → InitialRoundRunner.run
-  → generate → run_autonomous → score / Rosetta / refold / optimize
-  → checkpoint and export
-```
-
-The shared package owns input validation, service allocation, path mapping,
-TorchScore, TorchFold/DockQ, candidate lineage and recovery. Deleting it would
-break autonomous execution. Its single-round branch and existing CLI/tool names
-are retained as compatible entry points; they do not replace the staged autonomous
-router. Removing the package would require a separately planned migration of all
-imports, configuration snapshots, tools and saved workers. The new builder has
-its own scientific_agent namespace while deliberately reusing the current router.
+The `initial_round` directory owns shared service adapters, executor and checkpoint
+formats. It remains an internal compatibility package, not a public mode or
+required initial-round CLI/tool option. Generic protein_design_start/status/resume
+entry points drive the planner through that shared executor.

@@ -24,16 +24,31 @@ The OpenDDE compute service, compute_url/worker pools, Docker setup and old Open
 model checkpoints are not part of this workflow. Do not start them or fall back to
 their endpoints. Model environment activation belongs in each registered sbatch.
 
-## Models and finite routing
+## Qwen planner and fallback
 
-PPIFlow/TorchCraft generate compatible candidates. TorchScore supplies ipTM/pTM.
-Initial ipTM<0.5 terminates that candidate. Both ipTM>0.8 and pTM>0.8 go directly
-to TorchFold/DockQ. Other initial candidates use Rosetta residue energies to fix
-positions with energy<-5 for compatible Partial Flow. Rescore Partial Flow output:
-both>0.8 refold, otherwise TorchOptimization if actually supported. Rescore optimized
-output: both>0.8 refold, otherwise terminate. Thresholds come from the task config.
-There is no global rounds, samples, batch or patience limit. Qwen prioritizes legal
-actions and cannot invent another route. Unknown metrics/logs pause for recovery.
+Default decision_policy=planner: PPIFlow/TorchCraft generate initial candidates,
+then TorchScore measures ipTM/pTM. Before every decision the context builder loads
+trusted evaluation skills and combines all available metrics, analysis, history
+and task constraints. Rule recommendations are advisory, not menu gates.
+Qwen chooses stop (discard poor candidate), continue (TorchFold/DockQ then final
+completion), analysis (one selected evaluation skill), partial_flow or torchopt.
+Analysis results are saved and passed into the next decision. Optimization children
+are scored afresh before replanning; never carry parent scores as child measurements.
+
+Before either optimizer call use protein_design_mutation_selector with explicit
+one-based observed binder fixed_positions or mask_positions. Python validates
+inherited fixed points, allowed regions, chain IDs, numbering and nonempty masks.
+Partial Flow receives real encoded mask/fixed ranges; TorchOptimization lacks a
+native mask argument, so the workflow validates returned structures against the
+mask and rejects violations. Do not claim native masked optimization for that API.
+
+Planner timeout, malformed or invalid choices use recorded staged rule fallback.
+Set decision_policy=rules to run rules explicitly. Legacy agent profiles preserve
+their earlier rule-constrained priority mode. Model execution failures pause the
+planned action for recovery; they do not trigger another scientific submission.
+There is no global round, sample, batch or patience cap, and no forced optimizer
+order in planner mode. Continue completes acceptance only after real TorchFold/DockQ;
+Qwen judges scientific suitability from measured evidence, not fixed pass thresholds.
 
 Use dedicated `protein_model_*` tools for authorized standalone requests, preserving
 request_id and uncertain remote IDs. A model registration is not proof of inference.
@@ -66,5 +81,5 @@ Read [binder_failure_diagnosis.md](references/binder_failure_diagnosis.md),
 [generation_strategy.md](references/generation_strategy.md) and
 [continue_or_stop.md](references/continue_or_stop.md). The scientific context builder
 extracts measured Candidate JSON, enriches with actual actions/history/constraints,
-and compresses the stage-relevant evidence for Qwen. Evidence and skill reasoning
-do not override the Python router. Predicted outcomes need experimental validation.
+and compresses the stage-relevant evidence for Qwen. Python enforces actual capabilities and task constraints; the planner owns scientific
+action choice. Rules remain advisory and available for fallback. Predicted outcomes need experimental validation.

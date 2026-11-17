@@ -296,6 +296,13 @@ class InitialRoundRunner:
         original_request = parent.get("generation_request", generator.request)
         fixed = selection_positions(original_request.get("fixed_positions"), before_atoms, generator.chains.binder)
         allowed = selection_positions(original_request.get("cdr_position"), before_atoms, generator.chains.binder)
+        partition = decision.get("mutation_constraints")
+        if partition:
+            # TorchOptimization has no native mask API: reject out-of-scope outputs.
+            for chain in generator.chains.binder:
+                fixed.setdefault(chain, set()).update(partition["fixed_positions"][chain])
+                mask = set(partition["mask_positions"][chain])
+                allowed[chain] = (allowed[chain] & mask) if chain in allowed else mask
         admitted = []
         for path in sorted(set(paths)):
             sequences = chain_sequences(path)
@@ -337,6 +344,7 @@ class InitialRoundRunner:
             "generated_sha256": digest(snapshot),
             "metrics": {},
             "status": "generated",
+            **({"mutation_constraints": partition} if partition else {}),
         }
         candidates.append(child)
         self.save_candidates()

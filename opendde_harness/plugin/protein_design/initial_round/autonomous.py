@@ -69,7 +69,7 @@ def rank_score(candidate, score_metric):
     return 100 * candidate["metrics"][score_metric]
 
 
-def _partial_request(runner, candidate, name):
+def _partial_request(runner, candidate, name, regions=None):
     from .artifacts import structure
 
     generator = runner.config.generators["ppiflow"]
@@ -86,7 +86,7 @@ def _partial_request(runner, candidate, name):
         raise ValueError("no compatible PPIFlow partial mode/chain mapping for this candidate")
     from .interface_energy import partial_positions
 
-    regions = partial_positions(
+    regions = regions or partial_positions(
         structure(runner.files.local(candidate["generated_structure"])),
         chains,
         candidate["interface_fixed_positions"],
@@ -283,6 +283,10 @@ def progress(candidates, score_metric):
 
 
 async def run_autonomous(runner):
+    if runner.config.autonomous.decision_policy == "planner":
+        from ..scientific_agent.planner import run_planner
+
+        return await run_planner(runner)
     config = runner.config.autonomous
     state = runner.checkpoint.data.setdefault(
         "autonomous",

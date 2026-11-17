@@ -97,7 +97,7 @@ class WorkflowTool(Tool):
         return {
             "regions": "Supply user-confirmed CDR ranges for the exact pending candidate question and resume the saved workflow.",
             "context": "Read configured Torch-Harness model kinds, native skill capabilities and default workflow profile. No OpenDDE compute service or Docker setup is used.",
-            "start": "Start an authorized Torch-Harness autonomous workflow directly, with inline run_config or a workflow_config profile. Uses registered PPIFlow/TorchCraft, TorchScore, TorchFold, Rosetta and compatible TorchOptimization; no initial-round option or compute URL is required. Preserve inputs and checkpoint identity on recovery.",
+            "start": "Start the authorized Qwen-planned Torch-Harness workflow, with inline run_config or a workflow_config profile. Qwen selects analysis/continue/stop or optimizations using scientific context and mutation_selector; staged rules remain fallback. Uses registered PPIFlow/TorchCraft, TorchScore, TorchFold, Rosetta and compatible TorchOptimization; no initial-round option or compute URL is required. Preserve inputs and checkpoint identity on recovery.",
             "status": "Read a workflow's saved status by run_dir; workers poll remote jobs automatically.",
             "resume": "Resume the same authorized workflow by run_dir, retaining completed scientific work and remote IDs.",
             "list": "Discover indexed Torch-Harness workflows after restarting the session.",
@@ -163,6 +163,8 @@ class WorkflowTool(Tool):
                 result = {
                     "backend": "registered_models_and_native_analysis",
                     "compute_service_required": False,
+                    "default_decision_policy": "planner",
+                    "mutation_selector_tool": "protein_design_mutation_selector",
                     "models": [
                         {"alias": key, "kind": value.get("kind")}
                         for key, value in self.config.get("model_services", {}).items()

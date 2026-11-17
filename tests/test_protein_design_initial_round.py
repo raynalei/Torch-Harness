@@ -1030,7 +1030,7 @@ def test_default_config_hash_shape_is_preserved(round_config):
     value = round_config.model_dump(mode="json")
     value["evaluation"]["rosetta"] = None
     value["autonomous"] = {}
-    with pytest.raises(ValueError, match="require.*Rosetta"):
+    with pytest.raises(ValueError, match="require.*torchscore"):
         InitialRoundConfig.model_validate(value)
 
 

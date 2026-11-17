@@ -56,5 +56,5 @@ name. Real adapters must retain their version, panel, units and provenance.
 
 Return domains independently: `ptm_risks`, `surface_patches`, `immunogenicity`.
 A successful motif scan does not mean all domains are available or the candidate
-passes developability. Keep uncertain/uncomputed domains visible. These findings
-are advisory evidence and do not silently change the autonomous router thresholds.
+passes developability. Keep uncertain/uncomputed domains visible. Qwen uses these findings as measured decision evidence. They do not automatically
+change the retained rules-mode thresholds.

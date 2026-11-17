@@ -1,4 +1,4 @@
-"""Strict, separate configuration for initial rounds; no LLM or local GPU required."""
+"""Strict registered-model workflow configuration and planner/rule policies."""
 
 from __future__ import annotations
 
@@ -181,7 +181,14 @@ class Evaluation(RoundModel):
 
 
 class AutonomousRound(RoundModel):
-    """Finite per-candidate follow-ups without a global round or sample budget."""
+    """Planner decisions or legacy staged rules without a global sample budget."""
+
+    @model_serializer(mode="wrap")
+    def serialize(self, handler):
+        value = handler(self)
+        if self.planner_model is None:
+            value.pop("planner_model", None)
+        return value
 
     @model_validator(mode="before")
     @classmethod
@@ -202,9 +209,10 @@ class AutonomousRound(RoundModel):
     min_score: float = Field(default=0.5, ge=0, le=1, validation_alias=AliasChoices("min_score", "min_af3score"))
     min_dockq: float = Field(default=0.49, ge=0, le=1)
     contact_distance: float = Field(default=5.0, gt=0)
-    decision_policy: Literal["agent", "rules"] = "agent"
+    decision_policy: Literal["planner", "agent", "rules"] = "planner"
+    planner_model: str | None = None
     decision_timeout: float = Field(default=120, gt=0)
-    decision_context_tokens: int = Field(default=4096, ge=256, le=32768)
+    decision_context_tokens: int = Field(default=16384, ge=256, le=32768)
 
 
 class InitialRoundConfig(RoundModel):
@@ -229,7 +237,7 @@ class InitialRoundConfig(RoundModel):
         if any(g.service is None for g in self.generators.values()):
             raise ValueError("generator services must be configured or uniquely registered")
         if self.autonomous is not None:
-            if self.evaluation.rosetta is None:
+            if self.autonomous.decision_policy != "planner" and self.evaluation.rosetta is None:
                 raise ValueError("autonomous decisions require the registered Rosetta interface scoring service")
             if self.evaluation.scoring_backend != "torchscore":
                 raise ValueError("autonomous rounds require scoring_backend=torchscore")

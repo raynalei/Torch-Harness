@@ -1,130 +1,109 @@
-# Staged autonomous rounds
+# Qwen scientific planner
 
-Enable `autonomous` for checkpointed per-candidate follow-ups after PPIFlow/TorchCraft generation.
-Autonomous runs require **TorchScore** for both complex ipTM and pTM. The separate
-single-round workflow still supports AF3Score and TorchScore.
+The default `autonomous.decision_policy` is `planner`. PPIFlow/TorchCraft first
+generate candidates, then TorchScore measures complex ipTM and pTM. No confidence
+threshold silently rejects or routes a candidate before Qwen considers it.
 
 ```yaml
-evaluation:
-  scoring_backend: torchscore
-  rosetta_residue_glob: '*.out'
-  # Other service connections and dockq_python as in the registered example.
 autonomous:
-  min_score: 0.5
-  min_refold_score: 0.8
-  min_ptm: 0.8
-  interface_energy_threshold: -5.0
-  interface_distance: 12.0
-  min_dockq: 0.49
-  decision_policy: agent
+  decision_policy: planner
+  # Optional qualified model ID; otherwise use the configured chat model (configure Qwen).
+  # planner_model: your-provider/your-qwen-model
+  decision_context_tokens: 16384
+  decision_timeout: 120
 ```
 
-## Executable routes
+Existing immutable run snapshots keep their original policy. Start a new run to
+change a saved scientific policy. Set `decision_policy: rules` to explicitly use
+the deterministic workflow. The legacy `agent` setting retains its historical
+rule-constrained prioritization behavior for checkpoint compatibility.
 
-| Stage | TorchScore result | Next operation |
-| --- | --- | --- |
-| Initial PPIFlow/TorchCraft | ipTM < 0.5 | Terminate this candidate |
-| Initial PPIFlow/TorchCraft | ipTM > 0.8 and pTM > 0.8 | TorchFold → DockQ |
-| Initial PPIFlow/TorchCraft | All other valid scores | Rosetta residue interface energies → fixed points → Partial Flow |
-| Partial Flow output | ipTM > 0.8 and pTM > 0.8 | TorchFold → DockQ |
-| Partial Flow output | All other valid scores | TorchOptimization |
-| Optimization output | ipTM > 0.8 and pTM > 0.8 | TorchFold → DockQ |
-| Optimization output | All other valid scores | Terminate this candidate |
+## Planner actions
 
-The initial lower cutoff is strict: ipTM **equal to 0.5** proceeds to interface
-scoring. Both high-confidence cutoffs are strict: **equal to 0.8** does not refold.
-The initial 0.5 termination gate is not reapplied to Partial Flow output: low
-Partial Flow scores go to optimization. Missing, nonfinite, out-of-range or
-ambiguous scores are evaluation failures, not scientific rejections.
+| Action | Behavior |
+| --- | --- |
+| `stop` | Discard the selected poor candidate; other candidates continue |
+| `continue` | Obtain real TorchFold/DockQ if missing, then reconsider; a later `continue` completes and accepts that measured candidate |
+| `analysis` | Run a selected evaluation skill, save its evidence, and ask Qwen again |
+| `partial_flow` | Call the validated mutation selector, encode fixed/masked positions for compatible PPIFlow Partial Flow, generate a child, then TorchScore |
+| `torchopt` | Call the mutation selector, run a compatible TorchOptimization job, reject out-of-mask outputs, then TorchScore the admitted child |
 
-Hotspot contacts are still measured and recorded for inspection, but do not route
-a candidate or block a high-confidence refold. DockQ compares the refolded complex
-with its generated design pose, taking the minimum over target–binder interfaces.
-It is not an experimental binding score. Final acceptance retains the configured
-`evaluation.min_refold_iptm` and `evaluation.min_dockq` checks, and the autonomous
-DockQ cutoff. A failed final check does not start another Partial Flow cycle.
+Qwen chooses acceptance using the full measured evidence; the configured confidence
+and DockQ thresholds are recommendations in planner mode. Accepted means a
+computational planner decision, not measured affinity or experimental validation.
+There is no global round/sample/batch cap or mandatory Partial Flow → optimization
+order. A parent is closed after a scored optimization child is produced; its child
+gets a fresh decision. Exact unchanged sequence/structure children are duplicates.
 
-## Rosetta interface energies and fixed points
+## Evaluation skills and scientific context
 
-`initial_round/interface_energy.py` adapts the computational functions in the
-uploaded **1get_interface_energy.py**. It uses the generated complex and:
+Before every planner decision the context builder reads trusted installed guidance
+for developability-filter, structure-analysis, epitope-analysis, evolutionary-analysis
+and post-filter. It supplies available analysis choices, rule recommendations,
+mutation constraints, history, measured confidence, interface/hotspot evidence and
+compressed analysis results. Skill text is compressed; the context budget bounds
+the serialized evidence. Oversized essential evidence causes a recorded rule
+fallback rather than an invented measurement or unbounded prompt.
 
-1. Reads `ResResE` records from Rosetta output, including `Res1`, `Res2`, `total`.
-   The uploaded format encodes an uppercase chain as ASCII before the residue
-   number: for example `ALA_661` is chain B, PDB residue 1.
-2. Selects target–binder residue pairs whose CB distance is **≤12 Å**, using CA
-   when CB is absent. Only negative pair energies contribute.
-3. Sums those energies per binder residue, retaining the binder chain ID.
-4. Fixes residues whose summed energy is **< -5**. Exactly -5 is not fixed.
-   Every other binder residue is mutable in Partial Flow. The existing API's
-   `cdr_position` field carries this mutable complement; no CDR alignment is needed.
+Analysis is chosen explicitly, not automatically run in full on every candidate:
 
-The adapter supports multiple binder/target chains and reversed pair orientation;
-it avoids double-counting repeated pair rows and rejects contradictory duplicates,
-nonfinite energies and unsupported/ambiguous residue numbering. Plotting and the
-uploaded script's fixed 32-process pool are unnecessary for workflow scoring.
+- Developability: chemical PTM motifs, surface PSH/PNC/PSC and residue-level
+  hydropathy/SASA. EpiMatrix stays unavailable until connected.
+- Structure/epitope: heavy-atom contacts plus mapped hotspot diagnostics. Missing
+  hotspot mapping is unknown, not an off-epitope conclusion.
+- Evolution: actual recorded parent IDs.
+- Post-filter: measured confidence ranking; incomplete tuples remain unranked.
+- Rosetta interface: optional registered ResResE energy analysis. Its per-residue
+  energies and < -5 fixed-point suggestions inform Qwen, but do not force its mask.
 
-**Deployment requirement:** the registered Rosetta service's existing
-`/v1/tools/interface_analyze` operation must return exactly one readable shared-file
-log containing the residue-pair `ResResE` table, selected by
-`evaluation.rosetta_residue_glob` (default `*.out`). Configure the deployed Rosetta
-protocol to emit this output if needed. A scalar `dG_separated` or ordinary score
-file is insufficient and is never substituted. A native Conda/PyRosetta server
-that implements this output contract is provided in
-[deploy/rosetta](../deploy/rosetta/README.md); it requires no SIF or Rosetta CLI.
+Results are persisted in Candidate `analysis_results`, developability in
+`metadata.developability_evidence`, and per-skill JSON under the candidate directory.
+Every subsequent decision sees updated evidence. New children do not inherit their
+parent's measured scores or developability as if measured on the child.
 
-The worker saves `interface_residue_energies`, `interface_fixed_positions`, the log
-path/hash and `interface-residue-energies.json`. `rosetta_interface_score` records
-the sum for inspection; it is distinct from the single-round `rosetta_interface_dg`.
-High-confidence candidates, Partial Flow children and optimization children skip
-Rosetta entirely. No selected fixed points terminates a candidate; a fully fixed
-binder has no legal Partial Flow action. Unsupported modes/chain mappings are
-reported as unavailable. The current registered Partial Flow supports nanobody
-and antibody modes; minibinders have no compatible Partial Flow mode.
+## Mutation selector
 
-## Qwen evidence context
+`protein_design_mutation_selector` partitions explicit **one-based observed binder
+sequence positions** into fixed points and a mutation mask. Example selection:
 
-The [scientific-agent context builder](scientific-agent.md) extracts measured
-structure/interface/hotspot/developability fields, enriches them with current rule
-recommendations, actual legal actions, history and task constraints, then compresses
-them for Qwen. `autonomous.decision_context_tokens` defaults to 4096. This controls
-prompt size, not scientific sample counts. Skill references explain diagnosis,
-generation strategy and stopping; the Python router remains authoritative.
+```json
+{"fixed_positions":{"B":[1,8]},"mask_positions":{"B":[3,4,5]}}
+```
 
-## Decisions, per-candidate stages and recovery
+Either field may be omitted. With only fixed points, other authorized positions
+are mutable; with a mask, its complement is fixed. Reject overlap, nonexistent or
+target chains, duplicate/out-of-range positions, empty mutable sets, and attempts
+to alter inherited task-fixed positions or exceed authorized redesign regions.
+The workflow independently reads saved task constraints, rather than trusting
+caller-supplied replacements. It records tool inputs, the validated partition and
+optimizer requests in the decision checkpoint. PDB numbering and insertion codes
+are distinct from sequence indices; native Partial Flow range encoding validates
+the actual structure before submission.
 
-Qwen can choose only executable `partial_flow`, `torchopt` or `stop` menu entries.
-An invalid/unavailable response falls back to the first legal option and is
-recorded. Stop is offered only for an accepted candidate after pending executable
-follow-ups are exhausted. There is no regeneration
-or expansion action under this staged policy. Terminating one candidate does not
-terminate other candidates in its batch.
+Partial Flow requires both fixed and mutable residues and currently supports
+compatible nanobody/antibody modes, not mini-binders. TorchOptimization currently
+supports compatible single target/binder chains, not paired VH/VL. **Its API has
+no native residue-mask argument.** The mask is enforced on returned structures:
+changes outside the mask, changed target sequences or lengths are rejected. This
+can discard proposals; the Harness does not claim the optimizer searched only the
+requested mask. Native mask support needs a future TorchOptimization API update.
 
-There is no global round limit, total sample cap or 5–20 batch policy. Initial
-sample counts come directly from each generator request. Every eligible candidate
-can finish its own route: at most one Partial Flow and then at most one
-optimization. Once a child passes both confidence gates it proceeds directly to
-TorchFold/DockQ; optimization children never return to Partial Flow or optimize
-again. No global no-improvement/patience rule truncates pending lineages.
+## Rules and recovery
 
-The agent may choose which eligible candidate to process next, but Stop is offered
-only when no executable follow-up remains. The finite stage graph and recorded
-parent IDs prevent unbounded loops. Missing/unsupported services are reported as
-unavailable; infrastructure failures still pause for checkpointed recovery.
-Optimization output must preserve target and inherited fixed-residue constraints.
-Every child receives a fresh TorchScore evaluation on its own structure.
+Planner timeout, invalid JSON/menu choices or invalid mutation selections trigger
+a recorded deterministic fallback. Model execution errors do not trigger fallback
+submissions; the planned action and remote ID remain available for recovery. If
+neither planner nor rule route can execute (for example a required fallback service
+is missing), pause with an error instead of reporting a scientific rejection.
 
-`used_samples` and decision indices are reporting counters, not budgets. Legacy
-`max_rounds`, `max_samples`, `batch_size`, `max_batch_size` and `patience` fields are
-ignored on load and omitted from the active schema/saved configuration. Existing
-checkpoints stopped by the removed round/sample/no-improvement limits can resume
-pending lineages without repeating completed actions or double-counting samples.
+The retained rule route uses strict comparisons: initial ipTM < 0.5 terminates;
+both ipTM > 0.8 and pTM > 0.8 refold; other initial candidates use Rosetta and
+energy < -5 fixed points for Partial Flow; other partial children optimize;
+other optimized children terminate. Task-configured thresholds override defaults.
+Rules still require the Rosetta service. The ResResE contract and uploaded energy
+algorithm remain unchanged (negative target–binder pair sums within 12 Angstrom,
+CB/CA fallback). Scalar interface energies do not replace the residue table.
 
-Ranking uses TorchScore ipTM, then pTM and DockQ, descending; optional Rosetta
-scores are not required for direct-refold candidates. `ranking_score` stores
-100×TorchScore ipTM. Successful operations are checkpointed and reused after
-restart. Uncertain submissions retain their IDs and are never silently reposted.
-Infrastructure errors and missing residue logs pause for recovery using the same
-run directory. Use a **new run name** for this changed scientific policy; do not
-edit old checkpoint hashes to reuse decisions made under the former routing rules.
-All scientific services still start through the registered sbatch allocations.
+Completed decisions, analysis and model jobs are reused on resume. Uncertain
+submissions retain their IDs; never blindly repost. Use generic workflow status,
+resume and candidates tools. No OpenDDE compute service participates.

@@ -1,6 +1,6 @@
 ---
 name: cdr-full-redesign
-description: Select compatible antibody generation or energy-fixed Partial Flow.
+description: Select compatible antibody generation or planner-selected Partial Flow.
 ---
 
 # cdr-full-redesign
@@ -12,8 +12,8 @@ unknown; never replace a measurement with an LLM-generated score.
 
 Use PPIFlow nanobody/antibody for authorized initial generation. TorchCraft VHH
 is available only for its supported single-chain mode; not paired VH/VL. For
-an existing pose, use compatible PPIFlow Partial Flow with Rosetta-selected fixed
-points. Follow the rule/capability-filtered menu, preserve target and fixed
-positions, and rescore with TorchScore. Do not substitute guessed CDR ranges for
-measured fixed-point evidence. Standalone redesign is a separate authorized model
+an existing pose, use compatible PPIFlow Partial Flow with mutation-selector fixed
+points or masks informed by scientific evidence (including optional Rosetta).
+Follow the capability-filtered planner menu, preserve target and fixed
+positions, and rescore with TorchScore. Never guess residue numbering or relax authorized task regions. Standalone redesign is a separate authorized model
 request; it does not add regeneration to the autonomous menu.
