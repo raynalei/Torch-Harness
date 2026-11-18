@@ -128,7 +128,7 @@ class Evaluation(RoundModel):
     min_torchscore_ptm: float = Field(default=0.8, ge=0, le=1)
     min_refold_iptm: float = Field(default=0.8, ge=0, le=1)
     min_dockq: float = Field(default=0.49, ge=0, le=1)
-    dockq_python: Path
+    dockq_python: Path = Path("/lustre/grp/cmclab/leiy/conda_envs/ppi_env/bin/python")
     dockq_timeout: float = Field(default=300, gt=0)
     # Explicit scalar field in TorchFold confidence JSON, selected by Service.metric_fields.
     fold_confidence_glob: str = "*summary_confidences*.json"

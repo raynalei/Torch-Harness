@@ -109,6 +109,11 @@ Harness after importing so its plugin tools use the updated instance settings.
 `protein_model_list` / CLI `models list` show configured profile names and request
 defaults; registration does not claim real inference has been verified.
 
+The built-in `evaluation.dockq_python` default is
+`/lustre/grp/cmclab/leiy/conda_envs/ppi_env/bin/python`. No per-task lookup is needed.
+An explicit workflow or task configuration can override it; the worker still checks
+that the interpreter exists and DockQ imports successfully.
+
 ## New tasks in natural language
 
 For example:

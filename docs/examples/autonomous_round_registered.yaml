@@ -38,7 +38,7 @@ evaluation:
   scoring_backend: torchscore
   # Rosetta must return a ResResE residue-pair log, not just dG_separated.
   rosetta_residue_glob: "*.out"
-  dockq_python: /lustre/project/envs/dockq/bin/python
+  dockq_python: /lustre/grp/cmclab/leiy/conda_envs/ppi_env/bin/python
   torchopt_options:
     method: mcmc-ddg
 autonomous:
