@@ -72,6 +72,8 @@ def rank_score(candidate, score_metric):
 def _partial_request(runner, candidate, name):
     from .artifacts import structure
 
+    if "ppiflow" not in runner.config.generators:
+        raise ValueError("Partial Flow unavailable: no compatible PPIFlow refinement configuration")
     generator = runner.config.generators["ppiflow"]
     request = generator.request
     mode = request["mode"]

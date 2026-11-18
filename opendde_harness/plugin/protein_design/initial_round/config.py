@@ -246,9 +246,9 @@ class InitialRoundConfig(RoundModel):
             )
             if initial_samples > self.autonomous.max_samples:
                 raise ValueError("initial generator requests exceed autonomous.max_samples")
-        if not self.generators or "ppiflow" not in self.generators:
-            raise ValueError("initial round requires ppiflow")
-        if "torchcraft" in self.generators:
+        if not self.generators:
+            raise ValueError("initial round requires at least one generator")
+        if {"ppiflow", "torchcraft"} <= self.generators.keys():
             pair = (self.generators["ppiflow"].request.get("mode"), self.generators["torchcraft"].request.get("mode"))
             if pair not in {("nanobody", "vhh"), ("binder", "mini_binder")}:
                 raise ValueError("pair nanobody with vhh, or binder with mini_binder")

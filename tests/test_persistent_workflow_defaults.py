@@ -404,3 +404,47 @@ def test_persistent_experimental_choices_are_rejected(field):
 
     with pytest.raises(ValueError, match="each task"):
         validate_request_defaults("ppiflow", {field: "B2"})
+
+
+@pytest.mark.parametrize("source", ["ppiflow", "torchcraft"])
+async def test_prompt_can_select_either_generator_without_submitting_other(task, settings, fake_services, source):
+    from opendde_harness.plugin.protein_design.initial_round.runner import InitialRoundRunner
+
+    task.update(generators=[source], initial_samples=1)
+    config = prepare_design_task(task, settings)
+    assert set(config.generators) == {source}
+    result = await InitialRoundRunner(config, transport=fake_services[0]).run()
+    assert result["accepted"] == 1
+    candidates = json.loads((config.work_dir / config.name / "candidates.json").read_text())
+    assert {candidate["source"] for candidate in candidates} == {source}
+
+
+def test_torchcraft_only_profile_does_not_need_ppiflow(task, settings):
+    settings["design_profiles"]["vhh"]["generators"].pop("ppiflow")
+    settings["model_services"].pop("ppiflow")
+    task["generators"] = ["torchcraft"]
+    config = prepare_design_task(task, settings)
+    assert set(config.generators) == {"torchcraft"}
+    from opendde_harness.plugin.protein_design.initial_round.autonomous import _partial_request
+    from opendde_harness.plugin.protein_design.initial_round.runner import InitialRoundRunner
+
+    with pytest.raises(ValueError, match="Partial Flow unavailable"):
+        _partial_request(InitialRoundRunner(config), {}, "refine")
+
+
+@pytest.mark.parametrize("source", ["ppiflow", "torchcraft"])
+def test_minibinder_prompt_selects_generator_and_native_mode(task, settings, source):
+    profile = copy.deepcopy(settings["design_profiles"]["vhh"])
+    profile["generators"]["ppiflow"]["request"] = {
+        "mode": "binder",
+        "target_chain": "A",
+        "binder_chain": "B",
+        "samples_min_length": 50,
+        "samples_max_length": 70,
+    }
+    profile["generators"]["torchcraft"]["request"] = {"mode": "mini_binder", "design_length": 60}
+    settings["design_profiles"]["minibinder"] = profile
+    task.update(design_type="minibinder", generators=[source])
+    config = prepare_design_task(task, settings)
+    assert set(config.generators) == {source}
+    assert config.generators[source].request["mode"] == ("binder" if source == "ppiflow" else "mini_binder")

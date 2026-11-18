@@ -106,8 +106,9 @@ def prepare_run(
         if not local.is_file():
             raise ValueError("input PDB must exist on the client's mounted shared filesystem")
         remote = SharedFiles(config.path_mappings).remote(local)
-        generator = value["generators"]["ppiflow"]
-        generator["request"]["input_pdb" if generator["request"]["mode"] == "binder" else "antigen_pdb"] = remote
+        if "ppiflow" in value["generators"]:
+            generator = value["generators"]["ppiflow"]
+            generator["request"]["input_pdb" if generator["request"]["mode"] == "binder" else "antigen_pdb"] = remote
         if "torchcraft" in value["generators"]:
             value["generators"]["torchcraft"]["request"]["pdb_path"] = remote
     return InitialRoundConfig.model_validate(value)

@@ -137,8 +137,7 @@ Optional fields include `name`, `generators`, `generator_samples`, `framework_di
 `framework_cif_path`, `fixed_positions` and validated `generator_overrides`. Total
 samples are split evenly across configured generators, with the remainder assigned
 in profile order; explicit `generator_samples` must sum to the total. Every enabled
-generator needs at least one sample. Existing prototype requires PPIFlow and optional
-TorchCraft; paired VH/VL and mini-binder capability limits are unchanged. New fixed
+generator needs at least one sample. The prompt can select PPIFlow alone (`generators: ["ppiflow"]`) or TorchCraft alone (`generators: ["torchcraft"]`). Neither is mandatory. Explicit dual-generator requests remain supported. Paired VH/VL requires PPIFlow; TorchCraft supports VHH and mini-binders. The selected generator must exist in the design profile. A TorchCraft-only run does not implicitly configure PPIFlow Partial Flow; that action remains unavailable without a compatible PPIFlow refinement configuration. TorchOptimization remains available when configured and compatible. New fixed
 positions require a compatible generator; TorchCraft's initial request has no such
 field, so select PPIFlow only for that requirement. Subsequent Partial Flow respects
 inherited fixed points and allowed regions.

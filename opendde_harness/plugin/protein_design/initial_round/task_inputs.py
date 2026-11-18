@@ -118,8 +118,8 @@ def prepare_design_task(task, settings):
             raise ValueError("duplicate hotspot")
         positions.append(index)
     enabled = task.generators or list(value.get("generators", {}))
-    if not enabled or len(enabled) != len(set(enabled)) or "ppiflow" not in enabled:
-        raise ValueError("current complete workflow requires PPIFlow and optional TorchCraft")
+    if not enabled or len(enabled) != len(set(enabled)):
+        raise ValueError("select at least one distinct configured generator")
     if set(enabled) - set(value.get("generators", {})) or set(task.generator_overrides) - set(enabled):
         raise ValueError("task requests a generator not configured in its design profile")
     value["generators"] = {
@@ -261,6 +261,7 @@ def prepare_design_task(task, settings):
             "sequence": sequence,
             "residues": residues,
             "hotspots": task.hotspots,
+            "normalized_hotspots": [normalized_chain + str(ids[i][0]) for i in positions],
         }
         path = inputs / "target-provenance.json"
         if path.exists() and json.loads(path.read_text()) != provenance:

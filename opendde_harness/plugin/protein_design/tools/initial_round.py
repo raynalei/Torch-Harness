@@ -80,7 +80,7 @@ class InitialRoundTool(Tool):
             "properties": {
                 "task": {
                     **DesignTask.model_json_schema(),
-                    "description": "New target task using persistent workflow/design/model defaults. Supply only target PDB/chain, design type, explicit hotspots and total initial_samples; optional framework/fixed-point overrides. No YAML or deployment paths needed.",
+                    "description": "New target task using persistent workflow/design/model defaults. Supply only target PDB/chain, design type, explicit hotspots and total initial_samples; optional framework/fixed-point overrides. Choose generators explicitly from the user prompt: [ppiflow] or [torchcraft]; neither is mandatory. Paired VH/VL requires PPIFlow. No YAML or deployment paths needed.",
                 },
                 "pdb_path": {"type": "string", "description": "Absolute local mounted shared-filesystem PDB path."},
                 "config_path": {
