@@ -447,3 +447,28 @@ def test_minibinder_prompt_selects_generator_and_native_mode(task, settings, sou
     config = prepare_design_task(task, settings)
     assert set(config.generators) == {source}
     assert config.generators[source].request["mode"] == ("binder" if source == "ppiflow" else "mini_binder")
+
+
+async def test_public_workflow_task_uses_two_stage_planner_and_persistent_defaults(task, settings, monkeypatch):
+    from opendde_harness.plugin.protein_design.tools.workflow import WorkflowTool
+
+    settings["workflow_defaults"].pop("autonomous")
+    launched = []
+    monkeypatch.setattr(
+        "opendde_harness.plugin.protein_design.tools.workflow.start_round",
+        lambda config: launched.append(config) or {"run_dir": str(config.work_dir / config.name)},
+    )
+    tool = WorkflowTool(settings, "start")
+    assert "task" in tool.parameters["properties"]
+    result = json.loads((await tool.execute(task=task, user_confirmed=True)).model_text)
+    assert "error" not in result, result
+    assert launched[0].autonomous.decision_policy == "planner"
+    assert launched[0].autonomous.planner_layout == "two_stage"
+    assert launched[0].evaluation.scoring_backend == "torchscore"
+    assert launched[0].generators["ppiflow"].request["framework_dir"] == task["framework_dir"]
+    result = json.loads((await tool.execute(task=task, user_confirmed=False)).model_text)
+    assert "error" in result
+    assert len(launched) == 1
+    result = json.loads((await tool.execute(task=task, run_config={}, user_confirmed=True)).model_text)
+    assert "mutually exclusive" in result["error"]
+    assert len(launched) == 1

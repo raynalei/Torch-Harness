@@ -85,7 +85,7 @@ class ProteinModelRegistry:
             "jobs_dir": str(self.root.resolve()),
             "workflow_defaults_configured": bool(self.workflow_settings.get("workflow_defaults")),
             "design_profiles": sorted(self.workflow_settings.get("design_profiles", {})),
-            "compact_task_tool": "protein_initial_round_start",
+            "compact_task_tool": "protein_design_start",
             "known_job_directories": [str(root) for root in self.known_directories()],
             "recent_requests": records[offset : offset + limit],
             "total_requests": len(records),

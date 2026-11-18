@@ -158,7 +158,13 @@ def prepare_design_task(task, settings, *, planner_layout=None):
     ):
         raise ValueError("positive generator sample counts must sum to initial_samples")
     identity = fingerprint(
-        {"task": task.model_dump(mode="json"), "source": str(source), "sha256": source_hash, "settings": settings, "planner_layout": planner_layout}
+        {
+            "task": task.model_dump(mode="json"),
+            "source": str(source),
+            "sha256": source_hash,
+            "settings": settings,
+            "planner_layout": planner_layout,
+        }
     )
     name = task.name or "design_" + identity[:16]
     work = Path(value["work_dir"])

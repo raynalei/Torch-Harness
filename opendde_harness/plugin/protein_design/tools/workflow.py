@@ -202,9 +202,7 @@ class WorkflowTool(Tool):
                     task = dict(kwargs["task"])
                     if kwargs.get("name"):
                         task["name"] = kwargs["name"]
-                    config = await asyncio.to_thread(
-                        prepare_design_task, task, self.config, planner_layout="two_stage"
-                    )
+                    config = await asyncio.to_thread(prepare_design_task, task, self.config, planner_layout="two_stage")
                     result = await asyncio.to_thread(start_round, config)
                     return ToolResult(json.dumps(result, allow_nan=False), "Workflow started", retryable=False)
                 if kwargs.get("run_config") is not None and kwargs.get("config_path"):
