@@ -53,6 +53,8 @@ def task(tmp_path):
         "design_type": "vhh",
         "hotspots": [1, 2],
         "initial_samples": 10,
+        "framework_dir": "/shared/frameworks",
+        "framework_cif_path": "/shared/framework.cif.pdb",
     }
 
 
@@ -192,7 +194,7 @@ async def test_standalone_request_defaults_are_applied_and_task_values_win(tmp_p
             "craft": {
                 "kind": "torchcraft",
                 "service": {"url": "https://craft.test"},
-                "request_defaults": {"mode": "vhh", "framework_cif_path": "/shared/framework.pdb", "seed": 42},
+                "request_defaults": {"mode": "vhh", "seed": 42},
             }
         },
         tmp_path,
@@ -206,10 +208,10 @@ async def test_standalone_request_defaults_are_applied_and_task_values_win(tmp_p
             "pdb_path": "/shared/new.pdb",
             "hotspot_indices": "0",
             "target_full_seq": "/shared/new.csv",
+            "framework_cif_path": "/shared/framework.cif.pdb",
             "seed": 7,
         },
     )
-    assert submitted[0]["framework_cif_path"] == "/shared/framework.pdb"
     assert submitted[0]["seed"] == 7
 
 
@@ -355,7 +357,7 @@ def test_named_model_schema_does_not_require_persisted_defaults(tmp_path):
             "craft": {
                 "kind": "torchcraft",
                 "service": {"url": "https://craft.test"},
-                "request_defaults": {"mode": "vhh", "framework_cif_path": "/shared/framework.pdb"},
+                "request_defaults": {"mode": "vhh"},
             }
         },
         tmp_path,
@@ -383,3 +385,22 @@ def test_explicit_service_replaces_persistent_connection_settings():
     )
     assert value["generators"]["ppiflow"]["service"] == {"url": "https://new.test"}
     assert value["evaluation"]["torchscore"] == {"url": "https://new.test"}
+
+
+def test_old_framework_and_fixed_points_are_not_reused(task, settings):
+    request = settings["design_profiles"]["vhh"]["generators"]["ppiflow"]["request"]
+    request.update(framework_dir="/shared/old-framework", fixed_positions="B2", cdr_position="B1-2")
+    settings["model_services"]["ppiflow"]["request_defaults"] = {"fixed_positions": "B4"}
+    config = prepare_design_task(task, settings)
+    resolved = config.generators["ppiflow"].request
+    assert resolved["framework_dir"] == task["framework_dir"]
+    assert not resolved.get("fixed_positions")
+    assert not resolved.get("cdr_position")
+
+
+@pytest.mark.parametrize("field", ["framework_dir", "fixed_positions", "cdr_position"])
+def test_persistent_experimental_choices_are_rejected(field):
+    from opendde_harness.plugin.protein_design.core.model_requests import validate_request_defaults
+
+    with pytest.raises(ValueError, match="each task"):
+        validate_request_defaults("ppiflow", {field: "B2"})

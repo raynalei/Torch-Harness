@@ -8,7 +8,7 @@ The current prototype routing rules and budgets are unchanged.
 ## One-time setup using an existing working configuration
 
 Keep the existing seven registrations in `plugins.config.protein-design.model_services`.
-Import a known task once to save its fixed workflow and framework settings:
+Import a known task once to save its fixed deployment and workflow settings:
 
 ```bash
 ddeharness protein-design models defaults \
@@ -37,7 +37,7 @@ if the native reader requires additional fixed CSV columns.
 
 The importer removes the previous target PDB, hotspots, target CSV, task name and
 output folder. Old fold templates are cleared because they can contain another
-antigen's MSAs/features. It keeps framework/weights/request settings, output root,
+antigen's MSAs/features. It removes framework and fixed/designable residue requirements as task inputs. It keeps weights/request settings, output root,
 shared mappings and DockQ environment. Services uniquely registered globally are
 reused rather than copied into the new profile. The imported common evaluation
 selects TorchScore and enables autonomous; check the resulting configuration before
@@ -55,7 +55,7 @@ Under `plugins.config.protein-design` in the active `config.json`:
 | `model_services.<alias>.service.environment` | Fixed source/Conda/Python/model locations exported to that API allocation |
 | `model_services.<alias>.request_defaults` | Fixed HTTP request fields such as checkpoint, config and algorithm defaults |
 | `workflow_defaults` | `work_dir`, `path_mappings`, DockQ/evaluation options and autonomous defaults |
-| `design_profiles.<type>` | Enabled generators, design modes, binder/framework settings and chain roles |
+| `design_profiles.<type>` | Enabled generators, design modes, generator settings and chain roles |
 | `target_adapters.torchcraft` | Actual CSV columns and hotspot indexing convention |
 
 `service.environment` accepts string environment values and is passed only to the
@@ -91,8 +91,7 @@ For example, add fixed request fields to an existing registration:
 
 All seven model kinds support `request_defaults` using their real request schema.
 Target-specific paths, hotspots, task names and old target sequence files are
-rejected as persistent request defaults. Mode-specific framework/fixed-point
-requirements belong in the corresponding design profile. If several registrations
+rejected as persistent request defaults. Framework and fixed/designable residue requirements must be supplied by the current task, not persisted in profiles or request defaults. Legacy persisted values are ignored by the workflow for new tasks. If several registrations
 share a kind, select an alias once with profile `model_aliases`, for example
 `{"torchscore":"score_cluster"}`. Explicit task service blocks still take precedence.
 
@@ -115,7 +114,7 @@ defaults; registration does not claim real inference has been verified.
 For example:
 
 > Use target `/shared/inputs/new.pdb`, chain C, VHH, hotspots C42 and C73,
-> initial total 10, and run the configured autonomous workflow.
+> framework `/shared/frameworks/current`, initial total 10, and run the configured autonomous workflow.
 
 The assistant calls `protein_initial_round_start` with:
 
@@ -126,7 +125,8 @@ The assistant calls `protein_initial_round_start` with:
     "target_chain": "C",
     "design_type": "vhh",
     "hotspots": ["C42", "C73"],
-    "initial_samples": 10
+    "initial_samples": 10,
+    "framework_dir": "/shared/frameworks/current"
   },
   "user_confirmed": true
 }
@@ -160,7 +160,7 @@ inherited fixed points and allowed regions.
   or mismatched files are rejected.
 - Clear old target-specific fields and prepared fold templates. Generated requests
   use current PDB, hotspots, chain roles and per-run output directories. Static
-  weights/framework/evaluation settings are loaded from defaults.
+  weights/evaluation settings are loaded from defaults. Framework and residue constraints come from the current task.
 - Snapshot the resolved configuration to `worker-config.json` / `run-config.json`.
   Editing defaults affects new tasks, not existing runs. Missing or invalid inputs
   produce actionable errors before Slurm submission rather than guessed paths.

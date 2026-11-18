@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import copy
 
-from ..core.model_requests import validate_request_defaults
+from ..core.model_requests import TASK_DESIGN_FIELDS, validate_request_defaults
 from .config import InitialRoundConfig
 
 SETTINGS_KEYS = ("workflow_defaults", "design_profiles", "target_adapters")
@@ -25,7 +25,21 @@ def merge_defaults(base, overrides):
     return result
 
 
+def deployment_settings(settings):
+    """Ignore legacy persisted experimental choices for new tasks."""
+    settings = copy.deepcopy(settings)
+    for profile in [settings.get("workflow_defaults", {}), *settings.get("design_profiles", {}).values()]:
+        for generator in profile.get("generators", {}).values():
+            for field in TASK_DESIGN_FIELDS:
+                generator.get("request", {}).pop(field, None)
+    for model in settings.get("model_services", {}).values():
+        for field in TASK_DESIGN_FIELDS:
+            model.get("request_defaults", {}).pop(field, None)
+    return settings
+
+
 def workflow_values(value, settings):
+    settings = deployment_settings(settings)
     mode = value.get("generators", {}).get("ppiflow", {}).get("request", {}).get("mode")
     design = value.get("design_type") or DESIGN_MODES.get(mode)
     base = merge_defaults(settings.get("workflow_defaults", {}), settings.get("design_profiles", {}).get(design, {}))

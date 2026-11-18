@@ -224,7 +224,7 @@ def import_workflow_defaults(
     """Import fixed settings once from an existing task, removing old target inputs."""
     import yaml
 
-    from opendde_harness.plugin.protein_design.core.model_requests import TARGET_REQUEST_FIELDS
+    from opendde_harness.plugin.protein_design.core.model_requests import TARGET_REQUEST_FIELDS, TASK_DESIGN_FIELDS
     from opendde_harness.plugin.protein_design.initial_round.task_inputs import TorchCraftAdapter
 
     try:
@@ -241,7 +241,7 @@ def import_workflow_defaults(
         for kind, generator in generators.items():
             if sum(model.get("kind") == kind for model in known.values()) == 1:
                 generator.pop("service", None)
-            for key in TARGET_REQUEST_FIELDS | {"output_dir"}:
+            for key in TARGET_REQUEST_FIELDS | TASK_DESIGN_FIELDS | {"output_dir"}:
                 generator["request"].pop(key, None)
             generator["fold_template"] = None
         for kind in ("af3score", "torchscore", "torchfold", "rosetta", "torchopt"):

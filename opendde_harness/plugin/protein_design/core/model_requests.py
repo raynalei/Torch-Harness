@@ -291,13 +291,20 @@ TARGET_REQUEST_FIELDS = frozenset(
 )
 
 
+TASK_DESIGN_FIELDS = frozenset(
+    {"framework_dir", "framework_cif_path", "fixed_positions", "cdr_position", "mask_residues"}
+)
+
+
 def validate_request_defaults(kind, defaults):
     """Validate provided fields without manufacturing missing scientific inputs."""
     fields = REQUEST_TYPES[kind].model_fields
     if set(defaults) - set(fields):
         raise ValueError(f"unknown request default fields for {kind}")
-    if set(defaults) & TARGET_REQUEST_FIELDS:
-        raise ValueError("target-specific inputs must be supplied by each task, not request_defaults")
+    if set(defaults) & (TARGET_REQUEST_FIELDS | TASK_DESIGN_FIELDS):
+        raise ValueError(
+            "target-specific and framework/residue inputs must be supplied by each task, not request_defaults"
+        )
     for key, value in defaults.items():
         field = fields[key]
         annotation = Annotated[field.annotation, *field.metadata] if field.metadata else field.annotation

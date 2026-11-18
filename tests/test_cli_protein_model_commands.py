@@ -189,6 +189,8 @@ def test_import_workflow_once_discards_previous_target_fields(tmp_path):
                             "antigen_pdb": "/shared/old.pdb",
                             "specified_hotspots": "A1",
                             "framework_dir": "/shared/framework",
+                            "fixed_positions": "B2",
+                            "cdr_position": "B3-5",
                             "model_weights": "/shared/weights.ckpt",
                         },
                         "chains": {"target": ["A"], "binder": ["B"], "refold_map": {"A": "A", "B": "B"}},
@@ -202,6 +204,7 @@ def test_import_workflow_once_discards_previous_target_fields(tmp_path):
     assert result.exit_code == 0, result.output
     section = json.loads(path.read_text())["plugins"]["config"]["protein-design"]
     generator = section["design_profiles"]["vhh"]["generators"]["ppiflow"]
+    assert not {"framework_dir", "fixed_positions", "cdr_position"} & generator["request"].keys()
     assert "antigen_pdb" not in generator["request"]
     assert "specified_hotspots" not in generator["request"]
     assert generator["request"]["model_weights"] == "/shared/weights.ckpt"
