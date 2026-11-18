@@ -337,6 +337,7 @@ async def run_autonomous(runner):
                                 runner.config.evaluation.score_metric.removesuffix("_iptm") + "_ptm",
                                 "design_refold_dockq",
                                 "rosetta_interface_score",
+                                "rosetta_interface_dg",
                             }
                         },
                         "rosetta_structure": c.get("rosetta_structure"),

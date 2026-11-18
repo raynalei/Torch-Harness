@@ -78,7 +78,14 @@ that implements this output contract is provided in
 
 The worker saves `interface_residue_energies`, `interface_fixed_positions`, the log
 path/hash and `interface-residue-energies.json`. `rosetta_interface_score` records
-the sum for inspection; it is distinct from the single-round `rosetta_interface_dg`.
+the sum for inspection. Autonomous candidates also save InterfaceAnalyzer's
+`dG_separated` as `metrics.rosetta_interface_dg` and expose it in Qwen's decision
+context. This interface dG is distinct from the filtered residue-energy sum;
+fixed-point selection still uses per-residue energies below the configured threshold.
+The value is read from API metrics or the returned scorefile, never inferred from
+residue energies. Existing cached interface jobs can backfill the metric when
+`score_interface` is revisited, without submitting another Rosetta job. Completed
+workflows are not automatically reopened solely to backfill old candidate JSON.
 High-confidence candidates, Partial Flow children and optimization children skip
 Rosetta entirely. No selected fixed points terminates a candidate; a fully fixed
 binder has no legal Partial Flow action. Unsupported modes/chain mappings are

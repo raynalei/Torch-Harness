@@ -258,6 +258,7 @@ async def test_github_runner_consumes_the_api_energy_artifact(deployment, tmp_pa
                 rosetta=service,
                 rosetta_options={"pack_input": False, "pack_separated": True},
                 rosetta_residue_glob="*.out",
+                rosetta_scores_glob="*.sc",
             ),
         ),
     )
@@ -271,6 +272,7 @@ async def test_github_runner_consumes_the_api_energy_artifact(deployment, tmp_pa
     assert candidate["interface_residue_energies"] == {"B": {"1": -6.25}}
     assert candidate["interface_fixed_positions"] == {"B": [1]}
     assert candidate["metrics"]["rosetta_interface_score"] == -6.25
+    assert candidate["metrics"]["rosetta_interface_dg"] == -12.0
     assert Path(candidate["rosetta_energy_log"]).is_file()
 
 

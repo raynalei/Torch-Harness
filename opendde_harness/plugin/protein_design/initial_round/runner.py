@@ -489,7 +489,8 @@ class InitialRoundRunner:
             if "interface_fixed_positions" in candidate:
                 if digest(self.files.local(candidate["rosetta_energy_log"])) != candidate["rosetta_energy_log_sha256"]:
                     raise ValueError("Rosetta residue-energy log changed while resuming")
-                return
+                if "rosetta_interface_dg" in candidate["metrics"]:
+                    return
         elif "rosetta_interface_dg" in candidate["metrics"]:
             return
         key = candidate["candidate_id"]
@@ -519,6 +520,16 @@ class InitialRoundRunner:
                 "chain_group_b": "".join(chain_map[c] for c in generator.chains.target),
             },
         )
+        field = evaluation.rosetta.metric_fields.get("interface_dg", "dG_separated")
+        records = metric_records(result, evaluation.rosetta)
+        if not any(select(row, field) is not None for row in records):
+            scores = [
+                p
+                for p in output_files(result, evaluation.rosetta, self.files)
+                if p.match(evaluation.rosetta_scores_glob)
+            ]
+            records = [row for path in scores for row in table_records(path)]
+        candidate["metrics"]["rosetta_interface_dg"] = measured(records, field)
         if autonomous is not None:
             from .interface_energy import interface_energies
 
@@ -551,16 +562,6 @@ class InitialRoundRunner:
             write_json(directory / "interface-residue-energies.json", energies)
             self.save_candidates()
             return
-        field = evaluation.rosetta.metric_fields.get("interface_dg", "dG_separated")
-        records = metric_records(result, evaluation.rosetta)
-        if not any(select(row, field) is not None for row in records):
-            scores = [
-                p
-                for p in output_files(result, evaluation.rosetta, self.files)
-                if p.match(evaluation.rosetta_scores_glob)
-            ]
-            records = [row for path in scores for row in table_records(path)]
-        candidate["metrics"]["rosetta_interface_dg"] = measured(records, field)
         candidate["rosetta_structure"] = "refold" if refolded else "generated"
         self.save_candidates()
 
