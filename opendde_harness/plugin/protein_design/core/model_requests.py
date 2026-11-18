@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import Field, StrictBool, model_validator
+from pydantic import Field, StrictBool, TypeAdapter, model_validator
 
 from opendde_harness.plugin.protein_design.core.contracts import ContractModel
 
@@ -271,3 +271,35 @@ def validate_request(kind: str, request: dict, operation: str | None = None) -> 
     elif operation is not None:
         raise ValueError("operation is only used for Rosetta")
     return value.model_dump(exclude_none=True)
+
+
+TARGET_REQUEST_FIELDS = frozenset(
+    {
+        "antigen_pdb",
+        "input_pdb",
+        "complex_pdb",
+        "pdb_path",
+        "pdb_paths",
+        "json_path",
+        "input_pdb_dir",
+        "af3score_output_dir",
+        "specified_hotspots",
+        "hotspot_indices",
+        "target_full_seq",
+        "name",
+    }
+)
+
+
+def validate_request_defaults(kind, defaults):
+    """Validate provided fields without manufacturing missing scientific inputs."""
+    fields = REQUEST_TYPES[kind].model_fields
+    if set(defaults) - set(fields):
+        raise ValueError(f"unknown request default fields for {kind}")
+    if set(defaults) & TARGET_REQUEST_FIELDS:
+        raise ValueError("target-specific inputs must be supplied by each task, not request_defaults")
+    for key, value in defaults.items():
+        field = fields[key]
+        annotation = Annotated[field.annotation, *field.metadata] if field.metadata else field.annotation
+        TypeAdapter(annotation).validate_python(value)
+    return defaults

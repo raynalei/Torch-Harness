@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import ipaddress
 import json
+import os
 import re
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -83,6 +84,7 @@ def validate_binding(config, url, record):
             "script": str(config.sbatch_script),
             "sha256": hashlib.sha256(config.sbatch_script.read_bytes()).hexdigest(),
             "url": config.url,
+            **({"environment": config.environment} if config.environment else {}),
         }
     )
     if any(state.get(k) != record.get(k) for k in ("signature", "job_id", "allocation_name")) or (
@@ -96,8 +98,11 @@ def validate_binding(config, url, record):
 
 
 async def slurm_command(config: Service, *args: str) -> str:
+    options = {}
+    if args[0] == "sbatch" and config.environment:
+        options["env"] = {**os.environ, **config.environment}
     process = await asyncio.create_subprocess_exec(
-        *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, **options
     )
     try:
         stdout, stderr = await asyncio.wait_for(process.communicate(), config.slurm_command_timeout)
@@ -200,7 +205,12 @@ async def _ensure_locked(config, client, script: Path, state_path: Path, deadlin
     if not script.is_file():
         raise ValueError(f"API sbatch script does not exist: {script}")
     signature = fingerprint(
-        {"script": str(script), "sha256": hashlib.sha256(script.read_bytes()).hexdigest(), "url": config.url}
+        {
+            "script": str(script),
+            "sha256": hashlib.sha256(script.read_bytes()).hexdigest(),
+            "url": config.url,
+            **({"environment": config.environment} if config.environment else {}),
+        }
     )
     if state is not None and state.get("signature") != signature:
         raise ValueError("API script or URL changed; reconcile the old allocation and use a new sbatch_state_file")
@@ -211,7 +221,14 @@ async def _ensure_locked(config, client, script: Path, state_path: Path, deadlin
         state = {"signature": signature, "state": "submission_uncertain", "allocation_name": allocation_name}
         write_json(state_path, state)
         # A timeout or lost stdout may still mean the scheduler accepted the job.
-        output = await slurm_command(config, "sbatch", "--parsable", f"--job-name={allocation_name}", str(script))
+        output = await slurm_command(
+            config,
+            "sbatch",
+            "--parsable",
+            f"--job-name={allocation_name}",
+            *(["--export=ALL"] if config.environment else []),
+            str(script),
+        )
         if not re.fullmatch(r"[0-9]+", output):
             raise ValueError("sbatch must return a numeric local-cluster job ID")
         state.update(job_id=output, state="submitted")

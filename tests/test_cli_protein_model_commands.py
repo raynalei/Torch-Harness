@@ -126,3 +126,96 @@ def test_conflicting_import_requires_explicit_replacement(tmp_path):
         ]
         == "https://replacement.test"
     )
+
+
+def test_import_persistent_defaults_preserves_provider_and_existing_models(tmp_path):
+    path = tmp_path / "config.json"
+    original = {
+        "providers": {"example": {"api_key": "preserve-me"}},
+        "plugins": {
+            "config": {
+                "protein-design": {
+                    "model_services": {"score": {"kind": "torchscore", "service": {"url": "https://score.test"}}}
+                }
+            }
+        },
+    }
+    path.write_text(json.dumps(original))
+    source = tmp_path / "settings.json"
+    source.write_text(
+        json.dumps(
+            {
+                "model_services": {
+                    "flow": {
+                        "kind": "ppiflow",
+                        "service": {"url": "https://flow.test", "environment": {"PPIFLOW_ROOT": "/shared/source"}},
+                        "request_defaults": {"model_weights": "/shared/weights.ckpt", "num_timesteps": 100},
+                    }
+                },
+                "workflow_defaults": {
+                    "work_dir": "/shared/runs",
+                    "path_mappings": [{"local": "/shared", "remote": "/shared"}],
+                    "evaluation": {"dockq_python": "/shared/dockq/bin/python"},
+                },
+            }
+        )
+    )
+    result = invoke(path, "register", "--services-file", str(source))
+    assert result.exit_code == 0, result.output
+    saved = json.loads(path.read_text())
+    assert saved["providers"] == original["providers"]
+    section = saved["plugins"]["config"]["protein-design"]
+    assert set(section["model_services"]) == {"score", "flow"}
+    assert section["workflow_defaults"]["work_dir"] == "/shared/runs"
+    assert json.loads(result.output)["backup_path"]
+    assert json.loads(invoke(path, "list").output)["workflow_defaults_configured"] is True
+
+
+def test_import_workflow_once_discards_previous_target_fields(tmp_path):
+    path = tmp_path / "config.json"
+    profile = tmp_path / "old-task.json"
+    profile.write_text(
+        json.dumps(
+            {
+                "name": "old",
+                "work_dir": "/shared/runs",
+                "path_mappings": [{"local": "/shared", "remote": "/shared"}],
+                "evaluation": {"dockq_python": "/shared/dockq/python"},
+                "generators": {
+                    "ppiflow": {
+                        "request": {
+                            "mode": "nanobody",
+                            "name": "old",
+                            "antigen_pdb": "/shared/old.pdb",
+                            "specified_hotspots": "A1",
+                            "framework_dir": "/shared/framework",
+                            "model_weights": "/shared/weights.ckpt",
+                        },
+                        "chains": {"target": ["A"], "binder": ["B"], "refold_map": {"A": "A", "B": "B"}},
+                        "fold_template": "/shared/old-fold.json",
+                    }
+                },
+            }
+        )
+    )
+    result = invoke(path, "defaults", "--from-workflow", str(profile), "--design-type", "vhh")
+    assert result.exit_code == 0, result.output
+    section = json.loads(path.read_text())["plugins"]["config"]["protein-design"]
+    generator = section["design_profiles"]["vhh"]["generators"]["ppiflow"]
+    assert "antigen_pdb" not in generator["request"]
+    assert "specified_hotspots" not in generator["request"]
+    assert generator["request"]["model_weights"] == "/shared/weights.ckpt"
+    assert generator["fold_template"] is None
+    assert section["workflow_defaults"]["evaluation"]["scoring_backend"] == "torchscore"
+    assert "autonomous" in section["workflow_defaults"]
+
+
+def test_replacing_static_defaults_requires_explicit_flag(tmp_path):
+    path = tmp_path / "config.json"
+    original = {"plugins": {"config": {"protein-design": {"workflow_defaults": {"work_dir": "/shared/old"}}}}}
+    path.write_text(json.dumps(original))
+    source = tmp_path / "settings.json"
+    source.write_text(json.dumps({"workflow_defaults": {"work_dir": "/shared/new"}}))
+    assert invoke(path, "register", "--services-file", str(source)).exit_code == 1
+    assert json.loads(path.read_text()) == original
+    assert invoke(path, "register", "--services-file", str(source), "--replace-existing").exit_code == 0

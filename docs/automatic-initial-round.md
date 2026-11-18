@@ -85,6 +85,10 @@ stalled worker on its recorded host before attempting recovery.
 
 ## Start from a Qwen conversation
 
+New tasks can supply compact scientific inputs using persistent design profiles;
+see [configure-once defaults](persistent-design-defaults.md). Existing YAML and
+inline run_config launches remain available.
+
 Merge this property into `plugins.config.protein-design` in your active Harness
 configuration, preserving the existing provider and service registrations:
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from pathlib import Path
 from typing import Any, Literal
 
@@ -32,6 +33,14 @@ class PathMapping(RoundModel):
 
 
 class Service(RoundModel):
+    @model_serializer(mode="wrap")
+    def serialize(self, handler):
+        value = handler(self)
+        if not self.environment:
+            value.pop("environment", None)
+        return value
+
+    environment: dict[str, str] = Field(default_factory=dict)
     url: str
     health_path: str = Field(default="/health", pattern=r"^/[A-Za-z0-9_./-]*$")
     token_env: str | None = None
@@ -54,6 +63,10 @@ class Service(RoundModel):
 
     @model_validator(mode="after")
     def valid_url(self):
+        if any(
+            not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) or "\0" in value for key, value in self.environment.items()
+        ):
+            raise ValueError("invalid service environment key or value")
         from urllib.parse import urlsplit
 
         for path in (self.sbatch_script, self.sbatch_state_file):

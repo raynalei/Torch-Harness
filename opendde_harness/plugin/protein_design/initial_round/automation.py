@@ -33,28 +33,48 @@ def prepare_run(
     pdb_path: Path | None = None,
     name: str | None = None,
     registrations: dict | None = None,
+    plugin_config: dict | None = None,
 ):
     value = copy.deepcopy(config_path) if isinstance(config_path, dict) else yaml.safe_load(config_path.read_text())
     if not isinstance(value, dict):
         raise ValueError("workflow configuration must be an object")
+    if plugin_config is None:
+        if registrations is None:
+            from opendde_harness.config.loader import load_config
+
+            plugin_config = load_config().plugins.config.get("protein-design", {})
+        else:
+            plugin_config = {}
+    from .defaults import workflow_values
+
+    value = workflow_values(value, plugin_config)
+    aliases = value.pop("model_aliases", {})
     evaluation = value.setdefault("evaluation", {})
     if not isinstance(evaluation, dict):
         raise ValueError("evaluation must be an object")
-    if registrations is None:
-        from opendde_harness.config.loader import load_config
+    known = registrations if registrations is not None else plugin_config.get("model_services", {})
 
-        registrations = load_config().plugins.config.get("protein-design", {}).get("model_services", {})
-    known = registrations
-
-    def registered_service(kind):
+    def registration(kind, explicit=None):
+        if kind in aliases:
+            match = known.get(aliases[kind])
+            if not match or match.get("kind") != kind:
+                raise ValueError(f"invalid registered model alias for {kind}")
+            return match
         matches = [item for item in known.values() if item.get("kind") == kind]
+        if explicit is not None and len(matches) > 1:
+            matches = [item for item in matches if item["service"].get("url") == explicit.get("url")]
+            if len(matches) != 1:
+                return None
         if len(matches) > 1:
-            raise ValueError(f"multiple registered {kind} services; specify an explicit task service")
-        return copy.deepcopy(matches[0]["service"]) if matches else None
+            raise ValueError(f"multiple registered {kind} services; select model_aliases or an explicit task service")
+        return matches[0] if matches else None
 
     for kind, generator in value.get("generators", {}).items():
-        if generator.get("service") is None:
-            generator["service"] = registered_service(kind)
+        model = registration(kind, generator.get("service"))
+        if model:
+            if generator.get("service") is None:
+                generator["service"] = copy.deepcopy(model["service"])
+            generator["request"] = {**copy.deepcopy(model.get("request_defaults", {})), **generator.get("request", {})}
     configured = {kind for kind in ("af3score", "torchscore") if evaluation.get(kind) is not None}
     registered = {item.get("kind") for item in known.values() if item.get("kind") in {"af3score", "torchscore"}}
     evaluation["scoring_backend"] = choose_scorer(
@@ -67,8 +87,14 @@ def prepare_run(
     if value.get("autonomous") is not None:
         kinds.extend(["rosetta", "torchopt"])
     for kind in kinds:
-        if evaluation.get(kind) is None:
-            evaluation[kind] = registered_service(kind)
+        model = registration(kind, evaluation.get(kind))
+        if model:
+            if evaluation.get(kind) is None:
+                evaluation[kind] = copy.deepcopy(model["service"])
+            defaults = copy.deepcopy(model.get("request_defaults", {}))
+            if defaults:
+                option_key = kind + "_options"
+                evaluation[option_key] = {**defaults, **evaluation.get(option_key, {})}
     config = InitialRoundConfig.model_validate(value)
     value = config.model_dump(mode="json")
     if name:

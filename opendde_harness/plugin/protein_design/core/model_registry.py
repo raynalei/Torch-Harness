@@ -5,11 +5,11 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path, PurePosixPath
-from typing import Literal
+from typing import Any, Literal
 from uuid import uuid4
 
 import httpx
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from opendde_harness.plugin.protein_design.core.contracts import ContractModel
 from opendde_harness.plugin.protein_design.core.model_requests import (
@@ -17,6 +17,7 @@ from opendde_harness.plugin.protein_design.core.model_requests import (
     ROSETTA_OPERATIONS,
     AF3ScoreRequest,
     validate_request,
+    validate_request_defaults,
 )
 from opendde_harness.plugin.protein_design.initial_round.api_startup import allocation_record, allocation_was_released
 from opendde_harness.plugin.protein_design.initial_round.config import Service
@@ -31,6 +32,12 @@ class ModelRegistration(ContractModel):
     service: Service
     max_samples: int = Field(default=20, ge=1)
     allowed_input_roots: list[str] = Field(default_factory=list)
+    request_defaults: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def defaults_contract(self):
+        validate_request_defaults(self.kind, self.request_defaults)
+        return self
 
 
 class ProteinModelRegistry:
@@ -42,6 +49,7 @@ class ProteinModelRegistry:
         transport=None,
         config_path: Path | None = None,
         auto_monitor: bool = False,
+        workflow_settings: dict | None = None,
     ):
         self.models = {}
         for name, value in registrations.items():
@@ -51,6 +59,7 @@ class ProteinModelRegistry:
         self.transport = transport
         self.config_path = config_path
         self.auto_monitor = auto_monitor
+        self.workflow_settings = workflow_settings or {}
 
     @staticmethod
     def valid_id(value: str):
@@ -62,10 +71,21 @@ class ProteinModelRegistry:
             raise ValueError(f"model {name!r} is not registered; call protein_model_list")
         return self.models[name]
 
+    def request_schema(self, name):
+        model = self.model(name)
+        schema = REQUEST_TYPES[model.kind].model_json_schema()
+        schema["required"] = [key for key in schema.get("required", []) if key not in model.request_defaults]
+        for key, value in model.request_defaults.items():
+            schema["properties"][key]["default"] = value
+        return schema
+
     def catalogue(self, *, limit=20, offset=0):
         records = self.recent_requests(limit=None)
         return {
             "jobs_dir": str(self.root.resolve()),
+            "workflow_defaults_configured": bool(self.workflow_settings.get("workflow_defaults")),
+            "design_profiles": sorted(self.workflow_settings.get("design_profiles", {})),
+            "compact_task_tool": "protein_initial_round_start",
             "known_job_directories": [str(root) for root in self.known_directories()],
             "recent_requests": records[offset : offset + limit],
             "total_requests": len(records),
@@ -83,9 +103,11 @@ class ProteinModelRegistry:
                     "sbatch_configured": bool(model.service.sbatch_script),
                     "inference_verified": False,
                     "max_samples": model.max_samples,
-                    "service": model.service.model_dump(mode="json", exclude_none=True),
+                    "service": model.service.model_dump(mode="json", exclude_none=True, exclude={"environment"}),
+                    "environment_keys": sorted(model.service.environment),
+                    "request_defaults": model.request_defaults,
                     "operations": list(ROSETTA_OPERATIONS) if model.kind == "rosetta" else [],
-                    "request_schema": REQUEST_TYPES[model.kind].model_json_schema(),
+                    "request_schema": self.request_schema(name),
                     "cancel_supported": model.kind == "af3score",
                     "notes": (
                         "AF3Score prepared mode returns raw outputs without automatic per-PDB metrics."
@@ -271,7 +293,7 @@ class ProteinModelRegistry:
 
     async def submit(self, name: str, request_id: str, request: dict, operation: str | None = None):
         model = self.model(name)
-        payload = validate_request(model.kind, request, operation)
+        payload = validate_request(model.kind, {**model.request_defaults, **request}, operation)
         self.validate_paths(model, payload)
         for field in (
             "num_samples",
