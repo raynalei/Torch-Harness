@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from pathlib import Path
 from typing import Any, Literal
 
@@ -32,6 +33,14 @@ class PathMapping(RoundModel):
 
 
 class Service(RoundModel):
+    @model_serializer(mode="wrap")
+    def serialize(self, handler):
+        value = handler(self)
+        if not self.environment:
+            value.pop("environment", None)
+        return value
+
+    environment: dict[str, str] = Field(default_factory=dict)
     url: str
     health_path: str = Field(default="/health", pattern=r"^/[A-Za-z0-9_./-]*$")
     token_env: str | None = None
@@ -54,6 +63,10 @@ class Service(RoundModel):
 
     @model_validator(mode="after")
     def valid_url(self):
+        if any(
+            not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) or "\0" in value for key, value in self.environment.items()
+        ):
+            raise ValueError("invalid service environment key or value")
         from urllib.parse import urlsplit
 
         for path in (self.sbatch_script, self.sbatch_state_file):
@@ -115,7 +128,7 @@ class Evaluation(RoundModel):
     min_torchscore_ptm: float = Field(default=0.8, ge=0, le=1)
     min_refold_iptm: float = Field(default=0.8, ge=0, le=1)
     min_dockq: float = Field(default=0.49, ge=0, le=1)
-    dockq_python: Path
+    dockq_python: Path = Path("/lustre/grp/cmclab/leiy/conda_envs/ppi_env/bin/python")
     dockq_timeout: float = Field(default=300, gt=0)
     # Explicit scalar field in TorchFold confidence JSON, selected by Service.metric_fields.
     fold_confidence_glob: str = "*summary_confidences*.json"
@@ -248,9 +261,9 @@ class InitialRoundConfig(RoundModel):
                 raise ValueError("autonomous rounds require scoring_backend=torchscore")
             for source, generator in self.generators.items():
                 validate_request(source, {"name": self.name, **generator.request})
-        if not self.generators or "ppiflow" not in self.generators:
-            raise ValueError("initial round requires ppiflow")
-        if "torchcraft" in self.generators:
+        if not self.generators:
+            raise ValueError("initial round requires at least one generator")
+        if "ppiflow" in self.generators and "torchcraft" in self.generators:
             pair = (self.generators["ppiflow"].request.get("mode"), self.generators["torchcraft"].request.get("mode"))
             if pair not in {("nanobody", "vhh"), ("binder", "mini_binder")}:
                 raise ValueError("pair nanobody with vhh, or binder with mini_binder")

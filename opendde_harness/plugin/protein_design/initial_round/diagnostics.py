@@ -55,11 +55,19 @@ def analyze(runner, candidate):
         raise ValueError("non-finite structure coordinates")
     evidence = {"epitope_hit": None, "hotspot_structure": "refold" if refolded else "generated", "notes": []}
     try:
-        ppiflow = runner.config.generators["ppiflow"].request
-        hotspots = ppiflow.get("specified_hotspots", "")
+        if "ppiflow" in runner.config.generators:
+            ppiflow = runner.config.generators["ppiflow"].request
+            hotspots = ppiflow.get("specified_hotspots", "")
+            input_path = ppiflow.get("antigen_pdb") or ppiflow.get("input_pdb")
+        else:
+            import json
+
+            provenance_path = runner.root / "inputs" / "target-provenance.json"
+            provenance = json.loads(provenance_path.read_text()) if provenance_path.is_file() else {}
+            hotspots = ",".join(provenance.get("normalized_hotspots", []))
+            input_path = runner.config.generators["torchcraft"].request["pdb_path"]
         if not hotspots:
-            raise ValueError("no explicit PPIFlow hotspots; TorchCraft hotspot index semantics are not assumed")
-        input_path = ppiflow.get("antigen_pdb") or ppiflow.get("input_pdb")
+            raise ValueError("no explicit PDB hotspot provenance; TorchCraft hotspot index semantics are not assumed")
         input_atoms = structure(runner.files.local(input_path))
         input_sequences = chain_sequences(runner.files.local(input_path))
         contacts = []

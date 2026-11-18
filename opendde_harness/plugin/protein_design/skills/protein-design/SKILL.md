@@ -10,6 +10,16 @@ metadata:
 
 ## Start and recover
 
+Prefer `protein_design_start(task=...)` with new pdb_path, target_chain, design_type,
+explicit hotspots and initial_samples. Persistent workflow_defaults/design_profiles
+and registered request_defaults supply fixed services, sbatch environment, source/
+weight paths, shared mappings and output/DockQ settings. No per-task YAML is needed.
+Choose task.generators from the prompt: ["ppiflow"] or ["torchcraft"]. Neither is
+mandatory; paired VH/VL requires PPIFlow. Do not silently switch a requested model.
+Framework and fixed/designable residue requirements belong to the current task;
+never reuse old target CSVs, hotspots or prepared fold templates. Inspect configured
+profiles with protein_model_list and report only missing one-time setup.
+
 Call `protein_design_context` for configured model kinds and native capabilities.
 Use `protein_model_list` for actual model aliases and request schemas. Assemble
 run_config from known scientific inputs and registrations or reuse workflow_config.

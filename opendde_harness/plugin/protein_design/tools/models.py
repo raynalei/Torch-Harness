@@ -145,7 +145,11 @@ def _tool(ctx: PluginContext, action: str):
     if not root.is_absolute():
         raise ValueError("model_jobs_dir must be an absolute path")
     registry = ProteinModelRegistry(
-        ctx.config.get("model_services") or {}, root, config_path=get_config_path(), auto_monitor=True
+        ctx.config.get("model_services") or {},
+        root,
+        config_path=get_config_path(),
+        auto_monitor=True,
+        workflow_settings=ctx.config,
     )
     return ProteinModelTool(registry, action)
 
@@ -195,7 +199,12 @@ class ProteinModelSubmitTool(ProteinModelTool):
         from opendde_harness.plugin.protein_design.core.model_requests import REQUEST_TYPES
 
         schema = super().parameters
-        request_schema = REQUEST_TYPES[self.kind].model_json_schema()
+        aliases = [name for name, model in self.registry.models.items() if model.kind == self.kind]
+        request_schema = (
+            self.registry.request_schema(aliases[0])
+            if len(aliases) == 1
+            else REQUEST_TYPES[self.kind].model_json_schema()
+        )
         schema["$defs"] = request_schema.pop("$defs", {})
         schema["properties"]["request"] = request_schema
         aliases = [name for name, model in self.registry.models.items() if model.kind == self.kind]

@@ -1,5 +1,8 @@
 # Workflow configuration
 
+For configure-once model/workflow defaults and compact new-target tasks, see
+[persistent design defaults](persistent-design-defaults.md).
+
 The two configuration files serve different purposes and are loaded together.
 
 | File | Purpose |

@@ -72,6 +72,8 @@ def rank_score(candidate, score_metric):
 def _partial_request(runner, candidate, name, regions=None):
     from .artifacts import structure
 
+    if "ppiflow" not in runner.config.generators:
+        raise ValueError("Partial Flow unavailable: no compatible PPIFlow refinement configuration")
     generator = runner.config.generators["ppiflow"]
     request = generator.request
     mode = request["mode"]
@@ -91,6 +93,27 @@ def _partial_request(runner, candidate, name, regions=None):
         chains,
         candidate["interface_fixed_positions"],
     )
+    from .regions import encode_positions, selection_positions
+
+    inherited = candidate.get("generation_request", request)
+    if inherited.get("fixed_positions") or inherited.get("cdr_position"):
+        atoms = structure(runner.files.local(candidate["generated_structure"]))
+        locked = selection_positions(inherited.get("fixed_positions"), atoms, chains.binder)
+        allowed = selection_positions(inherited.get("cdr_position"), atoms, chains.binder)
+        mutable, fixed = {}, {}
+        for chain in chains.binder:
+            positions = set(regions["mutable_positions"][chain]) - locked.get(chain, set())
+            if allowed:
+                positions &= allowed.get(chain, set())
+            mutable[chain] = positions
+            fixed[chain] = set(range(1, len(candidate["chains"][chain]) + 1)) - positions
+        if not any(mutable.values()):
+            raise ValueError("no mutable residues remain after applying task fixed points")
+        regions.update(
+            fixed_positions=encode_positions(atoms, fixed),
+            cdr_position=encode_positions(atoms, mutable),
+            mutable_positions={c: sorted(v) for c, v in mutable.items()},
+        )
     value = {
         key: request[key]
         for key in (

@@ -14,6 +14,7 @@ from opendde_harness.plugin.protein_design.initial_round.automation import (
     start_round,
 )
 from opendde_harness.plugin.protein_design.initial_round.config import InitialRoundConfig
+from opendde_harness.plugin.protein_design.initial_round.task_inputs import DesignTask, prepare_design_task
 
 
 class InitialRoundTool(Tool):
@@ -36,7 +37,7 @@ class InitialRoundTool(Tool):
             return "Resume an authorized workflow from its existing run_dir and immutable snapshot. Reuse completed generation/scoring/folding/results; retry confirmed failed steps only, preserving attempt history. Never choose a new run name to recover. Running or uncertain jobs retain their remote IDs; failed infrastructure does not imply scientific failure."
         if self.action == "status":
             return "Read saved automatic initial-round progress once. If pending_regions is present, show its question, candidate PDB and reason to the user and request their CDR ranges. Otherwise the worker already polls Slurm; do not use repeated LLM calls to poll."
-        return "Start the authorized checkpointed workflow. Autonomous rounds use TorchScore ipTM/pTM: initial ipTM<0.5 terminates that candidate; both scores>0.8 go directly to TorchFold/DockQ. Other initial candidates use Rosetta ResResE logs and the supplied interface-energy algorithm to fix binder residues with energy<-5 for Partial Flow. Rescore Partial Flow output: both>0.8 go to TorchFold/DockQ, otherwise run registered TorchOptimization. Rescore optimization output: both>0.8 go to TorchFold/DockQ, otherwise terminate. Hotspot contacts are diagnostic. Qwen chooses only executable menu entries. Process every eligible candidate through at most one Partial Flow and one optimization; there is no global round, sample, batch or patience limit. Stop only after pending executable follow-ups are exhausted. Missing scores/logs are failures, never assumed passes. Do not invent residue energies or bypass Harness. Build run_config from existing scientific inputs and registered services, or reuse config_path. Return run_dir; use status/list/resume after disconnects."
+        return "Start the authorized checkpointed workflow. Autonomous rounds use TorchScore ipTM/pTM: initial ipTM<0.5 terminates that candidate; both scores>0.8 go directly to TorchFold/DockQ. Other initial candidates use Rosetta ResResE logs and the supplied interface-energy algorithm to fix binder residues with energy<-5 for Partial Flow. Rescore Partial Flow output: both>0.8 go to TorchFold/DockQ, otherwise run registered TorchOptimization. Rescore optimization output: both>0.8 go to TorchFold/DockQ, otherwise terminate. Hotspot contacts are diagnostic. Qwen chooses only executable menu entries. Process every eligible candidate through at most one Partial Flow and one optimization; there is no global round, sample, batch or patience limit. Stop only after pending executable follow-ups are exhausted. Missing scores/logs are failures, never assumed passes. Do not invent residue energies or bypass Harness. Prefer compact task inputs with persistent design profiles and model defaults; no repeated deployment configuration or per-task YAML is required. Framework and residue constraints are current-task inputs. Select PPIFlow or TorchCraft from the user prompt using task.generators; neither is mandatory. Advanced callers may supply run_config or config_path. Return run_dir; use status/list/resume after disconnects."
 
     @property
     def parameters(self):
@@ -77,6 +78,10 @@ class InitialRoundTool(Tool):
             "type": "object",
             "$defs": definitions,
             "properties": {
+                "task": {
+                    **DesignTask.model_json_schema(),
+                    "description": "New target task using persistent workflow/design/model defaults. Supply only target PDB/chain, design type, explicit hotspots and total initial_samples; optional framework/fixed-point overrides. Choose generators explicitly from the user prompt: [ppiflow] or [torchcraft]; neither is mandatory. Paired VH/VL requires PPIFlow. No YAML or deployment paths needed.",
+                },
                 "pdb_path": {"type": "string", "description": "Absolute local mounted shared-filesystem PDB path."},
                 "config_path": {
                     "type": "string",
@@ -125,6 +130,19 @@ class InitialRoundTool(Tool):
             else:
                 if kwargs.get("user_confirmed") is not True:
                     raise ValueError("user authorization is required for the complete pipeline compute scope")
+                task = kwargs.get("task")
+                if task is not None:
+                    if any(kwargs.get(key) is not None for key in ("run_config", "config_path", "pdb_path")):
+                        raise ValueError("task is mutually exclusive with run_config, config_path and pdb_path")
+                    config = await asyncio.to_thread(
+                        prepare_design_task,
+                        {**task, **({"name": kwargs["name"]} if kwargs.get("name") else {})},
+                        self.config,
+                    )
+                    result = await asyncio.to_thread(start_round, config)
+                    return ToolResult(
+                        json.dumps(result, ensure_ascii=False), "Automatic workflow started", retryable=False
+                    )
                 profile = kwargs.get("config_path") or self.config.get("initial_round_config")
                 inline = kwargs.get("run_config")
                 if inline is not None and kwargs.get("config_path"):
@@ -138,6 +156,7 @@ class InitialRoundTool(Tool):
                     pdb_path=Path(kwargs["pdb_path"]) if kwargs.get("pdb_path") else None,
                     name=kwargs.get("name"),
                     registrations=self.config.get("model_services"),
+                    plugin_config=self.config,
                 )
                 result = await asyncio.to_thread(start_round, config)
             return ToolResult(
