@@ -180,6 +180,32 @@ async def test_complete_compact_workflow_reuses_registered_services(task, settin
     assert result["accepted"] == 2
 
 
+async def test_ppiflow_compact_tool_exposes_and_accepts_task_binder_lengths(task, settings, monkeypatch):
+    from jsonschema import validate
+
+    from opendde_harness.plugin.protein_design.tools.initial_round import InitialRoundTool
+
+    settings["design_profiles"]["minibinder"] = {"generators": {"ppiflow": {"request": {"mode": "binder"}}}}
+    lengths = {"samples_min_length": 75, "samples_max_length": 80}
+    task.update(design_type="minibinder", generators=["ppiflow"], generator_overrides={"ppiflow": {"request": lengths}})
+    launched = []
+    monkeypatch.setattr(
+        "opendde_harness.plugin.protein_design.tools.initial_round.start_round",
+        lambda config: launched.append(config) or {"state": "starting"},
+    )
+    tool = InitialRoundTool(settings, "start")
+    parameters = tool.to_schema()["function"]["parameters"]
+    overrides = parameters["properties"]["task"]["properties"]["generator_overrides"]
+    ppiflow = overrides["properties"]["ppiflow"]["properties"]["request"]
+    assert set(lengths) <= ppiflow["properties"].keys()
+    payload = {"task": task, "user_confirmed": True}
+    validate(payload, parameters)
+    result = await tool.execute(**payload)
+    assert json.loads(result.model_text) == {"state": "starting"}
+    request = launched[0].generators["ppiflow"].request
+    assert {field: request[field] for field in lengths} == lengths
+
+
 async def test_standalone_request_defaults_are_applied_and_task_values_win(tmp_path):
     import httpx
 

@@ -123,7 +123,7 @@ design_profiles:
   minibinder:
     generators:
       ppiflow:
-        # Supply required design lengths with generator_overrides in current task.
+        # Supply lengths under task.generator_overrides.ppiflow.request.
         request: {mode: binder}
       torchcraft:
         # Supply design_length through the current task generator_overrides.

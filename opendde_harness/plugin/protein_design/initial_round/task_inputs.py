@@ -59,7 +59,31 @@ class DesignTask(RoundModel):
     framework_dir: str | None = None
     framework_cif_path: str | None = None
     fixed_positions: str | None = None
-    generator_overrides: dict[str, dict] = Field(default_factory=dict)
+    generator_overrides: dict[str, dict] = Field(
+        default_factory=dict,
+        description=(
+            "Per-generator overrides. For PPIFlow minibinder lengths, put samples_min_length and "
+            "samples_max_length inside ppiflow.request. Omit lengths already supplied by the deployment profile."
+        ),
+        json_schema_extra={
+            "properties": {
+                "ppiflow": {
+                    "type": "object",
+                    "additionalProperties": True,
+                    "properties": {
+                        "request": {
+                            "type": "object",
+                            "additionalProperties": True,
+                            "properties": {
+                                "samples_min_length": {"type": "integer", "minimum": 1},
+                                "samples_max_length": {"type": "integer", "minimum": 1},
+                            },
+                        }
+                    },
+                }
+            }
+        },
+    )
     target_sequence_csv: Path | None = None
 
     @model_validator(mode="after")
