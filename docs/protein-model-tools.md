@@ -327,3 +327,8 @@ TorchOptimization defaults to port **8060**. TorchScore defaults to 8070.
 Use the actual deployed node/port in registration for each tool. Native
 model Python/weights remain configured in that service's environment, never in
 new user-supplied workflow annotations.
+
+PPIFlow `mode: binder` accepts an omitted `binder_chain`; Harness does not require
+that request field or insert one during request validation. Explicitly supplying
+a binder_chain remains supported. Other mode requirements and downstream chain
+mapping are unchanged.

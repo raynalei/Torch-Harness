@@ -2037,3 +2037,26 @@ def test_interface_dg_affects_ranking_without_reusing_residue_energy_sum():
     assert rank_score(second, "torchscore_iptm") == 85.0
     assert quality(first, "torchscore_iptm") > quality(second, "torchscore_iptm")
     assert rank_score(unknown, "torchscore_iptm") is None
+
+
+@pytest.mark.parametrize("explicit_binder", [False, True])
+def test_ppiflow_binder_chain_is_optional_in_request_and_workflow(round_config, explicit_binder):
+    from opendde_harness.plugin.protein_design.core.model_requests import validate_request
+
+    request = {
+        "mode": "binder",
+        "name": "test",
+        "input_pdb": "/shared/target-only.pdb",
+        "target_chain": "A",
+        "samples_min_length": 30,
+        "samples_max_length": 60,
+    }
+    if explicit_binder:
+        request["binder_chain"] = "B"
+    payload = validate_request("ppiflow", request)
+    assert ("binder_chain" in payload) is explicit_binder
+    value = round_config.model_dump(mode="json")
+    value["generators"] = {"ppiflow": value["generators"]["ppiflow"]}
+    value["generators"]["ppiflow"]["request"] = payload
+    config = InitialRoundConfig.model_validate(value)
+    assert ("binder_chain" in config.generators["ppiflow"].request) is explicit_binder

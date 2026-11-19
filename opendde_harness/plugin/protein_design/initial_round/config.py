@@ -312,7 +312,7 @@ class InitialRoundConfig(RoundModel):
                     "cdr_length",
                 ),
                 "nanobody": ("antigen_pdb", "antigen_chain", "framework_dir", "heavy_chain"),
-                "binder": ("input_pdb", "target_chain", "binder_chain", "samples_min_length", "samples_max_length"),
+                "binder": ("input_pdb", "target_chain", "samples_min_length", "samples_max_length"),
                 "vhh": ("pdb_path", "hotspot_indices", "framework_cif_path"),
                 "mini_binder": ("pdb_path", "hotspot_indices", "design_length"),
             }[generator.request["mode"]]
