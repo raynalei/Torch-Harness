@@ -30,6 +30,7 @@ def settings(round_config):
         generator["fold_template"] = None
     for kind in ("torchscore", "torchfold", "rosetta"):
         registrations[kind] = {"kind": kind, "service": value["evaluation"].pop(kind)}
+    value["evaluation"]["rosetta"] = {"backend": "api", **registrations["rosetta"]["service"]}
     value.pop("name")
     return {
         "model_services": registrations,
@@ -505,6 +506,9 @@ def test_bundled_deployment_is_the_only_automatic_fallback(task, tmp_path):
     )
 
     task["generators"] = ["torchcraft"]
+    task["generator_overrides"] = {
+        "torchcraft": {"chains": {"target": ["A"], "binder": ["B"], "refold_map": {"A": "A", "B": "B"}}}
+    }
     config = prepare_design_task(
         task,
         {
@@ -586,12 +590,15 @@ async def test_launch_tool_uses_deployment_yaml_for_incomplete_run_config(task, 
                     "evaluation": {"dockq_python": ""},
                     "generators": {
                         "ppiflow": {
+                            "chains": {"target": ["A"], "binder": ["B"], "refold_map": {"A": "A", "B": "B"}},
                             "request": {
                                 "mode": "nanobody",
                                 "antigen_pdb": "/shared/new.pdb",
+                                "antigen_chain": "A",
+                                "heavy_chain": "B",
                                 "framework_dir": "/shared/frameworks",
                                 "samples_per_target": 100,
-                            }
+                            },
                         }
                     },
                 },

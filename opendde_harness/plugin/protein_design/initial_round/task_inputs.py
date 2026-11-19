@@ -142,6 +142,10 @@ def prepare_design_task(task, settings, *, planner_layout=None):
             **copy.deepcopy(matches[0].get("request_defaults", {}) if matches else {}),
             **generator.get("request", {}),
         }
+    if any(not g.get("chains") for g in value["generators"].values()):
+        raise ValueError(
+            "provide current-task target/binder chain roles in generator_overrides; deployment YAML does not choose chain names"
+        )
     binders = {c for g in value["generators"].values() for c in g["chains"]["binder"]}
     normalized_chain = task.target_chain
     if normalized_chain in binders or not re.fullmatch("[A-Z]", normalized_chain):

@@ -192,3 +192,44 @@ Precedence is model request defaults, then common workflow defaults, then the
 selected design profile, then explicit task values. The final complete request is
 validated against the original scientific API schema. Missing services, frameworks,
 DockQ interpreters remain errors, not automatic substitutions.
+
+
+## Direct Rosetta Slurm backend
+
+The branch's bundled deployment YAML uses this profile for new workflows:
+
+```yaml
+workflow_defaults:
+  evaluation:
+    rosetta:
+      backend: slurm
+      python: /lustre/grp/cmclab/leiy/conda_envs/ppi_env/bin/python
+      partition: sugon
+      cpus: 4
+      memory: 16G
+      walltime: '04:00:00'
+      environment: {OMP_NUM_THREADS: '4'}
+```
+
+No Rosetta API URL, API sbatch launcher, uvicorn, SIF or listening port is required.
+Harness must have sbatch/squeue/sacct and the same mapped shared filesystem as compute
+nodes. The specified interpreter must already contain PyRosetta; FastAPI, Pydantic
+and Harness need not be installed in that compute environment. Harness copies the
+standalone Python worker, input PDB and request metadata into the run's shared
+rosetta-slurm directory and submits a generated job.sbatch. Output includes result.json,
+interface.sc, residue_energies.out and slurm.out. Python/resource settings are persistent;
+scientific inputs and chain groups still come from the current candidate.
+
+State is checkpointed before sbatch. Lost/ambiguous submission responses never trigger
+a second submission: reconcile the Slurm allocation and use --attach-job KEY=JOB_ID.
+Queue/accounting lag is not completion. Confirmed failed jobs can be retried on resume
+with attempt history and isolated new output directories; running jobs retain their IDs.
+Only COMPLETED plus ExitCode=0:0 and verified result/input/worker checksums permit result
+reuse. There is no API allocation to cancel during workflow cleanup.
+
+Existing explicit API run snapshots remain compatible; unfinished API tasks cannot
+be silently converted or resubmitted as native jobs. Old persistent API deployment
+defaults without an explicit backend selector are superseded by this direct backend
+for new tasks. A deliberately configured backend: api is legacy opt-in. Standalone
+protein_model_rosetta HTTP submissions are not used for native workflow evaluation;
+its catalogue directs native execution to protein_design_start.

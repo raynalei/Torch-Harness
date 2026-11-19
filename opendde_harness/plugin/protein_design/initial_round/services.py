@@ -41,6 +41,8 @@ class ServiceConnection:
     """Bounded HTTP operations shared by foreground workflows and agent tools."""
 
     def __init__(self, config: Service, *, transport=None):
+        if config.backend != "api":
+            raise ValueError("direct Slurm configurations cannot construct an HTTP connection")
         self.config = config
         if config.sbatch_script is not None:
             # The configured path is a naming prefix, never a reusable allocation.

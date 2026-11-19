@@ -143,6 +143,14 @@ class InitialRoundRunner:
         )
         result = {}
         for name, config in configs.items():
+            if name == "rosetta" and config.backend == "slurm":
+                from .rosetta_slurm import RosettaSlurmService
+
+                service = RosettaSlurmService(config, self.checkpoint, self.files)
+                service.check()
+                self.services[name] = service
+                result[name] = {"backend": "direct_slurm", "api_required": False}
+                continue
             if name == "torchopt":
                 from .torchopt import TorchOptimizationService
 
@@ -163,7 +171,9 @@ class InitialRoundRunner:
             id_field,
             payload,
             attach_id=self.attach_jobs.get(key),
-            status_base="/v1/tasks" if service == "rosetta" else None,
+            status_base="/v1/tasks"
+            if service == "rosetta" and self.services[service].config.backend == "api"
+            else None,
         )
 
     def save_candidates(self):
@@ -526,8 +536,8 @@ class InitialRoundRunner:
         result = await self.job(
             "rosetta",
             f"interface/{key}",
-            "/v1/tools/interface_analyze",
-            "task_id",
+            "interface_analyze" if evaluation.rosetta.backend == "slurm" else "/v1/tools/interface_analyze",
+            "slurm_job_id" if evaluation.rosetta.backend == "slurm" else "task_id",
             {
                 **evaluation.rosetta_options,
                 "input_pdb": self.files.remote(model),

@@ -38,10 +38,19 @@ class Service(RoundModel):
         value = handler(self)
         if not self.environment:
             value.pop("environment", None)
+        if self.backend == "api":
+            for key in ("backend", "python", "partition", "cpus", "memory", "walltime"):
+                value.pop(key, None)
         return value
 
+    backend: Literal["api", "slurm"] = "api"
+    python: Path | None = None
+    partition: str | None = None
+    cpus: int = Field(default=4, ge=1)
+    memory: str = "16G"
+    walltime: str = "04:00:00"
     environment: dict[str, str] = Field(default_factory=dict)
-    url: str
+    url: str | None = None
     health_path: str = Field(default="/health", pattern=r"^/[A-Za-z0-9_./-]*$")
     token_env: str | None = None
     sbatch_script: Path | None = None
@@ -67,6 +76,16 @@ class Service(RoundModel):
             not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) or "\0" in value for key, value in self.environment.items()
         ):
             raise ValueError("invalid service environment key or value")
+        if self.backend == "slurm":
+            if self.python is None or not self.python.is_absolute():
+                raise ValueError("direct Slurm Python must be an absolute interpreter path")
+            if self.partition is not None and not re.fullmatch(r"[A-Za-z0-9_,.-]+", self.partition):
+                raise ValueError("invalid Slurm partition")
+            if not re.fullmatch(r"[1-9][0-9]*[KMGTkmgt]?", self.memory) or not re.fullmatch(r"[0-9:-]+", self.walltime):
+                raise ValueError("invalid Slurm memory/time")
+            if self.url is not None or self.sbatch_script is not None or self.token_env:
+                raise ValueError("direct Slurm does not use an API URL, API sbatch script or token")
+            return self
         from urllib.parse import urlsplit
 
         for path in (self.sbatch_script, self.sbatch_state_file):
@@ -74,7 +93,7 @@ class Service(RoundModel):
                 raise ValueError("sbatch paths must be absolute paths on the Harness host")
         if self.sbatch_state_file is not None and self.sbatch_script is None:
             raise ValueError("sbatch_state_file requires sbatch_script")
-        parts = urlsplit(self.url)
+        parts = urlsplit(self.url or "")
         if parts.scheme not in {"http", "https"} or not parts.hostname or parts.username or parts.password:
             raise ValueError("service URL must be HTTP(S), without embedded credentials")
         if parts.query or parts.fragment:

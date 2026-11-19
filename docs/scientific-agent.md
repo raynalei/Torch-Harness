@@ -83,6 +83,4 @@ energy. When measured, `ranking_score = 100 * torchscore_iptm - rosetta_interfac
 Unmeasured dG remains unknown/unranked and is exported with a null objective; it is
 never inferred from residue energies or treated as zero. This changes ordering,
 not planner stages, acceptance thresholds or optimizer constraints. The context
-builder includes both values before each Qwen decision. Rosetta remains a registered
-API backend: Harness calls `/v1/tools/interface_analyze`; the cluster service runs
-PyRosetta and returns residue logs and interface metrics/scorefiles.
+builder includes both values before each Qwen decision. New autonomous Rosetta evaluations use direct Slurm: Harness submits the standalone PyRosetta worker and reads shared JSON, residue logs and interface scorefiles after Slurm confirms completion. No Rosetta API process, port or SIF is used. Explicit legacy API snapshots retain their original backend.

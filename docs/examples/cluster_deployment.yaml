@@ -1,4 +1,4 @@
-# PROTOTYPE deployment configuration, not a historical design/run_config.
+# Autonomous score-routing deployment configuration, not a historical design/run_config.
 # This is also bundled beside defaults.py as the automatic deployment fallback.
 # To persist operator edits, import this file once:
 # ddeharness protein-design models register --services-file cluster_deployment.yaml
@@ -61,19 +61,15 @@ model_services:
     kind: rosetta
     allowed_input_roots: [/lustre/grp/cmclab]
     request_defaults: {}
-    service:
-      url: http://slurm-api.invalid:8050
-      sbatch_script: /lustre/grp/cmclab/leiy/rosetta_biotools_api/rosetta-api.sbatch
-      sbatch_resolve_host: true
+    service: &direct_rosetta
+      backend: slurm
+      python: /lustre/grp/cmclab/leiy/conda_envs/ppi_env/bin/python
+      partition: sugon
+      cpus: 4
+      memory: 16G
+      walltime: '04:00:00'
       metric_fields: {interface_dg: dG_separated}
-      environment:
-        ROSETTA_API_DIR: /lustre/grp/cmclab/leiy/rosetta_biotools_api
-        ROSETTA_API_PYTHON: /lustre/grp/cmclab/leiy/conda_envs/ppi_env/bin/python
-        ROSETTA_CONDA_ENV: /lustre/grp/cmclab/leiy/conda_envs/ppi_env
-        ROSETTA_API_WORK: /lustre/grp/cmclab/leiy/rosetta_api_jobs
-        ROSETTA_ALLOWED_INPUT_ROOTS: /lustre/grp/cmclab
-        ROSETTA_PARTITION: sugon
-        # ROSETTA_CONDA_SH: set once if conda is unavailable in batch startup.
+      environment: {OMP_NUM_THREADS: '4'}
   torchopt:
     kind: torchopt
     allowed_input_roots: [/lustre/grp/cmclab]
@@ -102,11 +98,13 @@ workflow_defaults:
     - {local: /lustre/grp/cmclab, remote: /lustre/grp/cmclab}
   evaluation:
     scoring_backend: torchscore
+    rosetta: *direct_rosetta
     dockq_python: /lustre/grp/cmclab/leiy/conda_envs/ppi_env/bin/python
     rosetta_residue_glob: '*.out'
   autonomous:
-    decision_policy: agent
-    # No extra limits are imposed here; prototype's existing defaults still apply.
+    decision_policy: planner
+    planner_layout: two_stage
+    # Existing finite two-stage decisions; no global round/sample/batch caps.
 design_profiles:
   # Chain IDs/refold_map belong to each task and must not be deployment defaults.
   vhh:

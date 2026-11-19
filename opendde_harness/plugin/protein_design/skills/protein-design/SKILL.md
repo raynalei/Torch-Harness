@@ -10,6 +10,13 @@ metadata:
 
 ## Start and recover
 
+Rosetta defaults to direct Slurm execution: Harness writes the immutable worker/input
+snapshot, invokes sbatch and reads JSON, interface.sc and ResResE logs after confirmed
+Slurm completion with ExitCode=0:0. Do not start rosetta-api/uvicorn or use port 8050.
+Use protein_design_start for this native workflow, not the legacy HTTP Rosetta tool.
+PyRosetta runs under evaluation.rosetta.python, separately from Harness's Python.
+Uncertain submissions, running jobs and accounting lag retain their IDs for recovery.
+
 Missing deployment values fall back only to the bundled cluster_deployment.yaml or
 an explicit deployment_config, never an arbitrary historical task YAML. Model source,
 checkpoint and algorithm defaults remain in the server's sbatch/API. TorchCraft uses

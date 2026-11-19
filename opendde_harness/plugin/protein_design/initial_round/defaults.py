@@ -142,6 +142,11 @@ def load_deployment_defaults(settings):
     defaults = yaml.safe_load(path.read_text())
     if not isinstance(defaults, dict) or set(defaults) - {"model_services", *SETTINGS_KEYS}:
         raise ValueError("deployment YAML must contain deployment sections, not a historical task run_config")
+    settings = copy.deepcopy(settings)
+    # Retired API deployment defaults must not restart the Rosetta API for new tasks.
+    legacy_rosetta = settings.get("workflow_defaults", {}).get("evaluation", {}).get("rosetta")
+    if isinstance(legacy_rosetta, dict) and "backend" not in legacy_rosetta:
+        settings["workflow_defaults"]["evaluation"].pop("rosetta")
     result = merge_defaults(defaults, settings)
     result["deployment_config"] = str(path.resolve())
     # An explicitly configured registry/adapter declares the available capabilities.

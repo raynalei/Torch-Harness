@@ -1,3 +1,8 @@
+> On feat/autonomous_score_routing, new autonomous workflows use the bundled direct
+> Slurm PyRosetta worker. Do not deploy this API for those workflows. See
+> [direct backend configuration](../../docs/persistent-design-defaults.md#direct-rosetta-slurm-backend).
+> This directory is retained for explicit legacy API deployments and existing snapshots.
+
 # Conda + PyRosetta API
 
 此版直接使用 Conda 环境中的 PyRosetta，在独立 Slurm 子作业内打分。不需要 SIF、Singularity/Apptainer、Rosetta CLI 二进制或单独配置 Rosetta database。

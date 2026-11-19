@@ -36,6 +36,8 @@ class ModelRegistration(ContractModel):
 
     @model_validator(mode="after")
     def defaults_contract(self):
+        if self.service.backend == "slurm" and self.kind != "rosetta":
+            raise ValueError("direct Slurm model registrations currently support Rosetta only")
         validate_request_defaults(self.kind, self.request_defaults)
         return self
 
@@ -101,17 +103,25 @@ class ProteinModelRegistry:
                     "kind": model.kind,
                     "configured": True,
                     "execution": "sbatch",
-                    "sbatch_configured": bool(model.service.sbatch_script),
+                    "sbatch_configured": model.service.backend == "slurm" or bool(model.service.sbatch_script),
                     "inference_verified": False,
                     "max_samples": model.max_samples,
+                    "execution_backend": model.service.backend,
+                    "workflow_tool": "protein_design_start" if model.service.backend == "slurm" else None,
                     "service": model.service.model_dump(mode="json", exclude_none=True, exclude={"environment"}),
                     "environment_keys": sorted(model.service.environment),
                     "request_defaults": model.request_defaults,
-                    "operations": list(ROSETTA_OPERATIONS) if model.kind == "rosetta" else [],
+                    "operations": (
+                        ["interface_analyze"] if model.service.backend == "slurm" else list(ROSETTA_OPERATIONS)
+                    )
+                    if model.kind == "rosetta"
+                    else [],
                     "request_schema": self.request_schema(name),
                     "cancel_supported": model.kind == "af3score",
                     "notes": (
-                        "AF3Score prepared mode returns raw outputs without automatic per-PDB metrics."
+                        "Direct Slurm PyRosetta workflow evaluation: use protein_design_start/status/resume; no HTTP endpoint or API allocation."
+                        if model.service.backend == "slurm"
+                        else "AF3Score prepared mode returns raw outputs without automatic per-PDB metrics."
                         if model.kind == "af3score"
                         else "TorchScore scoring is independent of AF3Score; supports pdb/metrics, seed=10, one sample."
                         if model.kind == "torchscore"
@@ -125,6 +135,10 @@ class ProteinModelRegistry:
         }
 
     def client(self, model: ModelRegistration, record: dict | None = None):
+        if model.service.backend == "slurm":
+            raise ValueError(
+                "direct PyRosetta runs through protein_design_start and its checkpoint; no Rosetta HTTP endpoint is used"
+            )
         client = ServiceConnection(model.service, transport=self.transport)
         if record is not None:
             if not record.get("api_url"):
@@ -143,8 +157,12 @@ class ProteinModelRegistry:
             item.update(
                 reachable=None,
                 healthy=None,
-                startup="deferred_until_submission",
-                sbatch_configured=bool(self.model(item["model"]).service.sbatch_script),
+                startup="not_applicable_no_api"
+                if self.model(item["model"]).service.backend == "slurm"
+                else "deferred_until_submission",
+                api_required=self.model(item["model"]).service.backend == "api",
+                sbatch_configured=self.model(item["model"]).service.backend == "slurm"
+                or bool(self.model(item["model"]).service.sbatch_script),
             )
         return catalogue
 
@@ -294,6 +312,8 @@ class ProteinModelRegistry:
 
     async def submit(self, name: str, request_id: str, request: dict, operation: str | None = None):
         model = self.model(name)
+        if model.service.backend == "slurm":
+            raise ValueError("use protein_design_start for checkpointed direct PyRosetta Slurm evaluation")
         payload = validate_request(model.kind, {**model.request_defaults, **request}, operation)
         self.validate_paths(model, payload)
         for field in (
@@ -518,6 +538,10 @@ class ProteinModelRegistry:
     async def _release(self, record, model):
         if not record.get("api_allocation"):
             return
+        if model.service.backend == "slurm":
+            raise ValueError(
+                "direct PyRosetta runs through protein_design_start and its checkpoint; no Rosetta HTTP endpoint is used"
+            )
         client = ServiceConnection(model.service, transport=self.transport)
         client.allocations.append(record["api_allocation"])
         try:
