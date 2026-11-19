@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import Field, StrictBool, TypeAdapter, model_validator
+from pydantic import Field, StrictBool, StrictFloat, StrictInt, TypeAdapter, model_validator
 
 from opendde_harness.plugin.protein_design.core.contracts import ContractModel
 
@@ -242,6 +242,63 @@ class RosettaRequest(ContractModel):
     backrub_trials: int | None = Field(default=None, ge=1)
 
 
+class RFD4Request(ContractModel):
+    inputs: str | list[str]
+    generation: Literal["inference_base", "inverse_folding"] = "inference_base"
+    num_replicates: StrictInt = Field(default=1, ge=1)
+    batch_size: StrictInt = Field(default=1, ge=1)
+    seed: StrictInt | None = Field(default=None, ge=0, le=4294967295)
+    partial_trajectory_fraction_steps: StrictFloat | None = Field(default=None, gt=0, le=1)
+
+    @model_validator(mode="after")
+    def native_inputs(self):
+        import re
+        from pathlib import PurePosixPath
+
+        names = self.inputs if isinstance(self.inputs, list) else [self.inputs]
+        if not names:
+            raise ValueError("RFD4 inputs list must not be empty")
+        for name in names:
+            if not re.fullmatch(r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*", name) or any(
+                p in {".", ".."} for p in name.split("/")
+            ):
+                raise ValueError("RFD4 inputs must be relative paths below RFD4_INPUTS, without . or .. components")
+            if name.lower().endswith(".pdb"):
+                raise ValueError("RFD4 does not accept PDB files; supply CIF/BCIF or a native input spec")
+            if isinstance(self.inputs, list) and not name.lower().endswith(
+                tuple(ext + compression for ext in (".cif", ".bcif") for compression in ("", ".gz", ".zst"))
+            ):
+                raise ValueError(
+                    "RFD4 input lists accept CIF/BCIF structures (optionally compressed), not PDB/spec files"
+                )
+            if PurePosixPath(name).is_absolute():
+                raise ValueError("RFD4 inputs must be relative")
+        if self.generation == "inverse_folding" and self.partial_trajectory_fraction_steps is not None:
+            raise ValueError("RFD4 partial trajectory requires inference_base")
+        return self
+
+
+class ProteinMPNNRequest(ContractModel):
+    pdb_path: str
+    design_chains: list[str] = Field(min_length=1, max_length=62)
+    num_seq_per_target: StrictInt = Field(default=8, ge=1, le=512)
+    sampling_temp: StrictFloat = Field(default=0.1, gt=0, le=2)
+    seed: StrictInt = Field(default=42, ge=1, le=4294967295)
+
+    @model_validator(mode="after")
+    def native_chains(self):
+        import re
+        from pathlib import PurePosixPath
+
+        if not PurePosixPath(self.pdb_path).is_absolute() or not self.pdb_path.lower().endswith(".pdb"):
+            raise ValueError("ProteinMPNN requires an absolute .pdb path")
+        if len(set(self.design_chains)) != len(self.design_chains) or any(
+            not re.fullmatch(r"[A-Za-z0-9]", c) for c in self.design_chains
+        ):
+            raise ValueError("ProteinMPNN design_chains must be unique single alphanumeric PDB chain IDs")
+        return self
+
+
 REQUEST_TYPES = {
     "af3score": AF3ScoreRequest,
     "torchscore": TorchScoreRequest,
@@ -250,6 +307,8 @@ REQUEST_TYPES = {
     "torchcraft": TorchCraftRequest,
     "torchfold": TorchFoldRequest,
     "rosetta": RosettaRequest,
+    "rfd4": RFD4Request,
+    "proteinmpnn": ProteinMPNNRequest,
 }
 ROSETTA_OPERATIONS = (
     "structure_relax",
@@ -273,7 +332,7 @@ def validate_request(kind: str, request: dict, operation: str | None = None, *, 
             raise ValueError("mutation_binding_ddg requires mutation")
     elif operation is not None:
         raise ValueError("operation is only used for Rosetta")
-    return value.model_dump(exclude_none=True, exclude_unset=omit_defaults)
+    return value.model_dump(exclude_none=True, exclude_unset=omit_defaults or kind in {"rfd4", "proteinmpnn"})
 
 
 TARGET_REQUEST_FIELDS = frozenset(
@@ -290,6 +349,8 @@ TARGET_REQUEST_FIELDS = frozenset(
         "hotspot_indices",
         "target_full_seq",
         "name",
+        "inputs",
+        "design_chains",
     }
 )
 

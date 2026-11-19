@@ -88,6 +88,52 @@
             "allowed_input_roots": [
               "/lustre/project"
             ]
+          },
+          "rfd4": {
+            "kind": "rfd4",
+            "max_samples": 512,
+            "allowed_input_roots": [
+              "/lustre/grp/cmclab"
+            ],
+            "request_defaults": {},
+            "service": {
+              "url": "http://slurm-api.invalid:8080",
+              "health_service": "rfd4",
+              "health_job_id": true,
+              "sbatch_script": "/lustre/grp/cmclab/leiy/rfd4_api/rfd4_api.sbatch",
+              "sbatch_chdir": "/lustre/grp/cmclab/leiy/rfd4_api",
+              "environment": {
+                "RFD4_API_DIR": "/lustre/grp/cmclab/leiy/rfd4_api",
+                "RFD4_PORT": "8080",
+                "RFD4_SIF": "/lustre/grp/cmclab/leiy/containers/rfd4-proteina-cu12-amd64.sif",
+                "RFD4_WEIGHTS": "/lustre/grp/cmclab/leiy/models/rfd4-proteina",
+                "RFD4_INPUTS": "/lustre/grp/cmclab/leiy/rfd4_api_inputs",
+                "RFD4_JOBS": "/lustre/grp/cmclab/leiy/rfd4_api_jobs"
+              }
+            }
+          },
+          "proteinmpnn": {
+            "kind": "proteinmpnn",
+            "max_samples": 512,
+            "allowed_input_roots": [
+              "/lustre/grp/cmclab/leiy",
+              "/lustre/grp/cmclab/share"
+            ],
+            "request_defaults": {},
+            "service": {
+              "url": "http://slurm-api.invalid:8090",
+              "health_service": "proteinmpnn",
+              "health_job_id": true,
+              "sbatch_script": "/lustre/grp/cmclab/leiy/proteinmpnn_api/proteinmpnn_api.sbatch",
+              "sbatch_chdir": "/lustre/grp/cmclab/leiy/proteinmpnn_api",
+              "environment": {
+                "PROTEINMPNN_API_PYTHON": "/lustre/grp/cmclab/leiy/conda_envs/proteinmpnn_api/bin/python",
+                "PROTEINMPNN_SIF": "/lustre/grp/cmclab/leiy/containers/proteinmpnn.sif",
+                "PROTEINMPNN_WEIGHTS": "/lustre/grp/cmclab/leiy/models/proteinMPNN/v_48_020.pt",
+                "PROTEINMPNN_WORK": "/lustre/grp/cmclab/leiy/proteinmpnn_api_jobs",
+                "PROTEINMPNN_INPUT_ROOTS": "/lustre/grp/cmclab/leiy:/lustre/grp/cmclab/share"
+              }
+            }
           }
         }
       }

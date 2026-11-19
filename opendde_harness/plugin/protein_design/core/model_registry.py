@@ -28,7 +28,9 @@ from opendde_harness.utils.portable_lock import file_lock
 
 
 class ModelRegistration(ContractModel):
-    kind: Literal["ppiflow", "torchcraft", "af3score", "torchscore", "torchopt", "torchfold", "rosetta"]
+    kind: Literal[
+        "ppiflow", "torchcraft", "af3score", "torchscore", "torchopt", "torchfold", "rosetta", "rfd4", "proteinmpnn"
+    ]
     service: Service
     max_samples: int = Field(default=20, ge=1)
     allowed_input_roots: list[str] = Field(default_factory=list)
@@ -119,7 +121,11 @@ class ProteinModelRegistry:
                     "request_schema": self.request_schema(name),
                     "cancel_supported": model.kind == "af3score",
                     "notes": (
-                        "Direct Slurm PyRosetta workflow evaluation: use protein_design_start/status/resume; no HTTP endpoint or API allocation."
+                        "RFD4 accepts paths relative to RFD4_INPUTS, not absolute paths/PDB inputs; outputs are artifact paths, not confidence metrics. Independent tool only, not an autonomous generator."
+                        if model.kind == "rfd4"
+                        else "ProteinMPNN returns FASTA sequences, not structures; design_chains are existing PDB chains. Fixed-position/mask requests are unsupported by this API. Independent tool only."
+                        if model.kind == "proteinmpnn"
+                        else "Direct Slurm PyRosetta workflow evaluation: use protein_design_start/status/resume; no HTTP endpoint or API allocation."
                         if model.service.backend == "slurm"
                         else "AF3Score prepared mode returns raw outputs without automatic per-PDB metrics."
                         if model.kind == "af3score"
@@ -248,6 +254,8 @@ class ProteinModelRegistry:
     def routes(kind, operation):
         if kind in {"ppiflow", "torchcraft"}:
             return "/v1/designs", "/v1/designs", "design_id"
+        if kind == "proteinmpnn":
+            return "/v1/designs", "/v1/tasks", "task_id"
         if kind == "torchfold":
             return "/v1/folds", "/v1/folds", "fold_id"
         if kind == "rosetta":
@@ -323,11 +331,18 @@ class ProteinModelRegistry:
             "num_diffusion_samples",
             "nstruct",
             "replicates",
+            "num_replicates",
+            "num_seq_per_target",
             "full_jobs",
             "full_gpus",
             "mcmc_proposals",
         ):
-            if payload.get(field, 1) > model.max_samples:
+            default_count = (
+                REQUEST_TYPES[model.kind].model_fields["num_seq_per_target"].default
+                if model.kind == "proteinmpnn" and field == "num_seq_per_target"
+                else 1
+            )
+            if payload.get(field, default_count) > model.max_samples:
                 raise ValueError(f"{field} exceeds configured max_samples={model.max_samples}")
         if len(payload.get("pdb_paths", [])) > model.max_samples:
             raise ValueError("pdb_paths exceeds configured max_samples")
@@ -408,7 +423,13 @@ class ProteinModelRegistry:
                 remote_id = submitted[id_field]
                 submission_stage = "validate_remote_id"
                 self.valid_id(remote_id)
-                record.update(state="submitted", remote_id=remote_id, slurm_job_id=submitted.get("slurm_job_id"))
+                if model.kind in {"rfd4", "proteinmpnn"} and not re.fullmatch(r"[0-9a-f]{32}", remote_id):
+                    raise ValueError("native service task_id must be 32 lowercase hex characters")
+                record.update(
+                    state="submitted",
+                    remote_id=remote_id,
+                    slurm_job_id=submitted.get("slurm_job_id", submitted.get("job_id")),
+                )
                 write_json(path, record)
             except Exception as exc:
                 # Keep protocol evidence, never arbitrary response bodies or exception text.
@@ -507,6 +528,7 @@ class ProteinModelRegistry:
             "BOOT_FAIL",
             "DEADLINE",
             "REVOKED",
+            "INTERRUPTED",
         }:
             state = "failed"
         elif raw_state in {"PENDING", "QUEUED", "CONFIGURING"}:
@@ -559,6 +581,13 @@ class ProteinModelRegistry:
             try:
                 base = f"{record['status_base']}/{record['remote_id']}"
                 results = await client.get(base + "/results")
+                if model.kind in {"rfd4", "proteinmpnn"}:
+                    from .model_artifacts import normalize_model_results, parse_fasta
+
+                    results = normalize_model_results(model.kind, results)
+                    if model.kind == "proteinmpnn":
+                        text = await client.get_text(base + "/fasta")
+                        results["fasta"] = {"text": text, "records": parse_fasta(text)}
                 metrics = await client.get(base + "/metrics") if record["metrics_expected"] else None
             finally:
                 await client.close()

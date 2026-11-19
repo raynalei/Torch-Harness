@@ -332,3 +332,30 @@ PPIFlow `mode: binder` accepts an omitted `binder_chain`; Harness does not requi
 that request field or insert one during request validation. Explicitly supplying
 a binder_chain remains supported. Other mode requirements and downstream chain
 mapping are unchanged.
+
+## Standalone RFD4 and ProteinMPNN
+
+Two independent skills/tools are available on feat/autonomous_score_routing:
+
+| Skill | Tool | Native input | Output |
+| --- | --- | --- | --- |
+| rfd4-design | protein_model_rfd4 | Relative native CIF/BCIF/spec/directory under RFD4_INPUTS | Absolute output artifact manifest |
+| proteinmpnn-design | protein_model_proteinmpnn | Absolute PDB + existing design_chains | Cached FASTA text/records and artifact paths |
+
+RFD4 supports inference_base, inverse_folding and partial trajectory (fraction only
+with inference_base). ProteinMPNN's exact uploaded API supports chain-level sequence
+design, with no per-residue masks/fixed-point fields. Neither tool is yet part of the
+autonomous generator/optimizer menu. Both return immediately and use the existing
+local request_id/status/results/monitor mechanism; retain an uncertain request ID
+rather than retrying with a new ID.
+
+The supplied services are bundled in deploy/rfd4 and deploy/proteinmpnn. RFD4's
+updated launcher uses 8080 instead of the uploaded 8070 to avoid TorchScore's port;
+ProteinMPNN uses 8090. New registrations verify the health response's service name
+and Slurm allocation ID before submission. Both need sbatch_chdir pointing at their
+API directory. The confirmed paths and server environments are in
+[cluster_deployment.yaml](examples/cluster_deployment.yaml). Copy the updated server
+files/launchers to those locations and restart Harness after updating configuration.
+Existing instances with an explicit model registry must import the new registrations
+once with models register --services-file (and deliberately replace changed aliases
+only when intended); the fallback does not silently expand explicit registries.

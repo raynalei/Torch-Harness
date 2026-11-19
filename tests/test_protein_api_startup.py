@@ -579,3 +579,48 @@ async def test_all_registered_scientific_tools_require_sbatch_before_http(tmp_pa
     with pytest.raises(RuntimeError, match="sbatch_script"):
         await registry.submit(kind, "test", payload, operation)
     assert requests == []
+
+
+async def test_api_submission_uses_registered_working_directory(tmp_path, monkeypatch):
+    from opendde_harness.plugin.protein_design.initial_round.api_startup import slurm_command
+
+    calls = []
+
+    class Process:
+        returncode = 0
+
+        async def communicate(self):
+            return b"123\n", b""
+
+    async def launch(*args, **kwargs):
+        calls.append((args, kwargs))
+        return Process()
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", launch)
+    config = Service(url="http://service.test:8090", sbatch_chdir=tmp_path)
+    await slurm_command(config, "sbatch", "api.sbatch")
+    await slurm_command(config, "squeue", "--jobs", "123")
+    assert calls[0][1]["cwd"] == str(tmp_path)
+    assert "cwd" not in calls[1][1]
+
+
+@pytest.mark.parametrize(
+    "service,job_id,status,expected",
+    [
+        ("rfd4", "123", "ok", True),
+        ("torchscore", "123", "ok", False),
+        ("rfd4", "999", "ok", False),
+        ("rfd4", "123", "degraded", False),
+    ],
+)
+async def test_new_native_apis_bind_health_to_service_and_allocation(service, job_id, status, expected):
+    from opendde_harness.plugin.protein_design.initial_round.api_startup import allocated_health
+
+    config = Service(url="http://gpu.test:8080", health_service="rfd4", health_job_id=True)
+    async with httpx.AsyncClient(
+        base_url="http://gpu.test:8080",
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"service": service, "slurm_job_id": job_id, "status": status})
+        ),
+    ) as client:
+        assert await allocated_health(config, client, "123") is expected

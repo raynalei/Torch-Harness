@@ -166,6 +166,8 @@ class WorkflowTool(Tool):
                 )
                 result = await asyncio.to_thread(resume_round, Path(kwargs["run_dir"]))
             elif self.action == "context":
+                deployment = load_deployment_defaults(self.config)
+                standalone_kinds = {m.get("kind") for m in deployment.get("model_services", {}).values()}
                 result = {
                     "backend": "registered_models_and_native_analysis",
                     "compute_service_required": False,
@@ -174,11 +176,19 @@ class WorkflowTool(Tool):
                     "mutation_selector_tool": "protein_design_mutation_selector",
                     "models": [
                         {"alias": key, "kind": value.get("kind")}
-                        for key, value in self.config.get("model_services", {}).items()
+                        for key, value in deployment.get("model_services", {}).items()
                     ],
                     "workflow_config": self.config.get("workflow_config"),
-                    "workflow_defaults_configured": bool(self.config.get("workflow_defaults")),
-                    "design_profiles": sorted(self.config.get("design_profiles", {})),
+                    "workflow_defaults_configured": bool(deployment.get("workflow_defaults")),
+                    "design_profiles": sorted(deployment.get("design_profiles", {})),
+                    "standalone_tools": {
+                        kind: {
+                            "tool": f"protein_model_{kind}",
+                            "configured": kind in standalone_kinds,
+                            "autonomous_integrated": False,
+                        }
+                        for kind in ("rfd4", "proteinmpnn")
+                    },
                     "native_actions": [
                         "developability",
                         "structure",
@@ -190,7 +200,11 @@ class WorkflowTool(Tool):
                     ],
                     "unavailable": {
                         "EpiMatrix": "licensed adapter not configured",
-                        "inverse_folding": "no corresponding registered model",
+                        **(
+                            {"inverse_folding": "no corresponding registered model"}
+                            if "rfd4" not in standalone_kinds
+                            else {}
+                        ),
                         "ESM2": "no corresponding registered model",
                     },
                 }

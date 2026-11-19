@@ -526,7 +526,7 @@ def test_bundled_deployment_is_the_only_automatic_fallback(task, tmp_path):
         str(config.generators["torchcraft"].service.sbatch_script)
         == "/lustre/grp/cmclab/leiy/torchcraft_api/torchcraft-api.sbatch"
     )
-    assert len(load_deployment_defaults({})["model_services"]) == 7
+    assert len(load_deployment_defaults({})["model_services"]) == 9
     assert yaml.safe_load(DEFAULT_DEPLOYMENT_CONFIG.read_text()) == yaml.safe_load(
         (Path(__file__).resolve().parents[1] / "docs/examples/cluster_deployment.yaml").read_text()
     )

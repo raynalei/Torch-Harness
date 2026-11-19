@@ -38,6 +38,12 @@ class Service(RoundModel):
         value = handler(self)
         if not self.environment:
             value.pop("environment", None)
+        if self.health_service is None:
+            value.pop("health_service", None)
+        if not self.health_job_id:
+            value.pop("health_job_id", None)
+        if self.sbatch_chdir is None:
+            value.pop("sbatch_chdir", None)
         if self.backend == "api":
             for key in ("backend", "python", "partition", "cpus", "memory", "walltime"):
                 value.pop(key, None)
@@ -51,10 +57,13 @@ class Service(RoundModel):
     walltime: str = "04:00:00"
     environment: dict[str, str] = Field(default_factory=dict)
     url: str | None = None
+    health_service: str | None = None
+    health_job_id: bool = False
     health_path: str = Field(default="/health", pattern=r"^/[A-Za-z0-9_./-]*$")
     token_env: str | None = None
     sbatch_script: Path | None = None
     sbatch_state_file: Path | None = None
+    sbatch_chdir: Path | None = None
     sbatch_resolve_host: Literal[True] = True
     startup_timeout: float = Field(default=1800, gt=0)
     startup_poll_interval: float = Field(default=5, gt=0)
@@ -88,7 +97,7 @@ class Service(RoundModel):
             return self
         from urllib.parse import urlsplit
 
-        for path in (self.sbatch_script, self.sbatch_state_file):
+        for path in (self.sbatch_script, self.sbatch_state_file, self.sbatch_chdir):
             if path is not None and not path.is_absolute():
                 raise ValueError("sbatch paths must be absolute paths on the Harness host")
         if self.sbatch_state_file is not None and self.sbatch_script is None:

@@ -97,3 +97,11 @@ factory = "opendde_harness.plugin.protein_design.tools.workflow:make_regions_too
 [[plugin.contributes.tools]]
 name = "protein_design_mutation_selector"
 factory = "opendde_harness.plugin.protein_design.scientific_agent.mutation_selector:make_mutation_selector_tool"
+
+[[plugin.contributes.tools]]
+name = "protein_model_rfd4"
+factory = "opendde_harness.plugin.protein_design.tools.models:make_rfd4_tool"
+
+[[plugin.contributes.tools]]
+name = "protein_model_proteinmpnn"
+factory = "opendde_harness.plugin.protein_design.tools.models:make_proteinmpnn_tool"

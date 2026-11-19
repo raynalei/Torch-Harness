@@ -23,7 +23,7 @@ def test_registration_merges_five_services_preserving_provider_and_workspace(tmp
     result = invoke(path, "register", "--local-defaults")
     assert result.exit_code == 0, result.output
     summary = json.loads(result.output)
-    assert len(summary["registered_aliases"]) == 7
+    assert len(summary["registered_aliases"]) == 9
     data = json.loads(path.read_text())
     assert data["providers"] == original["providers"]
     assert data["agents"] == original["agents"]
@@ -53,7 +53,7 @@ def test_repeated_default_registration_keeps_custom_alias_and_endpoint(tmp_path)
     assert json.loads(repeated.output)["changed_aliases"] == []
     assert path.read_bytes() == before
     models = json.loads(before)["plugins"]["config"]["protein-design"]["model_services"]
-    assert len(models) == 7 and "torchcraft" not in models and models["mycraft"] == custom
+    assert len(models) == 9 and "torchcraft" not in models and models["mycraft"] == custom
 
 
 def test_register_requires_explicit_endpoint_source(tmp_path):
@@ -71,7 +71,7 @@ def test_import_documented_fragment_and_list_active_file(tmp_path):
     assert listing.exit_code == 0, listing.output
     payload = json.loads(listing.output)
     assert payload["active_config_path"] == str(path.resolve())
-    assert len(payload["models"]) == 7 and payload["unconfigured_model_kinds"] == []
+    assert len(payload["models"]) == 9 and payload["unconfigured_model_kinds"] == []
     assert not payload["models"][0]["inference_verified"]
 
 
@@ -89,6 +89,8 @@ def test_empty_registry_identifies_config_and_missing_models(tmp_path):
         "torchcraft",
         "ppiflow",
         "rosetta",
+        "rfd4",
+        "proteinmpnn",
     }
     assert value["active_config_path"] == str(path)
     assert not path.exists()
@@ -235,7 +237,7 @@ def test_cluster_deployment_yaml_imports_confirmed_native_contract(tmp_path):
     result = invoke(path, "register", "--services-file", str(source))
     assert result.exit_code == 0, result.output
     settings = json.loads(path.read_text())["plugins"]["config"]["protein-design"]
-    assert len(settings["model_services"]) == 7
+    assert len(settings["model_services"]) == 9
     assert (
         settings["workflow_defaults"]["evaluation"]["dockq_python"]
         == "/lustre/grp/cmclab/leiy/conda_envs/ppi_env/bin/python"

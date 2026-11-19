@@ -233,3 +233,8 @@ defaults without an explicit backend selector are superseded by this direct back
 for new tasks. A deliberately configured backend: api is legacy opt-in. Standalone
 protein_model_rosetta HTTP submissions are not used for native workflow evaluation;
 its catalogue directs native execution to protein_design_start.
+
+RFD4 and ProteinMPNN are additionally registered as independent tools/skills in the
+bundled deployment (nine model kinds total). They do not expand the autonomous
+generator/optimizer menu. See [standalone model tools](protein-model-tools.md#standalone-rfd4-and-proteinmpnn)
+for input/output contracts, required deployment updates and the RFD4 port change.

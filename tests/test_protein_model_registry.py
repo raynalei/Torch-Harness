@@ -456,6 +456,8 @@ def test_documented_registration_fragment_has_all_five_models():
         "torchcraft",
         "torchfold",
         "rosetta",
+        "rfd4",
+        "proteinmpnn",
     }
 
 

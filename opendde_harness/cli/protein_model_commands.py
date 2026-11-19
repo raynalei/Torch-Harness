@@ -53,6 +53,8 @@ def local_defaults():
         "torchfold": 8050,
         "torchscore": 8070,
         "torchopt": 8060,
+        "rfd4": 8080,
+        "proteinmpnn": 8090,
     }
     return {
         kind: {

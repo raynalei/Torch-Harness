@@ -287,3 +287,11 @@ def make_torchscore_tool(ctx: PluginContext):
 
 def make_torchopt_tool(ctx: PluginContext):
     return _submit_tool(ctx, "torchopt")
+
+
+def make_rfd4_tool(ctx: PluginContext):
+    return _submit_tool(ctx, "rfd4")
+
+
+def make_proteinmpnn_tool(ctx: PluginContext):
+    return _submit_tool(ctx, "proteinmpnn")

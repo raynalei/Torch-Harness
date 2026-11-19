@@ -85,6 +85,7 @@ def validate_binding(config, url, record):
             "sha256": hashlib.sha256(config.sbatch_script.read_bytes()).hexdigest(),
             "url": config.url,
             **({"environment": config.environment} if config.environment else {}),
+            **({"sbatch_chdir": str(config.sbatch_chdir)} if config.sbatch_chdir else {}),
         }
     )
     if any(state.get(k) != record.get(k) for k in ("signature", "job_id", "allocation_name")) or (
@@ -99,6 +100,8 @@ def validate_binding(config, url, record):
 
 async def slurm_command(config: Service, *args: str) -> str:
     options = {}
+    if args[0] == "sbatch" and config.sbatch_chdir is not None:
+        options["cwd"] = str(config.sbatch_chdir)
     if args[0] == "sbatch" and config.environment:
         options["env"] = {**os.environ, **config.environment}
     process = await asyncio.create_subprocess_exec(
@@ -179,6 +182,24 @@ async def healthy(client: httpx.AsyncClient, path: str) -> bool:
         return False
 
 
+async def allocated_health(config, client, job_id):
+    if not await healthy(client, config.health_path):
+        return False
+    if config.health_service is None and not config.health_job_id:
+        return True
+    try:
+        response = await client.get(config.health_path, follow_redirects=False)
+        response.raise_for_status()
+        value = response.json()
+        if not isinstance(value, dict) or value.get("status") == "degraded":
+            return False
+        return (config.health_service is None or value.get("service") == config.health_service) and (
+            not config.health_job_id or str(value.get("slurm_job_id")) == str(job_id)
+        )
+    except (httpx.HTTPError, ValueError):
+        return False
+
+
 async def ensure_api(config: Service, client: httpx.AsyncClient, *, start: bool = True) -> None:
     """Persist the allocation before submitting, so an uncertain sbatch is never retried."""
     require_sbatch(config)
@@ -210,6 +231,7 @@ async def _ensure_locked(config, client, script: Path, state_path: Path, deadlin
             "sha256": hashlib.sha256(script.read_bytes()).hexdigest(),
             "url": config.url,
             **({"environment": config.environment} if config.environment else {}),
+            **({"sbatch_chdir": str(config.sbatch_chdir)} if config.sbatch_chdir else {}),
         }
     )
     if state is not None and state.get("signature") != signature:
@@ -250,7 +272,7 @@ async def _ensure_locked(config, client, script: Path, state_path: Path, deadlin
             if len(hosts) != 1 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]*", hosts[0]):
                 raise ValueError("API sbatch allocation must resolve to exactly one hostname")
             client.base_url = remote_api_url(httpx.URL(config.url.rstrip("/") + "/").copy_with(host=hosts[0]))
-            if await healthy(client, config.health_path):
+            if await allocated_health(config, client, job_id):
                 state.update(state="ready", resolved_url=str(client.base_url))
                 write_json(state_path, state)
                 return

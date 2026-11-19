@@ -132,6 +132,14 @@ class ServiceConnection:
         response.raise_for_status()
         return response.json()
 
+    async def get_text(self, path: str):
+        path = api_path(path)
+        await self.ensure_ready()
+        self.assert_bound()
+        response = await self.client.get(path, follow_redirects=False)
+        response.raise_for_status()
+        return response.content.decode("utf-8")
+
 
 class SlurmService(ServiceConnection):
     def __init__(self, config: Service, checkpoint: Checkpoint, *, transport=None):

@@ -75,7 +75,18 @@ def validate_settings(settings):
             raise ValueError("experiment names are per-task inputs, not persistent defaults")
         aliases = profile.get("model_aliases", {})
         if not isinstance(aliases, dict) or any(
-            kind not in {"ppiflow", "torchcraft", "af3score", "torchscore", "torchfold", "torchopt", "rosetta"}
+            kind
+            not in {
+                "ppiflow",
+                "torchcraft",
+                "af3score",
+                "torchscore",
+                "torchfold",
+                "torchopt",
+                "rosetta",
+                "rfd4",
+                "proteinmpnn",
+            }
             or not isinstance(alias, str)
             or not alias
             for kind, alias in aliases.items()
