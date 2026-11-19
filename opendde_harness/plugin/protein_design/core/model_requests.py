@@ -151,7 +151,7 @@ class PPIFlowRequest(ContractModel):
         required = {
             "antibody": ("antigen_pdb", "antigen_chain", "framework_dir", "heavy_chain", "light_chain", "cdr_length"),
             "nanobody": ("antigen_pdb", "antigen_chain", "framework_dir", "heavy_chain"),
-            "binder": ("input_pdb", "target_chain", "binder_chain", "samples_min_length", "samples_max_length"),
+            "binder": ("input_pdb", "target_chain", "samples_min_length", "samples_max_length"),
             "partial_antibody": (
                 "complex_pdb",
                 "antigen_chain",

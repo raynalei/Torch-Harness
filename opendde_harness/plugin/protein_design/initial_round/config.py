@@ -280,7 +280,7 @@ class InitialRoundConfig(RoundModel):
                     "cdr_length",
                 ),
                 "nanobody": ("antigen_pdb", "antigen_chain", "framework_dir", "heavy_chain"),
-                "binder": ("input_pdb", "target_chain", "binder_chain", "samples_min_length", "samples_max_length"),
+                "binder": ("input_pdb", "target_chain", "samples_min_length", "samples_max_length"),
                 "vhh": ("pdb_path", "hotspot_indices", "framework_cif_path"),
                 "mini_binder": ("pdb_path", "hotspot_indices", "design_length"),
             }[generator.request["mode"]]
@@ -298,8 +298,8 @@ class InitialRoundConfig(RoundModel):
             elif name == "ppiflow":
                 mode = generator.request["mode"]
                 target = generator.request["target_chain" if mode == "binder" else "antigen_chain"]
-                binder = generator.request["binder_chain" if mode == "binder" else "heavy_chain"]
-                if generator.chains.target != [target] or generator.chains.binder != [binder]:
+                binder = generator.request.get("binder_chain" if mode == "binder" else "heavy_chain")
+                if generator.chains.target != [target] or (binder is not None and generator.chains.binder != [binder]):
                     raise ValueError("PPIFlow request chain names must match the declared target/binder roles")
             if generator.request["mode"] != "antibody" and len(generator.chains.binder) != 1:
                 raise ValueError("initial round VHH/minibinder modes require exactly one binder chain")
