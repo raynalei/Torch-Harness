@@ -29,7 +29,9 @@ CIF/BCIF structure, a .yaml/.yml/.json native input specification, or a director
 A list must contain structure paths only (.cif/.bcif, optionally .gz/.zst).
 The API does not accept PDB files; do not relabel a PDB as CIF or invent contigs,
 lengths, hotspots or conditioning. Prepare a real supported file/specification
-from user-confirmed scientific requirements before submitting.
+from user-confirmed scientific requirements before submitting. Use
+`rfd4-input-conversion` to prepare an input bundle from a PDB and supplied
+native constraints.
 
 ```json
 {

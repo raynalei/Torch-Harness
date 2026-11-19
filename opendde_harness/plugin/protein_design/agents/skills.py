@@ -34,6 +34,7 @@ BUILTIN_PROTEIN_DESIGN_SKILLS = (
     "pdb-lookup",
     "uniprot-lookup",
     "pubmed-lookup",
+    "rfd4-input-conversion",
 )
 
 _REQUIRED_FILES: dict[str, tuple[str, ...]] = {
@@ -52,6 +53,7 @@ _REQUIRED_FILES: dict[str, tuple[str, ...]] = {
     "pdb-lookup": ("SKILL.md",),
     "uniprot-lookup": ("SKILL.md",),
     "pubmed-lookup": ("SKILL.md",),
+    "rfd4-input-conversion": ("SKILL.md", "scripts/convert_rfd4_inputs.py"),
 }
 
 

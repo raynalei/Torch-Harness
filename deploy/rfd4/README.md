@@ -24,3 +24,39 @@ allocation. The allocation stays active until the task is terminal and Harness
 has cached its artifact manifest. interrupted/failed is not successful completion.
 No metrics/cancel/idempotency endpoint exists. This integration is standalone and
 does not add RFD4 to the two-stage autonomous generator/optimizer menu.
+
+## Convert a PDB and constraints
+
+From the Torch-Harness checkout, use the `rfd4-input-conversion` skill or run its
+script in the same RFD4-Proteina image as the API. This CPU-only step uses the
+native condition-spec writer. Set `RFD4_SIF` and `RFD4_INPUTS` to the values
+used by the API launcher.
+
+```bash
+SCRIPT="$PWD/opendde_harness/plugin/protein_design/skills/rfd4-input-conversion/scripts/convert_rfd4_inputs.py"
+STAGING=/path/to/directory/containing/target-and-constraints
+
+apptainer exec --bind "$SCRIPT:/convert_rfd4_inputs.py:ro" \
+  --bind "$STAGING:/staging:ro" --bind "$RFD4_INPUTS:/inputs:rw" \
+  "$RFD4_SIF" python /convert_rfd4_inputs.py pack \
+  --pdb /staging/target.pdb --constraints /staging/constraints.yaml \
+  --out-dir /inputs/target_bundle
+
+apptainer exec --bind "$SCRIPT:/convert_rfd4_inputs.py:ro" \
+  --bind "$RFD4_INPUTS:/inputs:rw" "$RFD4_SIF" \
+  python /convert_rfd4_inputs.py unpack --spec /inputs/target_bundle/spec.yaml \
+  --out-dir /inputs/target_editable
+```
+
+The YAML/JSON constraint file uses the native
+[condition-spec format](https://rfd4-proteina.org/latest/reference/yaml-json.html)
+with a single design key and its `contig` and/or `conditions` fields. The script
+adds `input: source.cif`. Submit `target_bundle/spec.yaml` or
+`target_bundle/annotated.cif` as the relative `request.inputs` value. Keep
+`source.cif` with the spec for unpacking and replay.
+
+Conversion supports a single-model PDB and an unpackable spec with one plain
+source CIF. If PDB cannot preserve the source identifiers, use the native CIF
+directly. PDB has limited bond-order and charge information. For ligands or
+modified residues, verify those details against the original mmCIF before using
+a converted file. The output directory must be new for either command.
