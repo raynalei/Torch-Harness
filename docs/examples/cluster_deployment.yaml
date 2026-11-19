@@ -1,4 +1,4 @@
-# Autonomous score-routing deployment configuration, not a historical design/run_config.
+# PROTOTYPE deployment configuration, not a historical design/run_config.
 # This is also bundled beside defaults.py as the automatic deployment fallback.
 # To persist operator edits, import this file once:
 # ddeharness protein-design models register --services-file cluster_deployment.yaml
@@ -105,34 +105,29 @@ workflow_defaults:
     dockq_python: /lustre/grp/cmclab/leiy/conda_envs/ppi_env/bin/python
     rosetta_residue_glob: '*.out'
   autonomous:
-    decision_policy: planner
-    planner_layout: two_stage
-    # Finite two-stage decisions; no global round/sample/batch/patience cap.
+    decision_policy: agent
+    # No extra limits are imposed here; prototype's existing defaults still apply.
 design_profiles:
+  # Chain IDs/refold_map belong to each task and must not be deployment defaults.
   vhh:
     generators:
       ppiflow:
-        request: {mode: nanobody, antigen_chain: C, heavy_chain: A}
-        chains: {target: [C], binder: [A], refold_map: {C: C, A: A}}
+        request: {mode: nanobody}
       torchcraft:
         request: {mode: vhh}
-        chains: {target: [C], binder: [A], refold_map: {C: C, A: A}}
   antibody:
     generators:
       ppiflow:
         # Supply framework_dir and cdr_length in the current task.
-        request: {mode: antibody, antigen_chain: C, heavy_chain: A, light_chain: B}
-        chains: {target: [C], binder: [A, B], refold_map: {C: C, A: A, B: B}}
+        request: {mode: antibody}
   minibinder:
     generators:
       ppiflow:
         # Supply required design lengths with generator_overrides in current task.
-        request: {mode: binder, target_chain: C, binder_chain: A}
-        chains: {target: [C], binder: [A], refold_map: {C: C, A: A}}
+        request: {mode: binder}
       torchcraft:
         # Supply design_length through the current task generator_overrides.
         request: {mode: mini_binder}
-        chains: {target: [C], binder: [A], refold_map: {C: C, A: A}}
 # The task/agent chooses generators: [ppiflow] or [torchcraft] explicitly.
 # CSV column names and indexing must come from the actual TorchCraft reader.
 target_adapters:
