@@ -74,13 +74,14 @@ class InitialRoundTool(Tool):
             }
         run_schema = InitialRoundConfig.model_json_schema()
         definitions = run_schema.pop("$defs", {})
+        definitions["Generator"]["required"].remove("chains")
         return {
             "type": "object",
             "$defs": definitions,
             "properties": {
                 "task": {
                     **DesignTask.model_json_schema(),
-                    "description": "New target task using persistent workflow/design/model defaults. Supply only target PDB/chain, design type, explicit hotspots and total initial_samples; optional framework/fixed-point overrides. Choose generators explicitly from the user prompt: [ppiflow], [torchcraft] or [rfd4] (requires native rfd4_inputs); neither is mandatory. Paired VH/VL requires PPIFlow. No YAML or deployment paths needed.",
+                    "description": "New target task using persistent workflow/design/model defaults. Supply the target PDB, design type, explicit hotspots and total initial_samples. Omit chain fields to use target C, binder or heavy A, and light B for paired antibody; optional framework/fixed-point overrides. Choose generators explicitly from the user prompt: [ppiflow], [torchcraft] or [rfd4] (requires native rfd4_inputs); neither is mandatory. Paired VH/VL requires PPIFlow. No YAML or deployment paths needed.",
                 },
                 "pdb_path": {"type": "string", "description": "Absolute local mounted shared-filesystem PDB path."},
                 "config_path": {

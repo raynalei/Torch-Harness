@@ -2,7 +2,8 @@
 
 Use an actually registered PPIFlow binder or compatible TorchCraft mini-binder
 mode. Inspect its request schema with protein_model_list. Supply the target
-structure, explicit chain roles, authorized lengths and generation parameters.
+structure, authorized lengths and generation parameters. Workflow defaults are
+target C and binder A. Omit chain roles unless the task explicitly overrides them.
 Existing seed structures must be real files accessible to the model service.
 The registered model sbatch activates its environment; no OpenDDE compute
 service, Docker setup or OpenDDE checkpoint is required.

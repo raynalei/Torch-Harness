@@ -26,8 +26,10 @@ Rosetta dG_separated becomes rosetta_interface_dg; ranking_score is
 100*selected_ipTM-rosetta_interface_dg. Missing dG remains unranked, never zero.
 Residue-pair energy sums still drive fixed-point selection separately.
 
-Prefer `protein_design_start(task=...)` with new pdb_path, target_chain, design_type,
-explicit hotspots and initial_samples. Persistent workflow_defaults/design_profiles
+Prefer `protein_design_start(task=...)` with new pdb_path, design_type, explicit hotspots and
+initial_samples. Omit chain fields and refold_map unless explicitly overridden.
+Harness fills target C, minibinder A, VHH heavy A, and paired antibody heavy
+A/light B. Do not ask for a binder chain when the input PDB contains only the target. Persistent workflow_defaults/design_profiles
 and registered request_defaults supply fixed services, sbatch environment, source/
 weight paths, shared mappings and output/DockQ settings. No per-task YAML is needed.
 Choose task.generators from the prompt: ["ppiflow"] or ["torchcraft"]. Neither is

@@ -110,17 +110,31 @@ class Service(RoundModel):
         return self
 
 
+DEFAULT_TARGET_CHAIN = "C"
+PPIFLOW_CHAIN_FIELDS = {
+    "binder": ("target_chain", ("binder_chain",)),
+    "nanobody": ("antigen_chain", ("heavy_chain",)),
+    "antibody": ("antigen_chain", ("heavy_chain", "light_chain")),
+}
+
+
+def default_binder_chains(design_type: str | None) -> list[str]:
+    return ["A", "B"] if design_type == "antibody" else ["A"]
+
+
 class Chains(RoundModel):
     target: list[str] = Field(min_length=1)
     binder: list[str] = Field(min_length=1)
     # Generated chain ID -> TorchFold input/output chain ID.
-    refold_map: dict[str, str]
+    refold_map: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def complete_map(self):
         chains = self.target + self.binder
         if len(set(chains)) != len(chains) or any(not c for c in chains):
             raise ValueError("target/binder chain IDs must be distinct and nonempty")
+        if not self.refold_map:
+            self.refold_map = {chain: chain for chain in chains}
         if set(self.refold_map) != set(chains) or len(set(self.refold_map.values())) != len(chains):
             raise ValueError("refold_map must map every target/binder chain exactly once")
         return self
@@ -139,6 +153,36 @@ class Generator(RoundModel):
     design_type: Literal["vhh", "antibody", "minibinder"] | None = None
     per_source_refold_limit: int | None = Field(default=None, ge=1, le=1000)
     deduplicate_sequences: bool = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def resolve_default_chains(cls, value):
+        if not isinstance(value, dict) or not isinstance(request := value.get("request"), dict):
+            return value
+        chains = value.get("chains")
+        if chains is None:
+            chains = {}
+        if not isinstance(chains, dict):
+            return value
+        mode = request.get("mode")
+        design_type = value.get("design_type")
+        target_field, binder_fields = (
+            PPIFLOW_CHAIN_FIELDS.get(mode, (None, ())) if isinstance(mode, str) else (None, ())
+        )
+        defaults = default_binder_chains("antibody" if mode == "antibody" else design_type)
+        target = chains.get("target", [request.get(target_field) or DEFAULT_TARGET_CHAIN])
+        binder = chains.get(
+            "binder", [request.get(field) or default for field, default in zip(binder_fields, defaults)] or defaults
+        )
+        request = request.copy()
+        if target_field and isinstance(target, list) and target and request.get(target_field) is None:
+            request[target_field] = target[0]
+        # Keep the request payload of older snapshots with fully specified binder roles.
+        if isinstance(binder, list) and not (mode == "binder" and {"target", "binder"} <= chains.keys()):
+            for field, chain in zip(binder_fields, binder):
+                if request.get(field) is None:
+                    request[field] = chain
+        return {**value, "request": request, "chains": {**chains, "target": target, "binder": binder}}
 
     @property
     def scientific_mode(self):

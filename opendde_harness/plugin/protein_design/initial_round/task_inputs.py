@@ -17,7 +17,7 @@ from opendde_harness.utils.portable_lock import file_lock
 
 from ..core.model_requests import TARGET_REQUEST_FIELDS
 from .artifacts import structure
-from .config import PathMapping, RoundModel
+from .config import DEFAULT_TARGET_CHAIN, PPIFLOW_CHAIN_FIELDS, PathMapping, RoundModel, default_binder_chains
 from .defaults import merge_defaults, validate_settings
 from .storage import SharedFiles, fingerprint, write_json
 
@@ -40,7 +40,7 @@ class TorchCraftAdapter(RoundModel):
 
 class DesignTask(RoundModel):
     pdb_path: Path
-    target_chain: str = Field(min_length=1, max_length=1)
+    target_chain: str = Field(default=DEFAULT_TARGET_CHAIN, min_length=1, max_length=1)
     design_type: Literal["vhh", "antibody", "minibinder"]
     hotspots: list[StrictInt | str]
     initial_samples: int = Field(ge=1, le=10000)
@@ -98,7 +98,7 @@ def prepare_design_task(task, settings, *, planner_layout=None):
     original = structure(source)
     target = original[original.chain_id == task.target_chain]
     if not len(target):
-        raise ValueError("requested target chain is absent from the new structure")
+        raise ValueError(f"target chain {task.target_chain!r} is absent from the new structure")
     starts = struc.get_residue_starts(target, add_exclusive_stop=True)
     ids, residues, sequence = [], [], ""
     for start, end in zip(starts[:-1], starts[1:]):
@@ -145,10 +145,10 @@ def prepare_design_task(task, settings, *, planner_layout=None):
             **copy.deepcopy(matches[0].get("request_defaults", {}) if matches else {}),
             **generator.get("request", {}),
         }
-    if any(not g.get("chains") for g in value["generators"].values()):
-        raise ValueError(
-            "provide current-task target/binder chain roles in generator_overrides; deployment YAML does not choose chain names"
-        )
+    for generator in value["generators"].values():
+        chains = generator.setdefault("chains", {})
+        chains.setdefault("target", [task.target_chain])
+        chains.setdefault("binder", default_binder_chains(task.design_type))
     binders = {c for g in value["generators"].values() for c in g["chains"]["binder"]}
     normalized_chain = task.target_chain
     if normalized_chain in binders or not re.fullmatch("[A-Z]", normalized_chain):
@@ -191,9 +191,10 @@ def prepare_design_task(task, settings, *, planner_layout=None):
             if len(chains["target"]) != 1:
                 raise ValueError("compact target tasks support one target chain")
             previous = chains["target"][0]
-            chains["refold_map"] = {
-                normalized_chain if key == previous else key: mapped for key, mapped in chains["refold_map"].items()
-            }
+            if chains.get("refold_map"):
+                chains["refold_map"] = {
+                    normalized_chain if key == previous else key: mapped for key, mapped in chains["refold_map"].items()
+                }
             chains["target"] = [normalized_chain]
             # A template can carry another antigen's MSAs or prepared target features.
             generator["fold_template"] = None
@@ -216,7 +217,12 @@ def prepare_design_task(task, settings, *, planner_layout=None):
                     output_dir=files.remote(work / name / "generation" / kind),
                 )
                 request["input_pdb" if mode == "binder" else "antigen_pdb"] = normalized_path
-                request["target_chain" if mode == "binder" else "antigen_chain"] = normalized_chain
+                target_field, binder_fields = PPIFLOW_CHAIN_FIELDS[mode]
+                request[target_field] = normalized_chain
+                if any(request.get(field) is None for field in binder_fields) or {
+                    request.get(field) for field in binder_fields
+                } != set(chains["binder"]):
+                    request.update(zip(binder_fields, chains["binder"]))
                 request["specified_hotspots"] = ",".join(normalized_chain + str(ids[i][0]) for i in positions)
                 if task.framework_dir is not None:
                     request["framework_dir"] = task.framework_dir

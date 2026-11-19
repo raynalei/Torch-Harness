@@ -332,6 +332,67 @@ def test_other_design_types_use_their_own_static_profile(task, settings, design)
     )
 
 
+@pytest.mark.parametrize(
+    ("design", "sources", "binders", "ppiflow_chains"),
+    [
+        ("minibinder", ["ppiflow", "torchcraft", "rfd4"], ["A"], {"target_chain": "C", "binder_chain": "A"}),
+        ("vhh", ["ppiflow", "torchcraft"], ["A"], {"antigen_chain": "C", "heavy_chain": "A"}),
+        ("antibody", ["ppiflow"], ["A", "B"], {"antigen_chain": "C", "heavy_chain": "A", "light_chain": "B"}),
+    ],
+)
+def test_target_only_compact_workflow_uses_default_chains(task, settings, design, sources, binders, ppiflow_chains):
+    from opendde_harness.plugin.protein_design.initial_round.artifacts import chain_sequences
+
+    source = Path(task["pdb_path"])
+    source.write_text(
+        "\n".join(
+            line[:21] + "C" + line[22:]
+            for line in source.read_text().splitlines()
+            if line.startswith("ATOM") and line[21] == "A"
+        )
+        + "\nEND\n"
+    )
+    task.pop("target_chain")
+    task.update(design_type=design, generators=sources)
+    profile = copy.deepcopy(settings["design_profiles"]["vhh"])
+    for generator in profile["generators"].values():
+        generator.pop("chains")
+    if design == "minibinder":
+        profile["generators"]["ppiflow"]["request"] = {
+            "mode": "binder",
+            "samples_min_length": 50,
+            "samples_max_length": 70,
+        }
+        profile["generators"]["torchcraft"]["request"] = {"mode": "mini_binder", "design_length": 60}
+        task["rfd4_inputs"] = "test/target_spec.json"
+        settings["model_services"]["rfd4"] = {"kind": "rfd4", "service": {"url": "https://rfd4.test"}}
+    elif design == "antibody":
+        profile["generators"]["ppiflow"]["request"] = {"mode": "antibody", "cdr_length": "CDRH3,10-20,CDRL3,9-11"}
+    settings["design_profiles"][design] = profile
+
+    config = prepare_design_task(task, settings)
+    assert set(config.generators) == set(sources)
+    for generator in config.generators.values():
+        assert generator.chains.target == ["C"]
+        assert generator.chains.binder == binders
+        assert generator.chains.refold_map == {chain: chain for chain in ["C", *binders]}
+    request = config.generators["ppiflow"].request
+    assert {field: request[field] for field in ppiflow_chains} == ppiflow_chains
+    assert ("light_chain" in request) == (design == "antibody")
+    path = SharedFiles(config.path_mappings).local(request["input_pdb" if design == "minibinder" else "antigen_pdb"])
+    assert chain_sequences(path) == {"C": "GGGGGG"}
+    if "rfd4" in sources:
+        assert config.generators["rfd4"].request["inputs"] == task["rfd4_inputs"]
+        assert config.generators["rfd4"].expected_target_sequences == {"C": "GGGGGG"}
+
+    run_config = config.model_dump(mode="json")
+    for generator in run_config["generators"].values():
+        generator.pop("chains")
+    for field in ppiflow_chains:
+        run_config["generators"]["ppiflow"]["request"].pop(field)
+    assert type(config).model_validate(run_config) == config
+
+
 def test_partial_flow_keeps_task_fixed_points_in_addition_to_energy_fixed_points(task, settings):
     from opendde_harness.plugin.protein_design.initial_round.autonomous import _partial_request
     from opendde_harness.plugin.protein_design.initial_round.runner import InitialRoundRunner

@@ -7,8 +7,8 @@ initial_round directory name persist for checkpoint compatibility; no dedicated
 initial-round command or model option is required.
 
 Use generators keyed by ppiflow and/or torchcraft, with real service registration
-and API request fields. Each generator needs explicit target/binder chain roles
-and the refold chain map. Configure evaluation.torchscore, torchfold, rosetta and
+and API request fields. When omitted, generators use target C, binder/heavy A, and light B for paired
+antibodies, with an identity refold map. Configure evaluation.torchscore, torchfold, rosetta and
 compatible torchopt services as required by the legal route. TorchScore supplies
 both confidence scores; the generic start path defaults autonomous to an enabled
 configuration. Missing required services fail validation rather than falling
