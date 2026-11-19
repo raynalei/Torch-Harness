@@ -82,6 +82,17 @@ class Service(RoundModel):
         return self
 
 
+DEFAULT_TARGET_CHAIN = "C"
+DEFAULT_BINDER_CHAIN = "A"
+DEFAULT_LIGHT_CHAIN = "B"
+
+PPIFLOW_CHAIN_FIELDS = {
+    "binder": ("target_chain", ("binder_chain",)),
+    "nanobody": ("antigen_chain", ("heavy_chain",)),
+    "antibody": ("antigen_chain", ("heavy_chain", "light_chain")),
+}
+
+
 class Chains(RoundModel):
     target: list[str] = Field(min_length=1)
     binder: list[str] = Field(min_length=1)
@@ -92,7 +103,7 @@ class Chains(RoundModel):
     def complete_map(self):
         chains = self.target + self.binder
         if len(set(chains)) != len(chains) or any(not c for c in chains):
-            raise ValueError("target/binder chain IDs must be distinct and nonempty")
+            raise ValueError("generated complex target/binder chain IDs must be distinct and nonempty")
         if not self.refold_map:
             self.refold_map = {chain: chain for chain in chains}
         if set(self.refold_map) != set(chains) or len(set(self.refold_map.values())) != len(chains):
@@ -111,6 +122,38 @@ class Generator(RoundModel):
     structure_glob: str = "*.pdb"
     per_source_refold_limit: int | None = Field(default=None, ge=1, le=1000)
     deduplicate_sequences: bool = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def resolve_default_chains(cls, value):
+        if not isinstance(value, dict) or not isinstance(request := value.get("request"), dict):
+            return value
+        mode = request.get("mode")
+        if not isinstance(mode, str) or mode not in (*PPIFLOW_CHAIN_FIELDS, "vhh", "mini_binder"):
+            return value
+        chains = value.get("chains")
+        if chains is None:
+            chains = {}
+        if not isinstance(chains, dict):
+            return value
+        target_field, binder_fields = PPIFLOW_CHAIN_FIELDS.get(mode, (None, ()))
+        target = chains.get("target", [request.get(target_field) or DEFAULT_TARGET_CHAIN])
+        defaults = (DEFAULT_BINDER_CHAIN, DEFAULT_LIGHT_CHAIN)
+        binder = chains.get(
+            "binder",
+            [request.get(field) or default for field, default in zip(binder_fields, defaults)]
+            or [DEFAULT_BINDER_CHAIN],
+        )
+        request = request.copy()
+        if target_field and isinstance(target, list) and target and request.get(target_field) is None:
+            request[target_field] = target[0]
+        # Preserve the payload of saved binder runs that explicitly declared both chain roles.
+        legacy_binder = mode == "binder" and "target" in chains and "binder" in chains
+        if isinstance(binder, list) and not legacy_binder:
+            for field, chain in zip(binder_fields, binder):
+                if request.get(field) is None:
+                    request[field] = chain
+        return {**value, "request": request, "chains": {**chains, "target": target, "binder": binder}}
 
 
 class Evaluation(RoundModel):

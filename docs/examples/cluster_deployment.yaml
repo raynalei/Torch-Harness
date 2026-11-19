@@ -108,7 +108,7 @@ workflow_defaults:
     decision_policy: agent
     # No extra limits are imposed here; prototype's existing defaults still apply.
 design_profiles:
-  # Chain IDs/refold_map belong to each task and must not be deployment defaults.
+  # Harness fills chain IDs and refold_map. Explicit overrides belong to each task.
   vhh:
     generators:
       ppiflow:

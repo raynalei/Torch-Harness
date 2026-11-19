@@ -17,7 +17,7 @@ from opendde_harness.utils.portable_lock import file_lock
 
 from ..core.model_requests import TARGET_REQUEST_FIELDS
 from .artifacts import structure
-from .config import PathMapping, RoundModel
+from .config import DEFAULT_BINDER_CHAIN, DEFAULT_LIGHT_CHAIN, DEFAULT_TARGET_CHAIN, PathMapping, RoundModel
 from .defaults import merge_defaults, validate_settings
 from .storage import SharedFiles, fingerprint, write_json
 
@@ -40,10 +40,17 @@ class TorchCraftAdapter(RoundModel):
 
 class DesignTask(RoundModel):
     pdb_path: Path
-    target_chain: str = Field(pattern=r"^[A-Za-z0-9]$")
-    binder_chains: list[str] = Field(min_length=1, max_length=2)
-    refold_map: dict[str, str] | None = None
     design_type: Literal["vhh", "antibody", "minibinder"]
+    target_chain: str = Field(default=DEFAULT_TARGET_CHAIN, pattern=r"^[A-Za-z0-9]$")
+    binder_chains: list[str] = Field(
+        default_factory=lambda data: (
+            [DEFAULT_BINDER_CHAIN, DEFAULT_LIGHT_CHAIN] if data["design_type"] == "antibody" else [DEFAULT_BINDER_CHAIN]
+        ),
+        min_length=1,
+        max_length=2,
+        description="Defaults to A for VHH/minibinder and A/B (heavy/light) for antibody.",
+    )
+    refold_map: dict[str, str] | None = None
     hotspots: list[StrictInt | str]
     initial_samples: int = Field(ge=1, le=10000)
     name: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
@@ -59,7 +66,9 @@ class DesignTask(RoundModel):
     def explicit_chain_roles(self):
         expected = 2 if self.design_type == "antibody" else 1
         if len(self.binder_chains) != expected:
-            raise ValueError("provide one binder chain for VHH/minibinder, or ordered heavy/light chains for antibody")
+            raise ValueError(
+                "binder_chains must contain one ID for VHH/minibinder or ordered heavy/light IDs for antibody"
+            )
         names = [self.target_chain, *self.binder_chains]
         if len(set(names)) != len(names) or any(not re.fullmatch(r"[A-Za-z0-9]", chain) for chain in names):
             raise ValueError("target and binder chain names must be distinct single alphanumeric IDs")
@@ -102,6 +111,7 @@ def prepare_design_task(task, settings):
     value = merge_defaults(settings.get("workflow_defaults", {}), profile)
     if "generators" in profile:
         value["generators"] = copy.deepcopy(profile["generators"])
+    enabled = task.generators or list(value.get("generators", {}))
     value["autonomous"] = value.get("autonomous") or {}
     value.setdefault("evaluation", {}).setdefault("scoring_backend", "torchscore")
     files = SharedFiles([PathMapping.model_validate(m) for m in value.get("path_mappings", [])])
@@ -113,7 +123,7 @@ def prepare_design_task(task, settings):
     original = structure(source)
     target = original[original.chain_id == task.target_chain]
     if not len(target):
-        raise ValueError("requested target chain is absent from the new structure")
+        raise ValueError(f"target chain {task.target_chain!r} is absent from the new structure")
     starts = struc.get_residue_starts(target, add_exclusive_stop=True)
     ids, residues, sequence = [], [], ""
     for start, end in zip(starts[:-1], starts[1:]):
@@ -136,7 +146,6 @@ def prepare_design_task(task, settings):
         if index in positions:
             raise ValueError("duplicate hotspot")
         positions.append(index)
-    enabled = task.generators or list(value.get("generators", {}))
     if not enabled or len(enabled) != len(set(enabled)):
         raise ValueError("select at least one distinct configured generator")
     if set(enabled) - set(value.get("generators", {})) or set(task.generator_overrides) - set(enabled):

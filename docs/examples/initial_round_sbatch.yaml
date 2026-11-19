@@ -26,27 +26,15 @@ generators:
       mode: antibody
       name: 7n0a
       antigen_pdb: /lustre/grp/cmclab/share/guoly/app_code/test_data/antigen/clean_7n0a.pdb
-      antigen_chain: C
+      # Harness defaults: antigen C, heavy A, light B.
       specified_hotspots: C4,C10,C117,C125
       framework_dir: /lustre/grp/cmclab/share/guoly/app_code/test_data/framework_scfv
-      heavy_chain: A
-      light_chain: B
       cdr_length: CDRH1,8-9,CDRH2,7-8,CDRH3,10-20,CDRL1,7-7,CDRL2,3-3,CDRL3,9-11
       config: /lustre/grp/cmclab/share/guoly/app_code/v3_basic/configs/test_antibody_v3.yaml
       samples_per_target: 100
       num_timesteps: 200
       model_weights: /lustre/grp/cmclab/share/changdr/model/20260618_distill/model_214.ckpt.enc
       output_dir: /lustre/grp/cmclab/leiy/test/
-    chains:
-      target:
-      - C
-      binder:
-      - A
-      - B
-      refold_map:
-        C: C
-        A: A
-        B: B
     fold_template: null
     structure_glob: '*.pdb'
     per_source_refold_limit: null

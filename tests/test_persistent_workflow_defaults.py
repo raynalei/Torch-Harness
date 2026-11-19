@@ -451,6 +451,53 @@ def test_minibinder_prompt_selects_generator_and_native_mode(task, settings, sou
     assert config.generators[source].request["mode"] == ("binder" if source == "ppiflow" else "mini_binder")
 
 
+@pytest.mark.parametrize(
+    ("design_type", "mode", "request_fields", "chain_fields"),
+    [
+        (
+            "minibinder",
+            "binder",
+            {"samples_min_length": 50, "samples_max_length": 70},
+            {"target_chain": "C", "binder_chain": "A"},
+        ),
+        ("vhh", "nanobody", {}, {"antigen_chain": "C", "heavy_chain": "A"}),
+        (
+            "antibody",
+            "antibody",
+            {"cdr_length": "CDRH3,10-20,CDRL3,9-11"},
+            {"antigen_chain": "C", "heavy_chain": "A", "light_chain": "B"},
+        ),
+    ],
+)
+def test_compact_task_fills_default_chain_roles(task, settings, design_type, mode, request_fields, chain_fields):
+    from opendde_harness.plugin.protein_design.initial_round.artifacts import structure
+
+    source = Path(task["pdb_path"])
+    source.write_text(
+        "\n".join(
+            line[:21] + "C" + line[22:]
+            for line in source.read_text().splitlines()
+            if line.startswith("ATOM") and line[21] == "A"
+        )
+        + "\nEND\n"
+    )
+    profile = copy.deepcopy(settings["design_profiles"]["vhh"])
+    profile["generators"]["ppiflow"]["request"] = {"mode": mode, **request_fields}
+    settings["design_profiles"][design_type] = profile
+    task.pop("target_chain")
+    task.pop("binder_chains")
+    task.update(design_type=design_type, generators=["ppiflow"])
+    config = prepare_design_task(task, settings)
+    generator = config.generators["ppiflow"]
+    assert {field: generator.request[field] for field in chain_fields} == chain_fields
+    assert ("light_chain" in generator.request) == (mode == "antibody")
+    assert generator.chains.refold_map == {chain: chain for chain in chain_fields.values()}
+    target = SharedFiles(config.path_mappings).local(
+        generator.request["input_pdb" if mode == "binder" else "antigen_pdb"]
+    )
+    assert set(structure(target).chain_id) == {"C"}
+
+
 @pytest.mark.parametrize("value", ["", "   ", None])
 def test_empty_dockq_uses_deployment_default(value):
     from opendde_harness.plugin.protein_design.initial_round.config import Evaluation
@@ -639,7 +686,7 @@ def test_task_refold_map_is_only_used_when_explicit(task, settings):
     assert all(g.chains.refold_map == {"A": "X", "D": "Y"} for g in config.generators.values())
 
 
-def test_missing_task_binder_names_cannot_use_yaml_defaults(task, settings):
-    task.pop("binder_chains")
-    with pytest.raises(ValueError, match="binder_chains"):
+def test_missing_default_target_chain_does_not_rename_input(task, settings):
+    task.pop("target_chain")
+    with pytest.raises(ValueError, match="target chain 'C' is absent"):
         prepare_design_task(task, settings)

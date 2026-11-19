@@ -118,7 +118,7 @@ that the interpreter exists and DockQ imports successfully.
 
 For example:
 
-> Use target `/shared/inputs/new.pdb`, chain C, binder chain A, VHH, hotspots C42 and C73,
+> Use target `/shared/inputs/new.pdb`, VHH, hotspots C42 and C73,
 > framework `/shared/frameworks/current`, initial total 10, and run the configured autonomous workflow.
 
 The assistant calls `protein_initial_round_start` with:
@@ -127,8 +127,6 @@ The assistant calls `protein_initial_round_start` with:
 {
   "task": {
     "pdb_path": "/shared/inputs/new.pdb",
-    "target_chain": "C",
-    "binder_chains": ["A"],
     "design_type": "vhh",
     "hotspots": ["C42", "C73"],
     "initial_samples": 10,
@@ -139,6 +137,9 @@ The assistant calls `protein_initial_round_start` with:
 ```
 
 Only use `user_confirmed=true` within the user's authorized computation scope.
+The target defaults to C. Harness assigns binder A for minibinder, heavy A
+for VHH, and heavy A/light B for paired antibodies. Provide `target_chain` or
+`binder_chains` only for an explicit override.
 Optional fields include `name`, `generators`, `generator_samples`, `framework_dir`,
 `framework_cif_path`, `fixed_positions` and validated `generator_overrides`. Total
 samples are split evenly across configured generators, with the remainder assigned
@@ -153,7 +154,7 @@ inherited fixed points and allowed regions.
 - Check the selected chain and every hotspot against the actual new structure.
   Hotspot inputs use PDB residue IDs, not assumed sequence offsets.
 - Extract that target chain into the run's own `inputs/target.pdb`. Preserve residue
-  numbers and the user-provided chain IDs. Reject overlapping target/binder names rather than renaming them. Unsupported insertion/negative/ambiguous numbering fails before
+  numbers and the configured chain IDs. Reject overlapping target/binder names rather than renaming them. Unsupported insertion/negative/ambiguous numbering fails before
   submission because the current Rosetta residue-energy contract cannot encode it.
 - Generate a new TorchCraft sequence CSV and convert hotspot indices using the
   configured adapter. Sequence provenance is **observed structure residues**, never

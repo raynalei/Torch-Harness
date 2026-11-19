@@ -42,12 +42,22 @@ example. Neither CUDA nor the model dependencies belong in the client environmen
 ## Configuration and execution
 
 Copy [the example](examples/initial_round_sbatch.yaml) to a local, reviewed configuration.
-Replace the service URLs, paths, output chain IDs and hotspot indices. The example
+Replace the service URLs, paths and hotspot indices. The example
 uses paired VH/VL: PPIFlow `antibody` with target C, heavy A and light B,
 and no TorchCraft generator. VHH uses PPIFlow `nanobody` plus optional TorchCraft
 `vhh`. For minibinders use PPIFlow
-`binder` with `input_pdb`, `target_chain`, `binder_chain`, `samples_min_length`,
-`samples_max_length`; pair it with TorchCraft `mini_binder`, providing `pdb_path`,
+`binder` with `input_pdb`, `samples_min_length`, and `samples_max_length`.
+The input PDB can contain only the target. Harness defaults to target C,
+minibinder A, VHH heavy A, and paired antibody heavy A/light B. The same chain
+roles apply to PPIFlow and TorchCraft VHH/minibinder workflows. Omit the chain
+fields to populate `chains`, the identity `refold_map`, and the chain fields
+accepted by each generator API. Both scoring backends read the chain IDs in the
+candidate PDB. TorchFold uses the refold mapping, DockQ uses the same mapping
+and roles, and Rosetta groups the binder chains together against the target.
+PPIFlow Partial Flow and TorchOptimization reuse the candidate's chain roles
+when the workflow routes to them. Explicit overrides must use distinct target
+and binder IDs in the generated complex.
+For optional TorchCraft `mini_binder`, provide `pdb_path`,
 `hotspot_indices`, `target_full_seq`, and `design_length`. Requests otherwise pass
 through to the documented services. Partial-flow modes are not part of this
 initial-round command.
