@@ -10,6 +10,15 @@ metadata:
 
 ## Start and recover
 
+Missing deployment values fall back only to the bundled cluster_deployment.yaml or
+an explicit deployment_config, never an arbitrary historical task YAML. Model source,
+checkpoint and algorithm defaults remain in the server's sbatch/API. TorchCraft uses
+PDB residue IDs for hotspots; optional target_full_seq CSV uses target/real_sequence,
+with target matching the PDB filename stem. Omit CSV for native PDB-sequence fallback.
+Rosetta dG_separated becomes rosetta_interface_dg; ranking_score is
+100*selected_ipTM-rosetta_interface_dg. Missing dG remains unranked, never zero.
+Residue-pair energy sums still drive fixed-point selection separately.
+
 Prefer `protein_design_start(task=...)` with new pdb_path, target_chain, design_type,
 explicit hotspots and initial_samples. Persistent workflow_defaults/design_profiles
 and registered request_defaults supply fixed services, sbatch environment, source/

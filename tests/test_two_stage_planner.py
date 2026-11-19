@@ -31,6 +31,9 @@ async def test_two_stages_have_distinct_evaluations_and_no_third_decision(round_
             assert calls[("torchfold", "POST")] == 0
             for record in context["candidates"]:
                 assert "rosetta_interface_score" in record["measured_metrics"]
+                metrics = record["measured_metrics"]
+                assert metrics["rosetta_interface_dg"] == -12.0
+                assert metrics["ranking_score"] == 100 * metrics["torchscore_iptm"] + 12.0
                 assert record["completed_analysis"] == []
                 assert record["developability"]["available"] is False
                 assert record["hotspot"]["available"] is False

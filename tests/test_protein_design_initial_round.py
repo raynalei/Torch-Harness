@@ -936,12 +936,15 @@ async def test_autonomous_round_preserves_best_budget_and_resume(round_config, f
     transport, calls = fake_services
     config = autonomous_config(round_config)
     result = await InitialRoundRunner(config, transport=transport).run()
-    assert result["ranking_policy"] == "torchscore_iptm_desc,ptm_desc,dockq_desc"
+    assert (
+        result["ranking_policy"]
+        == "100*torchscore_iptm-rosetta_interface_dg_desc,unmeasured_last,iptm_desc,ptm_desc,dockq_desc"
+    )
     assert result["stop_reason"] == "rules_stop"
     assert result["used_samples"] == result["accepted"] == 2
     root = config.work_dir / config.name
     records = json.loads((root / "candidates.json").read_text())
-    assert all(c["metrics"]["ranking_score"] == 90 for c in records)
+    assert all("ranking_score" not in c["metrics"] for c in records)
     assert all(c["diagnostics"]["epitope_hit"] is True for c in records)
     assert all("generated.pdb" in c["generated_structure"] for c in records)
     assert all("rosetta_interface_dg" not in c["metrics"] for c in records)
@@ -1073,6 +1076,16 @@ async def test_partial_flow_executes_once_then_rescores_child(round_config, fake
     assert calls[("torchfold", "POST")] == calls[("rosetta", "POST")] == 1
     parent, child = runner.checkpoint.data["candidates"]
     assert child["parent_id"] == parent["candidate_id"]
+    assert parent["metrics"]["rosetta_interface_dg"] == -12.0
+    assert parent["metrics"]["ranking_score"] == 82.0
+    # Upgrade old residue-energy-only checkpoints from the completed API result.
+    parent["metrics"].pop("rosetta_interface_dg")
+    parent["metrics"].pop("ranking_score")
+    await runner.score_interface(parent)
+    assert parent["metrics"]["rosetta_interface_dg"] == -12.0
+    assert parent["metrics"]["ranking_score"] == 82.0
+    assert calls[("rosetta", "POST")] == 1
+    assert "ranking_score" not in child["metrics"]
     assert digest(runner.files.local(parent["generated_structure"])) == parent["generated_sha256"]
     assert child["generation_request"]["complex_pdb"] == parent["generated_structure"]
 
@@ -1246,7 +1259,7 @@ async def test_low_confidence_candidate_is_optimized_and_fully_reevaluated(
     assert initial["rosetta_structure"] == "generated"
     assert "rosetta_structure" not in child
     assert child["optimized_by"] == "torchopt" and child["parent_id"] == parent["candidate_id"]
-    assert child["metrics"]["torchscore_iptm"] == 0.9 and child["metrics"]["ranking_score"] == 90
+    assert child["metrics"]["torchscore_iptm"] == 0.9 and "ranking_score" not in child["metrics"]
     assert calls[("torchscore", "POST")] == 3
     assert calls[("torchfold", "POST")] == int(final_ptm > 0.8)
     assert calls[("rosetta", "POST")] == 1
@@ -1309,7 +1322,10 @@ async def test_torchscore_feedback_uses_registered_scorer_for_ranking_and_resume
     runner = InitialRoundRunner(config, transport=httpx.MockTransport(handler))
     result = await runner.run()
     assert result["scoring_backend"] == "torchscore"
-    assert result["ranking_policy"] == "torchscore_iptm_desc,ptm_desc,dockq_desc"
+    assert (
+        result["ranking_policy"]
+        == "100*torchscore_iptm-rosetta_interface_dg_desc,unmeasured_last,iptm_desc,ptm_desc,dockq_desc"
+    )
     assert result["accepted"] == 2
     assert calls[("af3score", "POST")] == 0
     assert calls[("torchscore", "POST")] == 2
@@ -1319,7 +1335,7 @@ async def test_torchscore_feedback_uses_registered_scorer_for_ranking_and_resume
     for candidate in runner.checkpoint.data["candidates"]:
         assert candidate["scoring_backend"] == "torchscore"
         assert candidate["metrics"]["torchscore_iptm"] == 0.9
-        assert candidate["metrics"]["ranking_score"] == 90
+        assert "ranking_score" not in candidate["metrics"]
         assert "af3score_iptm" not in candidate["metrics"]
     csv_header = (runner.root / "ranking.csv").read_text().splitlines()[0]
     assert "torchscore_iptm" in csv_header and "af3score_iptm" not in csv_header
@@ -1360,8 +1376,8 @@ def test_feedback_diagnosis_and_ranking_never_mix_scorers():
         "rosetta_interface_dg": -12,
     }
     assert classify(metrics, {"epitope_hit": True}, AutonomousRound(), "torchscore_iptm") == "low_iptm"
-    assert rank_score({"metrics": metrics}, "torchscore_iptm") == 40
-    assert rank_score({"metrics": metrics}, "af3score_iptm") == 99
+    assert rank_score({"metrics": metrics}, "torchscore_iptm") == 52
+    assert rank_score({"metrics": metrics}, "af3score_iptm") == 111
 
 
 def test_scorer_choice_uses_explicit_configuration_then_registered_kind(round_config):
@@ -1787,7 +1803,7 @@ def test_direct_refold_ranking_does_not_require_rosetta():
 
     first = {"metrics": {"torchscore_iptm": 0.9, "torchscore_ptm": 0.9, "design_refold_dockq": 0.8}}
     second = {"metrics": {**first["metrics"], "rosetta_interface_score": -20}}
-    assert rank_score(first, "torchscore_iptm") == 90
+    assert rank_score(first, "torchscore_iptm") is None
     assert quality(first, "torchscore_iptm") == quality(second, "torchscore_iptm")
     assert rule_actions(first["metrics"]) == rule_actions(second["metrics"]) == ["stop"]
 
@@ -2009,3 +2025,15 @@ def test_configuration_identity_normalizes_aliases_but_keeps_scientific_changes(
     assert config_difference_paths(status_profile_identity(legacy), status_profile_identity(config)) == [
         "autonomous.min_score"
     ]
+
+
+def test_interface_dg_affects_ranking_without_reusing_residue_energy_sum():
+    from opendde_harness.plugin.protein_design.initial_round.autonomous import quality, rank_score
+
+    first = {"metrics": {"torchscore_iptm": 0.8, "rosetta_interface_dg": -12.0}}
+    second = {"metrics": {"torchscore_iptm": 0.8, "rosetta_interface_dg": -5.0}}
+    unknown = {"metrics": {"torchscore_iptm": 0.9, "rosetta_interface_score": -50.0}}
+    assert rank_score(first, "torchscore_iptm") == 92.0
+    assert rank_score(second, "torchscore_iptm") == 85.0
+    assert quality(first, "torchscore_iptm") > quality(second, "torchscore_iptm")
+    assert rank_score(unknown, "torchscore_iptm") is None

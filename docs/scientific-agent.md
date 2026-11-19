@@ -75,3 +75,14 @@ The `initial_round` directory owns shared service adapters, executor and checkpo
 formats. It remains an internal compatibility package, not a public mode or
 required initial-round CLI/tool option. Generic protein_design_start/status/resume
 entry points drive the planner through that shared executor.
+
+
+Rosetta interface ranking uses the API's `dG_separated`, stored as
+`metrics.rosetta_interface_dg`, separately from the summed residue-pair interface
+energy. When measured, `ranking_score = 100 * torchscore_iptm - rosetta_interface_dg`.
+Unmeasured dG remains unknown/unranked and is exported with a null objective; it is
+never inferred from residue energies or treated as zero. This changes ordering,
+not planner stages, acceptance thresholds or optimizer constraints. The context
+builder includes both values before each Qwen decision. Rosetta remains a registered
+API backend: Harness calls `/v1/tools/interface_analyze`; the cluster service runs
+PyRosetta and returns residue logs and interface metrics/scorefiles.

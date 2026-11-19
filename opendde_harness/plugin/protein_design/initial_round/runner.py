@@ -57,7 +57,8 @@ class InitialRoundRunner:
             )
         if not self.config.evaluation.dockq_python.is_absolute() or not self.config.evaluation.dockq_python.is_file():
             raise ValueError(
-                "evaluation.dockq_python must name an existing absolute interpreter path in an isolated DockQ environment"
+                "evaluation.dockq_python must name an existing absolute interpreter path in an isolated DockQ environment; "
+                f"configured path: {self.config.evaluation.dockq_python}. Repair this configured path; do not search for another environment."
             )
         self.files.remote(self.root)
         path_keys = {
@@ -183,7 +184,7 @@ class InitialRoundRunner:
                 continue
             try:
                 if self.config.autonomous is not None:
-                    request = validate_request(source, {"name": self.config.name, **request})
+                    request = validate_request(source, {"name": self.config.name, **request}, omit_defaults=True)
                 if self.config.autonomous is not None and round_index:
                     (self.root / f"round-{round_index}" / source).mkdir(parents=True, exist_ok=True)
                 result = await self.job(source, f"generate/{stage}", "/v1/designs", "design_id", request)
@@ -499,7 +500,12 @@ class InitialRoundRunner:
             if "interface_fixed_positions" in candidate:
                 if digest(self.files.local(candidate["rosetta_energy_log"])) != candidate["rosetta_energy_log_sha256"]:
                     raise ValueError("Rosetta residue-energy log changed while resuming")
-                return
+                if "rosetta_interface_dg" in candidate["metrics"]:
+                    candidate["metrics"]["ranking_score"] = (
+                        100 * candidate["metrics"][evaluation.score_metric]
+                        - candidate["metrics"]["rosetta_interface_dg"]
+                    )
+                    return
         elif "rosetta_interface_dg" in candidate["metrics"]:
             return
         key = candidate["candidate_id"]
@@ -560,7 +566,6 @@ class InitialRoundRunner:
             )
             write_json(directory / "interface-residue-energies.json", energies)
             self.save_candidates()
-            return
         field = evaluation.rosetta.metric_fields.get("interface_dg", "dG_separated")
         records = metric_records(result, evaluation.rosetta)
         if not any(select(row, field) is not None for row in records):
@@ -571,18 +576,30 @@ class InitialRoundRunner:
             ]
             records = [row for path in scores for row in table_records(path)]
         candidate["metrics"]["rosetta_interface_dg"] = measured(records, field)
+        if autonomous is not None:
+            candidate["metrics"]["ranking_score"] = (
+                100 * candidate["metrics"][evaluation.score_metric] - candidate["metrics"]["rosetta_interface_dg"]
+            )
         candidate["rosetta_structure"] = "refold" if refolded else "generated"
         self.save_candidates()
 
     def export(self, candidates: list[dict]) -> dict:
         for candidate in candidates:
             candidate.pop("rank", None)
+            if self.config.autonomous is not None:
+                from .autonomous import rank_score
+
+                ranking = rank_score(candidate, self.config.evaluation.score_metric)
+                if ranking is None:
+                    candidate["metrics"].pop("ranking_score", None)
+                else:
+                    candidate["metrics"]["ranking_score"] = ranking
         accepted = sorted(
             (c for c in candidates if c["status"] == "accepted"),
             key=lambda c: (
                 -c["metrics"]["torchfold_iptm"],
                 -c["metrics"]["design_refold_dockq"],
-                c["metrics"].get("rosetta_interface_dg", 0.0),
+                c["metrics"].get("rosetta_interface_dg", 1e300),
                 c["candidate_id"],
             ),
         )
@@ -610,7 +627,7 @@ class InitialRoundRunner:
             state = self.checkpoint.data["autonomous"]
             result.update(
                 scoring_backend=self.config.evaluation.scoring_backend,
-                ranking_policy=f"{self.config.evaluation.score_metric}_desc,ptm_desc,dockq_desc",
+                ranking_policy=f"100*{self.config.evaluation.score_metric}-rosetta_interface_dg_desc,unmeasured_last,iptm_desc,ptm_desc,dockq_desc",
                 stop_reason=state.get("stop_reason"),
                 used_samples=state["used_samples"],
                 followup_rounds=len(state["decisions"]),
@@ -639,9 +656,9 @@ class InitialRoundRunner:
                 {
                     "candidate_id": c["candidate_id"],
                     "sequence": c["sequence"],
-                    "objective": c["metrics"][
-                        "ranking_score" if self.config.autonomous is not None else "torchfold_iptm"
-                    ],
+                    "objective": c["metrics"].get("ranking_score")
+                    if self.config.autonomous is not None
+                    else c["metrics"]["torchfold_iptm"],
                     "metrics": {**c["metrics"], "iptm": c["metrics"]["torchfold_iptm"]},
                     "structure_path": c["refold_structure"],
                     "metadata": {

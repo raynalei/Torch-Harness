@@ -5,7 +5,20 @@ is loaded from the active Harness instance config, not recalled from conversatio
 history. Existing `run_config`, YAML and checkpoint entry points remain supported.
 The autonomous score-routing branch retains its two-stage Qwen planner, native evaluation skills and rule fallback, without global round/sample/batch/patience budgets.
 
-## One-time setup using an existing working configuration
+## Automatic deployment fallback
+
+Missing deployment values now fall back to [cluster_deployment.yaml](examples/cluster_deployment.yaml).
+Installed wheels bundle the same file beside initial_round/defaults.py. Explicit
+instance settings override these defaults. Set plugin deployment_config to an absolute
+operator-owned YAML path if needed; historical workflow_config/initial_round_config
+files are not loaded implicitly for new starts. Model discovery reports the effective
+configuration source. Current task overrides remain explicit, and existing runs keep
+their snapshots. Source/checkpoint/optional algorithm defaults remain on the API server.
+DockQ uses the configured interpreter, including when a generated run_config supplies
+an empty/null value. TorchCraft uses the confirmed target/real_sequence CSV contract,
+optional native PDB-sequence fallback, and PDB residue IDs for hotspots.
+
+## Optional explicit import from an existing working configuration
 
 Keep the existing seven registrations in `plugins.config.protein-design.model_services`.
 Import a known task once to save its fixed deployment and workflow settings:

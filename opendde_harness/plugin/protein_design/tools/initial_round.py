@@ -130,6 +130,9 @@ class InitialRoundTool(Tool):
             else:
                 if kwargs.get("user_confirmed") is not True:
                     raise ValueError("user authorization is required for the complete pipeline compute scope")
+                from ..initial_round.defaults import load_deployment_defaults
+
+                deployment = load_deployment_defaults(self.config)
                 task = kwargs.get("task")
                 if task is not None:
                     if any(kwargs.get(key) is not None for key in ("run_config", "config_path", "pdb_path")):
@@ -137,26 +140,26 @@ class InitialRoundTool(Tool):
                     config = await asyncio.to_thread(
                         prepare_design_task,
                         {**task, **({"name": kwargs["name"]} if kwargs.get("name") else {})},
-                        self.config,
+                        deployment,
                     )
                     result = await asyncio.to_thread(start_round, config)
                     return ToolResult(
                         json.dumps(result, ensure_ascii=False), "Automatic workflow started", retryable=False
                     )
-                profile = kwargs.get("config_path") or self.config.get("initial_round_config")
+                profile = kwargs.get("config_path")
                 inline = kwargs.get("run_config")
                 if inline is not None and kwargs.get("config_path"):
                     raise ValueError("use run_config or config_path, not both")
                 if inline is None and not profile:
                     raise ValueError(
-                        "assemble run_config from known tool inputs and registered services, or reuse a configured profile; no handwritten YAML is required"
+                        "supply task or explicit run_config/config_path; historical initial_round_config is never loaded automatically"
                     )
                 config = prepare_run(
                     inline if inline is not None else Path(profile),
                     pdb_path=Path(kwargs["pdb_path"]) if kwargs.get("pdb_path") else None,
                     name=kwargs.get("name"),
-                    registrations=self.config.get("model_services"),
-                    plugin_config=self.config,
+                    registrations=deployment.get("model_services"),
+                    plugin_config=deployment,
                 )
                 result = await asyncio.to_thread(start_round, config)
             return ToolResult(

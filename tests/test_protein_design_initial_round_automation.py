@@ -231,7 +231,7 @@ async def test_qwen_pipeline_tool_launches_once_and_does_not_poll_apis(profile, 
         return {"state": "starting", "run_dir": str(config.work_dir / config.name)}
 
     monkeypatch.setattr("opendde_harness.plugin.protein_design.tools.workflow.start_round", launch)
-    result = await tool.execute(pdb_path=str(pdb), name="run1", user_confirmed=True)
+    result = await tool.execute(config_path=str(profile), pdb_path=str(pdb), name="run1", user_confirmed=True)
     assert json.loads(result.model_text)["state"] == "starting"
     assert len(launched) == 1 and launched[0].generators["ppiflow"].request["antigen_pdb"] == "/shared/input.pdb"
     assert "protein_design_status" in registry.tool_names()

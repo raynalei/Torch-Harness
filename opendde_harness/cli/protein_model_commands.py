@@ -159,7 +159,24 @@ def register_models(
             raise ValueError("choose exactly one of --local-defaults or --services-file")
         path = (opendde_config or get_config_path()).expanduser().resolve()
         if services_file:
-            values = _object_file(services_file)
+            if services_file.suffix.lower() in {".yaml", ".yml"}:
+                import yaml
+
+                values = yaml.safe_load(services_file.read_text())
+                if not isinstance(values, dict):
+                    raise ValueError("deployment YAML must contain an object")
+            else:
+                values = _object_file(services_file)
+
+            def incomplete(value):
+                if isinstance(value, dict):
+                    return any(incomplete(item) for item in value.values())
+                if isinstance(value, list):
+                    return any(incomplete(item) for item in value)
+                return isinstance(value, str) and "__REQUIRED_" in value
+
+            if incomplete(values):
+                raise ValueError("fill all __REQUIRED_ deployment placeholders before importing")
             section = _section(values) if "plugins" in values else values
             settings = {key: section[key] for key in SETTINGS_KEYS if key in section}
             registrations = section.get("model_services", {} if settings else section)

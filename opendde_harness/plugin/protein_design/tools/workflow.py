@@ -15,6 +15,7 @@ from opendde_harness.plugin.context import PluginContext
 
 from ..initial_round.automation import list_rounds, prepare_run, resume_round, round_status, start_round
 from ..initial_round.config import InitialRoundConfig
+from ..initial_round.defaults import load_deployment_defaults
 from ..initial_round.task_inputs import DesignTask, prepare_design_task
 from ..scientific_agent.backends.analysis import analyze_evolution, analyze_structure, apply_mutations, rank_candidates
 from ..scientific_agent.backends.developability import assess_developability
@@ -196,29 +197,25 @@ class WorkflowTool(Tool):
             elif self.action == "start":
                 if kwargs.get("user_confirmed") is not True:
                     raise ValueError("authorize the scientific inputs and model execution before starting")
+                deployment = load_deployment_defaults(self.config)
                 if kwargs.get("task") is not None:
                     if any(kwargs.get(key) is not None for key in ("run_config", "config_path", "pdb_path")):
                         raise ValueError("task is mutually exclusive with run_config, config_path and pdb_path")
                     task = dict(kwargs["task"])
                     if kwargs.get("name"):
                         task["name"] = kwargs["name"]
-                    config = await asyncio.to_thread(prepare_design_task, task, self.config, planner_layout="two_stage")
+                    config = await asyncio.to_thread(prepare_design_task, task, deployment, planner_layout="two_stage")
                     result = await asyncio.to_thread(start_round, config)
                     return ToolResult(json.dumps(result, allow_nan=False), "Workflow started", retryable=False)
                 if kwargs.get("run_config") is not None and kwargs.get("config_path"):
                     raise ValueError("supply run_config or config_path, not both")
-                value = (
-                    kwargs.get("run_config")
-                    or kwargs.get("config_path")
-                    or self.config.get("workflow_config")
-                    or self.config.get("initial_round_config")
-                )
+                value = kwargs.get("run_config") or kwargs.get("config_path")
                 if value is None:
                     raise ValueError("assemble run_config from known inputs or select a workflow_config profile")
                 config = prepare_workflow(
                     value,
-                    registrations=self.config.get("model_services"),
-                    plugin_config=self.config,
+                    registrations=deployment.get("model_services"),
+                    plugin_config=deployment,
                     pdb_path=Path(kwargs["pdb_path"]) if kwargs.get("pdb_path") else None,
                     name=kwargs.get("name"),
                 )

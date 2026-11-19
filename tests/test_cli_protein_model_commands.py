@@ -222,3 +222,30 @@ def test_replacing_static_defaults_requires_explicit_flag(tmp_path):
     assert invoke(path, "register", "--services-file", str(source)).exit_code == 1
     assert json.loads(path.read_text()) == original
     assert invoke(path, "register", "--services-file", str(source), "--replace-existing").exit_code == 0
+
+
+def test_cluster_deployment_yaml_imports_confirmed_native_contract(tmp_path):
+    from pathlib import Path
+
+    source = tmp_path / "deployment.yaml"
+    content = (Path(__file__).resolve().parents[1] / "docs/examples/cluster_deployment.yaml").read_text()
+    source.write_text(content)
+    path = tmp_path / "config.json"
+    source.write_text(content)
+    result = invoke(path, "register", "--services-file", str(source))
+    assert result.exit_code == 0, result.output
+    settings = json.loads(path.read_text())["plugins"]["config"]["protein-design"]
+    assert len(settings["model_services"]) == 7
+    assert (
+        settings["workflow_defaults"]["evaluation"]["dockq_python"]
+        == "/lustre/grp/cmclab/leiy/conda_envs/ppi_env/bin/python"
+    )
+    assert all(not model["request_defaults"] for model in settings["model_services"].values())
+
+
+def test_unfilled_deployment_placeholder_does_not_modify_configuration(tmp_path):
+    source = tmp_path / "deployment.yaml"
+    source.write_text("model_services: {score: {kind: torchscore, service: {url: __REQUIRED_URL__}}}")
+    path = tmp_path / "config.json"
+    assert invoke(path, "register", "--services-file", str(source)).exit_code == 1
+    assert not path.exists()

@@ -45,9 +45,19 @@ def prepare_run(
             plugin_config = load_config().plugins.config.get("protein-design", {})
         else:
             plugin_config = {}
-    from .defaults import deployment_settings, workflow_values
+    from .defaults import deployment_settings, load_deployment_defaults, workflow_values
 
+    plugin_config = load_deployment_defaults(plugin_config)
     plugin_config = deployment_settings(plugin_config)
+    # Deployment fallback must not turn an explicit legacy single round into autonomous.
+    if "autonomous" not in value:
+        value["autonomous"] = None
+    explicit_evaluation = value.get("evaluation", {})
+    if value.get("autonomous") is None and "scoring_backend" not in explicit_evaluation:
+        configured = {kind for kind in ("af3score", "torchscore") if explicit_evaluation.get(kind) is not None}
+        if configured:
+            explicit_evaluation["scoring_backend"] = choose_scorer(None, configured, set())
+
     value = workflow_values(value, plugin_config)
     aliases = value.pop("model_aliases", {})
     evaluation = value.setdefault("evaluation", {})

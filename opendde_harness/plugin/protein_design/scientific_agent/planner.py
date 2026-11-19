@@ -317,7 +317,13 @@ async def score_candidates(runner, candidates):
             candidate.pop("error", None)
             await runner.score(candidate)
             candidate["diagnostics"] = analyze(runner, candidate)
-            candidate["metrics"]["ranking_score"] = 100 * candidate["metrics"][runner.config.evaluation.score_metric]
+            from ..initial_round.autonomous import rank_score
+
+            ranking = rank_score(candidate, runner.config.evaluation.score_metric)
+            if ranking is not None:
+                candidate["metrics"]["ranking_score"] = ranking
+            else:
+                candidate["metrics"].pop("ranking_score", None)
             # Across the whole lineage, unchanged structures are not fresh experiments.
             if any(
                 other is not candidate
@@ -349,6 +355,8 @@ async def run_analysis(runner, candidate, skill):
         result = {
             "available": True,
             "method": "rosetta_residue_pair_energies",
+            "rosetta_interface_dg": candidate["metrics"].get("rosetta_interface_dg"),
+            "ranking_score": candidate["metrics"].get("ranking_score"),
             "structure_basis": "generated",
             "energies": candidate["interface_residue_energies"],
         }

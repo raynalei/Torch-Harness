@@ -26,6 +26,7 @@ class TorchCraftAdapter(RoundModel):
     hotspot_numbering: Literal["sequence_0_based", "sequence_1_based", "pdb_residue_id"]
     csv_id_column: str = Field(min_length=1)
     csv_sequence_column: str = Field(min_length=1)
+    csv_optional: bool = False
     csv_extra_columns: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -73,9 +74,9 @@ def prepare_design_task(task, settings, *, planner_layout=None):
     from .automation import prepare_run
 
     task = DesignTask.model_validate(task)
-    from .defaults import deployment_settings
+    from .defaults import load_deployment_defaults, server_default_settings
 
-    settings = deployment_settings(settings)
+    settings = server_default_settings(load_deployment_defaults(settings))
     validate_settings(settings)
     profile = settings.get("design_profiles", {}).get(task.design_type)
     if profile is None:
@@ -158,13 +159,7 @@ def prepare_design_task(task, settings, *, planner_layout=None):
     ):
         raise ValueError("positive generator sample counts must sum to initial_samples")
     identity = fingerprint(
-        {
-            "task": task.model_dump(mode="json"),
-            "source": str(source),
-            "sha256": source_hash,
-            "settings": settings,
-            "planner_layout": planner_layout,
-        }
+        {"task": task.model_dump(mode="json"), "source": str(source), "sha256": source_hash, "settings": settings}
     )
     name = task.name or "design_" + identity[:16]
     work = Path(value["work_dir"])
@@ -217,27 +212,39 @@ def prepare_design_task(task, settings, *, planner_layout=None):
                     raise ValueError("TorchCraft requires explicit hotspots for a new target")
                 adapter = TorchCraftAdapter.model_validate(settings.get("target_adapters", {}).get("torchcraft", {}))
                 csv_path = inputs / "target.csv"
+                csv_needed = task.target_sequence_csv is not None or not adapter.csv_optional
                 if task.target_sequence_csv is not None:
                     csv_source = task.target_sequence_csv.expanduser().resolve()
                     files.remote(csv_source)
-                    text = csv_source.read_text()
-                    rows = list(csv.DictReader(io.StringIO(text)))
-                    if len(rows) != 1 or rows[0].get(adapter.csv_sequence_column) != sequence:
-                        raise ValueError("target sequence CSV does not match the new observed target chain")
+                    rows = list(csv.DictReader(csv_source.open()))
+                    matches = [r for r in rows if r.get(adapter.csv_id_column) == source.stem]
+                    if len(matches) > 1:
+                        raise ValueError("target sequence CSV has duplicate rows for the source PDB filename")
+                    if not matches:
+                        csv_needed = False
+                        sequence_value = sequence
+                    else:
+                        sequence_value = matches[0].get(adapter.csv_sequence_column, "")
+                        if not sequence_value or set(sequence_value) - set("ACDEFGHIKLMNPQRSTVWY"):
+                            raise ValueError("target sequence CSV must contain a canonical full amino acid sequence")
+                        observed = iter(sequence_value)
+                        if not all(any(c == residue for c in observed) for residue in sequence):
+                            raise ValueError("target sequence CSV does not match the new observed target chain")
                 else:
+                    sequence_value = sequence
+                if csv_needed:
                     output = io.StringIO(newline="")
                     fields = [adapter.csv_id_column, adapter.csv_sequence_column, *adapter.csv_extra_columns]
                     csv_writer = csv.DictWriter(output, fieldnames=fields, lineterminator="\n")
                     csv_writer.writeheader()
                     csv_writer.writerow(
                         {
-                            adapter.csv_id_column: name,
-                            adapter.csv_sequence_column: sequence,
+                            adapter.csv_id_column: Path(normalized_path).stem,
+                            adapter.csv_sequence_column: sequence_value,
                             **adapter.csv_extra_columns,
                         }
                     )
-                    text = output.getvalue()
-                _stable_text(csv_path, text)
+                    _stable_text(csv_path, output.getvalue())
                 indices = [
                     ids[i][0]
                     if adapter.hotspot_numbering == "pdb_residue_id"
@@ -248,10 +255,11 @@ def prepare_design_task(task, settings, *, planner_layout=None):
                     mode="vhh" if task.design_type == "vhh" else "mini_binder",
                     name=name,
                     pdb_path=normalized_path,
-                    target_full_seq=files.remote(csv_path),
                     hotspot_indices=",".join(str(i) for i in indices),
                     num_designs=counts[kind],
                 )
+                if csv_needed:
+                    request["target_full_seq"] = files.remote(csv_path)
                 if task.framework_cif_path is not None:
                     request["framework_cif_path"] = task.framework_cif_path
                 if task.fixed_positions is not None:

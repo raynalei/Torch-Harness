@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
-from ..initial_round.autonomous import sample_count
+from ..initial_round.autonomous import rank_score, sample_count
 from ..initial_round.policy import candidate_stage, rule_actions
 from ..initial_round.storage import write_json
 from . import planner
@@ -38,7 +38,11 @@ async def evaluate_stage(runner, candidate, stage):
             fixed_positions=candidate.get("interface_fixed_positions"),
         ),
     }
-    candidate["metrics"]["ranking_score"] = 100 * candidate["metrics"][runner.config.evaluation.score_metric]
+    ranking = rank_score(candidate, runner.config.evaluation.score_metric)
+    if ranking is None:
+        candidate["metrics"].pop("ranking_score", None)
+    else:
+        candidate["metrics"]["ranking_score"] = ranking
     evaluators = ["torchscore", "rosetta-interface"]
     if stage == 2:
         for skill in planner.EVALUATION_SKILLS:
@@ -67,7 +71,11 @@ def stage_options(runner, candidates, stage):
 async def final_validation(runner, candidate, reason):
     # This is validation, not a third planner decision or an inherited pass.
     await runner.score(candidate)
-    candidate["metrics"]["ranking_score"] = 100 * candidate["metrics"][runner.config.evaluation.score_metric]
+    ranking = rank_score(candidate, runner.config.evaluation.score_metric)
+    if ranking is None:
+        candidate["metrics"].pop("ranking_score", None)
+    else:
+        candidate["metrics"]["ranking_score"] = ranking
     await runner.refold(candidate)
     candidate.update(
         planner_closed=True, planner_reason=reason, scientific_phase="final_validation", scientific_decision_stage=2

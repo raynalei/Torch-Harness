@@ -29,6 +29,7 @@ STRUCTURE_METRICS = (
 INTERFACE_METRICS = (
     "rosetta_interface_score",
     "rosetta_interface_dg",
+    "ranking_score",
     "ipsae",
     "total_binder_contacts",
     "cdr_contact_fraction",
@@ -360,7 +361,7 @@ def build_context(
         context["decision_mode"] = "qwen_planner"
         context["thresholds_are_advisory"] = True
         context["guidance"] = {
-            "planner": "Choose stop (discard poor candidate), continue (TorchFold/DockQ, then completion), partial_flow, torchopt or analysis from actual capabilities. Rule recommendations are fallback advice only. Read all measured evidence and preserve task constraints. Optimization requires the mutation selector. Missing evidence is unknown."
+            "planner": "Choose stop (discard poor candidate), continue (TorchFold/DockQ, then completion), partial_flow, torchopt or analysis from actual capabilities. Rule recommendations are fallback advice only. Read all measured evidence and preserve task constraints. Optimization requires the mutation selector. Missing evidence is unknown. ranking_score=100*selected_ipTM-rosetta_interface_dg when dG_separated is measured; unknown dG is unranked, never zero. Use ranking as evidence, not a new routing threshold."
         }
         context["evaluation_skills"] = evaluation_skill_guidance(evaluation_stage)
         if evaluation_stage is not None:
@@ -391,13 +392,22 @@ def build_context(
                 row["measured_metrics"] = {
                     k: v
                     for k, v in row["measured_metrics"].items()
-                    if k in {score_metric, score_metric.removesuffix("_iptm") + "_ptm", "rosetta_interface_score"}
+                    if k
+                    in {
+                        score_metric,
+                        score_metric.removesuffix("_iptm") + "_ptm",
+                        "rosetta_interface_score",
+                        "rosetta_interface_dg",
+                        "ranking_score",
+                    }
                 }
                 row["interface"]["metrics"] = {
-                    k: v for k, v in row["interface"]["metrics"].items() if k.startswith("rosetta_")
+                    k: v
+                    for k, v in row["interface"]["metrics"].items()
+                    if k.startswith("rosetta_") or k == "ranking_score"
                 }
             context["guidance"] = {
-                "planner": "First of two scientific decisions. Evaluation evidence is exclusively TorchScore and Rosetta. Choose stop, advance to stage-two analysis (continue/analysis), or one compatible optimization. Native developability/contact/lineage assessments are not performed until stage two. Rule recommendations are advisory."
+                "planner": "First of two scientific decisions. Evaluation evidence is exclusively TorchScore and Rosetta. Choose stop, advance to stage-two analysis (continue/analysis), or one compatible optimization. Native developability/contact/lineage assessments are not performed until stage two. Rule recommendations are advisory. ranking_score=100*selected_ipTM-rosetta_interface_dg uses measured dG_separated; missing dG is unknown, never zero."
             }
         elif evaluation_stage == 2:
             context["guidance"] = {

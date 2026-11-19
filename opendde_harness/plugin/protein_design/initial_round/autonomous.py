@@ -57,8 +57,10 @@ def sample_count(source, request):
 
 def quality(candidate, score_metric):
     metrics = candidate["metrics"]
+    ranking = rank_score(candidate, score_metric)
+    # Finite sort-only sentinel; an unknown dG never becomes a measured metric.
     return [
-        rank_score(candidate, score_metric),
+        ranking if ranking is not None else -1e300,
         metrics.get(score_metric, -1),
         metrics.get(score_metric.removesuffix("_iptm") + "_ptm", -1),
         metrics.get("design_refold_dockq", -1),
@@ -66,7 +68,10 @@ def quality(candidate, score_metric):
 
 
 def rank_score(candidate, score_metric):
-    return 100 * candidate["metrics"][score_metric]
+    dg = candidate["metrics"].get("rosetta_interface_dg")
+    if dg is None:
+        return None
+    return 100 * candidate["metrics"][score_metric] - dg
 
 
 def _partial_request(runner, candidate, name, regions=None):
@@ -284,7 +289,11 @@ async def evaluate(runner, candidates):
                 )
             else:
                 candidate["status"] = "terminated" if actions == ["terminate"] else "rejected"
-            candidate["metrics"]["ranking_score"] = rank_score(candidate, runner.config.evaluation.score_metric)
+            score = rank_score(candidate, runner.config.evaluation.score_metric)
+            if score is not None:
+                candidate["metrics"]["ranking_score"] = score
+            else:
+                candidate["metrics"].pop("ranking_score", None)
         except SubmissionUncertainError:
             raise
         except Exception as exc:

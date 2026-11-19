@@ -269,3 +269,11 @@ def test_large_history_reports_omissions_and_preserves_failed_action_states():
     assert context["compression"]["omitted_history"] == 22
     assert context["history_summary"] == {"partial_flow": 30}
     assert all(row["state"] == "failed" and row["results"] == [] for row in context["history"])
+
+
+def test_context_extract_retains_interface_dg_and_ranking():
+    value = candidate()
+    value["metrics"].update(rosetta_interface_dg=-12.0, ranking_score=82.0)
+    projection = extract(value, score_metric="torchscore_iptm")
+    assert projection["interface"]["metrics"]["rosetta_interface_dg"] == -12.0
+    assert projection["interface"]["metrics"]["ranking_score"] == 82.0
