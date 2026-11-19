@@ -27,7 +27,7 @@ Rosetta dG_separated becomes rosetta_interface_dg; ranking_score is
 Residue-pair energy sums still drive fixed-point selection separately.
 
 Prefer `protein_design_start(task=...)` with new pdb_path, design_type, explicit hotspots and
-initial_samples. Collect the user’s target_chain and ordered binder_chains: one binder for minibinder, one heavy chain for VHH, or [heavy, light] for paired antibody. Ask for any missing chain IDs. A target-only PDB needs only the target chain; output chains are supplied by the user. Persistent workflow_defaults/design_profiles
+initial_samples. Collect the user’s target_chain and ordered binder_chains: one binder for minibinder, one heavy chain for VHH, or [heavy, light] for paired antibody. Ask for any missing chain IDs. A target-only PDB needs only the target chain; output chains are supplied by the user. PPIFlow binder does not accept framework_dir, fixed_positions, or num_timesteps. Persistent workflow_defaults/design_profiles
 and registered request_defaults supply fixed services, sbatch environment, source/
 weight paths, shared mappings and output/DockQ settings. No per-task YAML is needed.
 Choose task.generators from the prompt: ["ppiflow"] or ["torchcraft"]. Neither is

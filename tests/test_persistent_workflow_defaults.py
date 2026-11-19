@@ -322,6 +322,8 @@ def test_other_design_types_use_their_own_static_profile(task, settings, design)
         profile["generators"]["torchcraft"]["request"] = {"mode": "mini_binder", "design_length": 60}
     settings["design_profiles"][design] = profile
     task["design_type"] = design
+    if design == "minibinder":
+        task.pop("framework_dir")
     if design == "antibody":
         task["binder_chains"] = ["B", "L"]
     config = prepare_design_task(task, settings)
@@ -357,6 +359,8 @@ def test_target_only_compact_workflow_uses_user_chains(task, settings, design, s
     for generator in profile["generators"].values():
         generator.pop("chains")
     if design == "minibinder":
+        task.pop("framework_dir")
+        settings["model_services"]["ppiflow"]["request_defaults"] = {"num_timesteps": 200}
         profile["generators"]["ppiflow"]["request"] = {
             "mode": "binder",
             "samples_min_length": 50,
@@ -369,6 +373,10 @@ def test_target_only_compact_workflow_uses_user_chains(task, settings, design, s
         profile["generators"]["ppiflow"]["request"] = {"mode": "antibody", "cdr_length": "CDRH3,10-20,CDRL3,9-11"}
     settings["design_profiles"][design] = profile
 
+    if design == "minibinder":
+        for field in ("fixed_positions", "framework_dir"):
+            with pytest.raises(ValueError, match="PPIFlow binder does not support"):
+                prepare_design_task({**task, field: "explicit"}, settings)
     config = prepare_design_task(task, settings)
     assert set(config.generators) == set(sources)
     for generator in config.generators.values():
@@ -377,6 +385,7 @@ def test_target_only_compact_workflow_uses_user_chains(task, settings, design, s
         assert generator.chains.refold_map == {chain: chain for chain in ["D", *binders]}
     request = config.generators["ppiflow"].request
     assert {field: request[field] for field in ppiflow_chains} == ppiflow_chains
+    assert "num_timesteps" not in request
     assert ("light_chain" in request) == (design == "antibody")
     path = SharedFiles(config.path_mappings).local(request["input_pdb" if design == "minibinder" else "antigen_pdb"])
     assert chain_sequences(path) == {"D": "GGGGGG"}
@@ -395,6 +404,9 @@ def test_partial_flow_keeps_task_fixed_points_in_addition_to_energy_fixed_points
 
     task.update(generators=["ppiflow"], fixed_positions="B3")
     config = prepare_design_task(task, settings)
+    generator = config.generators["ppiflow"]
+    assert "fixed_positions" not in generator.request
+    assert generator.partial_flow.fixed_positions == "B3"
     runner = InitialRoundRunner(config)
     candidate = {
         "source": "ppiflow",
@@ -504,6 +516,7 @@ def test_minibinder_prompt_selects_generator_and_native_mode(task, settings, sou
     profile["generators"]["torchcraft"]["request"] = {"mode": "mini_binder", "design_length": 60}
     settings["design_profiles"]["minibinder"] = profile
     task.update(design_type="minibinder", generators=[source])
+    task.pop("framework_dir")
     config = prepare_design_task(task, settings)
     assert set(config.generators) == {source}
     assert config.generators[source].request["mode"] == ("binder" if source == "ppiflow" else "mini_binder")

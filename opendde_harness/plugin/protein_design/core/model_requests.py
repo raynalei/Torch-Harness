@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal
 
 from pydantic import Field, StrictBool, StrictFloat, StrictInt, TypeAdapter, model_validator
 
@@ -121,11 +121,47 @@ class TorchOptimizationRequest(ContractModel):
         return self
 
 
+# Match the deployed PPIFlow DesignRequest model.
+PPIFLOW_DEFAULT_SAMPLES = 5
+_PPIFLOW_COMMON_FIELDS = {"mode", "name", "config", "model_weights", "output_dir", "samples_per_target"}
+_PPIFLOW_ANTIGEN_FIELDS = {"antigen_pdb", "antigen_chain", "framework_dir", "heavy_chain"}
+_PPIFLOW_PARTIAL_FIELDS = {
+    "complex_pdb",
+    "antigen_chain",
+    "heavy_chain",
+    "fixed_positions",
+    "cdr_position",
+    "start_t",
+}
+_PPIFLOW_REQUIRED_FIELDS = {
+    "antibody": _PPIFLOW_ANTIGEN_FIELDS | {"light_chain", "cdr_length"},
+    "nanobody": _PPIFLOW_ANTIGEN_FIELDS,
+    "binder": {"input_pdb", "target_chain", "binder_chain", "samples_min_length", "samples_max_length"},
+    "partial_antibody": _PPIFLOW_PARTIAL_FIELDS | {"light_chain"},
+    "partial_nanobody": _PPIFLOW_PARTIAL_FIELDS,
+}
+_PPIFLOW_ALLOWED_FIELDS = {
+    mode: required
+    | _PPIFLOW_COMMON_FIELDS
+    | {"specified_hotspots"}
+    | ({"num_timesteps"} if mode != "binder" else set())
+    | ({"cdr_length"} if mode == "nanobody" else set())
+    for mode, required in _PPIFLOW_REQUIRED_FIELDS.items()
+}
+
+
+def ppiflow_defaults_for_mode(defaults: dict, mode: str | None) -> dict:
+    allowed = _PPIFLOW_ALLOWED_FIELDS.get(mode)
+    if allowed is None:
+        return defaults
+    return {key: value for key, value in defaults.items() if key in allowed}
+
+
 class PPIFlowRequest(ContractModel):
     mode: Literal["antibody", "nanobody", "binder", "partial_antibody", "partial_nanobody"]
-    name: str
-    samples_per_target: int = Field(default=1, ge=1, le=1000)
-    num_timesteps: int | None = Field(default=None, ge=1)
+    name: str = Field(default="target", pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$")
+    samples_per_target: int = Field(default=PPIFLOW_DEFAULT_SAMPLES, ge=1, le=1000)
+    num_timesteps: int | None = Field(default=None, ge=1, le=2000)
     config: str | None = None
     model_weights: str | None = None
     output_dir: str | None = None
@@ -142,36 +178,19 @@ class PPIFlowRequest(ContractModel):
     samples_min_length: int | None = Field(default=None, ge=1)
     samples_max_length: int | None = Field(default=None, ge=1)
     complex_pdb: str | None = None
-    fixed_positions: Any | None = None
-    cdr_position: Any | None = None
-    start_t: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    fixed_positions: str | None = None
+    cdr_position: str | None = None
+    start_t: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
 
     @model_validator(mode="after")
     def required_inputs(self):
-        required = {
-            "antibody": ("antigen_pdb", "antigen_chain", "framework_dir", "heavy_chain", "light_chain", "cdr_length"),
-            "nanobody": ("antigen_pdb", "antigen_chain", "framework_dir", "heavy_chain"),
-            "binder": ("input_pdb", "target_chain", "samples_min_length", "samples_max_length"),
-            "partial_antibody": (
-                "complex_pdb",
-                "antigen_chain",
-                "heavy_chain",
-                "light_chain",
-                "fixed_positions",
-                "cdr_position",
-                "start_t",
-            ),
-            "partial_nanobody": (
-                "complex_pdb",
-                "antigen_chain",
-                "heavy_chain",
-                "fixed_positions",
-                "cdr_position",
-                "start_t",
-            ),
-        }[self.mode]
-        if any(getattr(self, key) is None or getattr(self, key) == "" for key in required):
-            raise ValueError(f"PPIFlow {self.mode} requires {', '.join(required)}")
+        fields = self.model_dump(exclude_none=True).keys()
+        unsupported = fields - _PPIFLOW_ALLOWED_FIELDS[self.mode]
+        missing = _PPIFLOW_REQUIRED_FIELDS[self.mode] - fields
+        if unsupported or missing:
+            raise ValueError(
+                f"PPIFlow {self.mode} unsupported fields: {sorted(unsupported)}; missing fields: {sorted(missing)}"
+            )
         if self.samples_min_length and self.samples_max_length and self.samples_min_length > self.samples_max_length:
             raise ValueError("samples_min_length exceeds samples_max_length")
         return self

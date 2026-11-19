@@ -45,6 +45,7 @@ def prepare_run(
             plugin_config = load_config().plugins.config.get("protein-design", {})
         else:
             plugin_config = {}
+    from ..core.model_requests import ppiflow_defaults_for_mode
     from .defaults import deployment_settings, load_deployment_defaults, workflow_values
 
     plugin_config = load_deployment_defaults(plugin_config)
@@ -85,7 +86,13 @@ def prepare_run(
         if model:
             if generator.get("service") is None:
                 generator["service"] = copy.deepcopy(model["service"])
-            generator["request"] = {**copy.deepcopy(model.get("request_defaults", {})), **generator.get("request", {})}
+            request = generator.get("request", {})
+            request_defaults = model.get("request_defaults", {})
+            if kind == "ppiflow":
+                request_defaults = ppiflow_defaults_for_mode(
+                    request_defaults, request.get("mode", request_defaults.get("mode"))
+                )
+            generator["request"] = {**copy.deepcopy(request_defaults), **request}
     configured = {kind for kind in ("af3score", "torchscore") if evaluation.get(kind) is not None}
     registered = {item.get("kind") for item in known.values() if item.get("kind") in {"af3score", "torchscore"}}
     evaluation["scoring_backend"] = choose_scorer(

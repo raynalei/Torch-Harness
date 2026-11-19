@@ -77,13 +77,14 @@ async def planner_choice(context, *, model=None):
 
 def mutation_constraints(runner, candidate):
     """Use recorded task constraints, not a planner's replacement for them."""
-    chains = runner.config.generators[candidate["source"]].chains
+    generator = runner.config.generators[candidate["source"]]
+    chains = generator.chains
     sequences = {c: candidate["chains"][c] for c in chains.binder}
     if candidate.get("mutation_constraints"):
         saved = candidate["mutation_constraints"]
         return sequences, saved["fixed_positions"], saved["mask_positions"]
     atoms = structure(runner.files.local(candidate["generated_structure"]))
-    request = candidate.get("generation_request", runner.config.generators[candidate["source"]].request)
+    request = generator.refinement_request(candidate.get("generation_request", generator.request))
     fixed = selection_positions(request.get("fixed_positions"), atoms, chains.binder)
     allowed = selection_positions(request.get("cdr_position"), atoms, chains.binder)
     return (
