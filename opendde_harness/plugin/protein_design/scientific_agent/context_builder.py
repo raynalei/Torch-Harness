@@ -213,7 +213,12 @@ def decision_guidance(actions):
         sections = text.split("\n## ")
         text = sections[0]
         if name == "generation_strategy.md":
-            wanted = {"partial_flow": "Partial redesign", "torchopt": "TorchOptimization"}
+            wanted = {
+                "partial_flow": "Partial redesign",
+                "torchopt": "TorchOptimization",
+                "rfd4_partial": "RFD4 Partial Flow",
+                "proteinmpnn": "ProteinMPNN",
+            }
             text += "".join(
                 "\n## " + section
                 for section in sections[1:]
@@ -361,7 +366,7 @@ def build_context(
         context["decision_mode"] = "qwen_planner"
         context["thresholds_are_advisory"] = True
         context["guidance"] = {
-            "planner": "Choose stop (discard poor candidate), continue (TorchFold/DockQ, then completion), partial_flow, torchopt or analysis from actual capabilities. Rule recommendations are fallback advice only. Read all measured evidence and preserve task constraints. Optimization requires the mutation selector. Missing evidence is unknown. ranking_score=100*selected_ipTM-rosetta_interface_dg when dG_separated is measured; unknown dG is unranked, never zero. Use ranking as evidence, not a new routing threshold."
+            "planner": "Choose stop (discard poor candidate), continue (TorchFold/DockQ, then completion), partial_flow, torchopt, rfd4_partial, proteinmpnn or analysis from actual capabilities. Rule recommendations are fallback advice only. Read all measured evidence and preserve task constraints. Optimization requires the mutation selector. Missing evidence is unknown. ranking_score=100*selected_ipTM-rosetta_interface_dg when dG_separated is measured; unknown dG is unranked, never zero. Use ranking as evidence, not a new routing threshold."
         }
         context["evaluation_skills"] = evaluation_skill_guidance(evaluation_stage)
         if evaluation_stage is not None:
@@ -420,7 +425,9 @@ def build_context(
                 for chain, residue, _ in row["interface"]["lowest_residue_energies"]
             ]
         for i, option in enumerate(options):
-            option.update(_fields(legal_options[i], ("evaluation_skill", "phase", "mask_enforcement")))
+            option.update(
+                _fields(legal_options[i], ("evaluation_skill", "phase", "mask_enforcement", "structure_realization"))
+            )
     return compress(context, projected, options, max_tokens=max_tokens)
 
 

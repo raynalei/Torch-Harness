@@ -8,7 +8,8 @@ are advice and fallback; see [the planner guide](autonomous-feedback.md).
 
 ## Skill inventory
 
-The bundled catalog retains protein-design and 15 specialists. Executable
+The bundled catalog retains protein-design and its analysis specialists, plus
+rfd4-design and proteinmpnn-design. Executable
 analysis skills are developability-filter, structure-analysis, epitope-analysis,
 evolutionary-analysis and post-filter. Before the second-stage decision, the context builder reads their trusted installed
 SKILL.md files. First-stage guidance contains only TorchScore/Rosetta evaluation
@@ -17,8 +18,9 @@ legacy iterative snapshots retain their explicit analysis selection.
 
 Generation and mutation skills use registered Torch model APIs and the native
 mutation selector. Public PDB/UniProt/PubMed lookups remain independent tools.
-Antibody/mini-binder inverse folding and ESM2 remain explicitly unavailable reference
-skills because there is no registered backend. EpiMatrix is a reserved interface,
+Legacy antibody/mini-binder inverse-folding and ESM2 reference skills remain
+capability gated. RFD4 native inverse_folding is available through its independent
+tool; it is not a separate autonomous optimization action. EpiMatrix is a reserved interface,
 never replaced by a fabricated immunogenicity score. No OpenDDE compute is used.
 
 ## Extract → enrich → compress
@@ -57,11 +59,16 @@ submission requests are never passed to Qwen.
 
 ## Decisions and recovery
 
-Planner actions are stop, continue, analysis, partial_flow and torchopt. Analysis
+Initial generators are PPIFlow, TorchCraft or RFD4 (native binder spec required).
+Planner actions are stop, continue, analysis, partial_flow, torchopt, rfd4_partial
+and proteinmpnn, filtered by current capabilities. Analysis
 results return to the context before the next decision. Optimization records the
 mutation selector arguments, validated partition and actual model request. Native
-Partial Flow receives encoded ranges; TorchOptimization masks currently apply to
-output validation only. A first-stage optimization child gets fresh stage-two evaluation. A second-stage
+PPIFlow Partial Flow receives encoded ranges. TorchOptimization, RFD4 Partial Flow
+and ProteinMPNN enforce sequence masks by output validation. ProteinMPNN returns
+FASTA; an admitted sequence is first realized with TorchFold before TorchScore.
+Its final DockQ reference is this realized pose. Narrow masks may yield no admissible
+output because the native APIs do not accept residue-mask fields. A first-stage optimization child gets fresh stage-two evaluation. A second-stage
 optimization child gets fresh TorchScore and final TorchFold/DockQ, without a third
 Qwen decision or inherited parent analysis.
 

@@ -172,6 +172,7 @@ class SlurmService(ServiceConnection):
                 "COMPLETED",
                 "CANCELLED",
                 "FAILED",
+                "INTERRUPTED",
                 "TIMEOUT",
                 "OUT_OF_MEMORY",
                 "NODE_FAIL",
@@ -338,6 +339,7 @@ class SlurmService(ServiceConnection):
                 )
             if state in {
                 "FAILED",
+                "INTERRUPTED",
                 "CANCELLED",
                 "CANCELED",
                 "TIMEOUT",

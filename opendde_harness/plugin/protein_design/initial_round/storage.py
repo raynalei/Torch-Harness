@@ -88,7 +88,10 @@ def status_profile_identity(value):
             workflow = canonical
     services = [g.get("service") for g in workflow.get("generators", {}).values() if isinstance(g, dict)]
     evaluation = workflow.get("evaluation", {})
-    services.extend(evaluation.get(kind) for kind in ("af3score", "torchscore", "torchfold", "rosetta", "torchopt"))
+    services.extend(
+        evaluation.get(kind)
+        for kind in ("af3score", "torchscore", "torchfold", "rosetta", "torchopt", "rfd4", "proteinmpnn")
+    )
     for service in services:
         if isinstance(service, dict) and "url" in service:
             service.pop("status_field", None)
@@ -184,6 +187,7 @@ def retry_failed_jobs(checkpoint):
         status = job.get("status", {})
         terminal = str(job.get("remote_status", "")).upper() in {
             "FAILED",
+            "INTERRUPTED",
             "CANCELLED",
             "CANCELED",
             "TIMEOUT",

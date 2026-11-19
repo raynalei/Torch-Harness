@@ -65,7 +65,11 @@ def analyze(runner, candidate):
             provenance_path = runner.root / "inputs" / "target-provenance.json"
             provenance = json.loads(provenance_path.read_text()) if provenance_path.is_file() else {}
             hotspots = ",".join(provenance.get("normalized_hotspots", []))
-            input_path = runner.config.generators["torchcraft"].request["pdb_path"]
+            input_path = (
+                runner.config.generators["torchcraft"].request["pdb_path"]
+                if "torchcraft" in runner.config.generators
+                else runner.files.remote(runner.root / "inputs" / "target.pdb")
+            )
         if not hotspots:
             raise ValueError("no explicit PDB hotspot provenance; TorchCraft hotspot index semantics are not assumed")
         input_atoms = structure(runner.files.local(input_path))

@@ -101,7 +101,7 @@ class WorkflowTool(Tool):
         return {
             "regions": "Supply user-confirmed CDR ranges for the exact pending candidate question and resume the saved workflow.",
             "context": "Read configured Torch-Harness model kinds, native skill capabilities and default workflow profile. No OpenDDE compute service or Docker setup is used.",
-            "start": "Start the authorized two-stage Qwen-planned Torch-Harness workflow (first evaluation: TorchScore and Rosetta only; second: full evaluation), with compact task inputs and persistent deployment defaults, or inline run_config/workflow_config. Choose task.generators from the user prompt: PPIFlow or TorchCraft; neither is mandatory. No per-task YAML or repeated deployment paths needed. Qwen selects analysis/continue/stop or optimizations using scientific context and mutation_selector; staged rules remain fallback. Uses registered PPIFlow/TorchCraft, TorchScore, TorchFold, direct Slurm PyRosetta (no Rosetta API) and compatible TorchOptimization; no initial-round option or compute URL is required. Preserve inputs and checkpoint identity on recovery.",
+            "start": "Start the authorized two-stage Qwen-planned Torch-Harness workflow (first evaluation: TorchScore and Rosetta only; second: full evaluation), with compact task inputs and persistent deployment defaults, or inline run_config/workflow_config. Choose task.generators from the user prompt: PPIFlow, TorchCraft or RFD4; none is mandatory. No per-task YAML or repeated deployment paths needed. Qwen selects analysis/continue/stop or optimizations using scientific context and mutation_selector; staged rules remain fallback. Uses registered PPIFlow/TorchCraft, TorchScore, TorchFold, direct Slurm PyRosetta (no Rosetta API) and compatible TorchOptimization, RFD4 Partial Flow and ProteinMPNN; no initial-round option or compute URL is required. Preserve inputs and checkpoint identity on recovery.",
             "status": "Read a workflow's saved status by run_dir; workers poll remote jobs automatically.",
             "resume": "Resume the same authorized workflow by run_dir, retaining completed scientific work and remote IDs.",
             "list": "Discover indexed Torch-Harness workflows after restarting the session.",
@@ -185,7 +185,7 @@ class WorkflowTool(Tool):
                         kind: {
                             "tool": f"protein_model_{kind}",
                             "configured": kind in standalone_kinds,
-                            "autonomous_integrated": False,
+                            "autonomous_integrated": True,
                         }
                         for kind in ("rfd4", "proteinmpnn")
                     },

@@ -57,7 +57,7 @@ def workflow_values(value, settings):
             key: merge_defaults(base.get("generators", {}).get(key, {}), generator)
             for key, generator in value["generators"].items()
         }
-    for kind in ("af3score", "torchscore", "torchfold", "rosetta", "torchopt"):
+    for kind in ("af3score", "torchscore", "torchfold", "rosetta", "torchopt", "rfd4", "proteinmpnn"):
         if kind in value.get("evaluation", {}):
             result["evaluation"][kind] = copy.deepcopy(value["evaluation"][kind])
     result.pop("design_type", None)

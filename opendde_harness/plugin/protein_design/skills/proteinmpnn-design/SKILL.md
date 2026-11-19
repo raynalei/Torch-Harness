@@ -9,8 +9,9 @@ metadata:
 # Independent ProteinMPNN calls
 
 Call `protein_model_list` for a configured proteinmpnn alias, then use
-`protein_model_proteinmpnn`. This standalone tool does not add ProteinMPNN to
-Qwen's autonomous optimization menu. It is independent of the retired OpenDDE
+`protein_model_proteinmpnn`. Independent calls return FASTA. The autonomous planner also offers proteinmpnn
+when compatible; it validates sequence masks on outputs and realizes an admitted
+sequence with TorchFold before TorchScore. It is independent of the retired OpenDDE
 compute service and its legacy SolubleMPNN tool.
 
 Required inputs are an absolute cluster pdb_path ending in .pdb, and design_chains

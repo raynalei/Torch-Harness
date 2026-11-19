@@ -64,6 +64,7 @@ class InitialRoundRunner:
         path_keys = {
             "ppiflow": ["antigen_pdb", "input_pdb", "framework_dir"],
             "torchcraft": ["pdb_path", "target_full_seq", "framework_cif_path"],
+            "rfd4": [],
         }
         target_sequences = []
         for source, generator in self.config.generators.items():
@@ -81,6 +82,18 @@ class InitialRoundRunner:
                     inputs = sorted(p for p in path.rglob("*") if p.is_file()) if path.is_dir() else [path]
                     for item in inputs:
                         self.input_hashes[f"{source}/{key}/{self.files.remote(item)}"] = digest(item)
+            if source == "rfd4":
+                root = self.config.evaluation.rfd4_input_root or generator.service.environment.get("RFD4_INPUTS")
+                if not root:
+                    raise ValueError("RFD4 initial generation requires its shared RFD4_INPUTS root")
+                names = generator.request["inputs"]
+                for relative in names if isinstance(names, list) else [names]:
+                    path = self.files.local(str(Path(root) / relative))
+                    if not path.exists():
+                        raise ValueError(f"RFD4 native input is not accessible: {path}")
+                    inputs = sorted(p for p in path.rglob("*") if p.is_file()) if path.is_dir() else [path]
+                    for item in inputs:
+                        self.input_hashes[f"rfd4/inputs/{self.files.remote(item)}"] = digest(item)
             if generator.fold_template is None:
                 continue
             # Validate template shape before submitting expensive GPU jobs.
@@ -137,7 +150,14 @@ class InitialRoundRunner:
         configs.update(
             {
                 name: getattr(self.config.evaluation, name)
-                for name in (self.config.evaluation.scoring_backend, "torchfold", "rosetta", "torchopt")
+                for name in (
+                    self.config.evaluation.scoring_backend,
+                    "torchfold",
+                    "rosetta",
+                    "torchopt",
+                    "rfd4",
+                    "proteinmpnn",
+                )
                 if getattr(self.config.evaluation, name) is not None
             }
         )
@@ -172,7 +192,7 @@ class InitialRoundRunner:
             payload,
             attach_id=self.attach_jobs.get(key),
             status_base="/v1/tasks"
-            if service == "rosetta" and self.services[service].config.backend == "api"
+            if service in {"rosetta", "rfd4", "proteinmpnn"} and self.services[service].config.backend == "api"
             else None,
         )
 
@@ -194,12 +214,25 @@ class InitialRoundRunner:
                 continue
             try:
                 if self.config.autonomous is not None:
-                    request = validate_request(source, {"name": self.config.name, **request}, omit_defaults=True)
+                    request = validate_request(
+                        source,
+                        request if source == "rfd4" else {"name": self.config.name, **request},
+                        omit_defaults=True,
+                    )
                 if self.config.autonomous is not None and round_index:
                     (self.root / f"round-{round_index}" / source).mkdir(parents=True, exist_ok=True)
-                result = await self.job(source, f"generate/{stage}", "/v1/designs", "design_id", request)
-                manifest = select(result, generator.candidates_field)
-                if manifest is None:
+                result = await self.job(
+                    source,
+                    f"generate/{stage}",
+                    "/v1/tasks" if source == "rfd4" else "/v1/designs",
+                    "task_id" if source == "rfd4" else "design_id",
+                    request,
+                )
+                if source == "rfd4":
+                    from .native_models import rfd4_structures
+
+                    paths = rfd4_structures(self, result, self.root / "rfd4-artifacts" / stage)
+                elif (manifest := select(result, generator.candidates_field)) is None:
                     paths = [
                         p
                         for p in output_files(result, generator.service, self.files)
@@ -224,6 +257,8 @@ class InitialRoundRunner:
                         raise ValueError(
                             f"{source}: structure chain IDs {sorted(sequences)} do not match {sorted(required)}"
                         )
+                    if any(sequences.get(c) != seq for c, seq in generator.expected_target_sequences.items()):
+                        raise ValueError("generator output target sequence differs from the current task target")
                     if self.config.autonomous is not None and round_index:
                         initial = next(c for c in candidates if c["source"] == source and not c.get("round_index"))
                         if any(sequences[c] != initial["chains"][c] for c in generator.chains.target):

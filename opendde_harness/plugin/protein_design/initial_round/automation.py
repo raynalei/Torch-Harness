@@ -96,12 +96,14 @@ def prepare_run(
     selected = evaluation["scoring_backend"]
     kinds = [selected, "torchfold"]
     if value.get("autonomous") is not None:
-        kinds.extend(["rosetta", "torchopt"])
+        kinds.extend(["rosetta", "torchopt", "rfd4", "proteinmpnn"])
     for kind in kinds:
         model = registration(kind, evaluation.get(kind))
         if model:
             if evaluation.get(kind) is None:
                 evaluation[kind] = copy.deepcopy(model["service"])
+            if kind == "rfd4" and not evaluation.get("rfd4_input_root"):
+                evaluation["rfd4_input_root"] = evaluation[kind].get("environment", {}).get("RFD4_INPUTS")
             defaults = copy.deepcopy(model.get("request_defaults", {}))
             if defaults:
                 option_key = kind + "_options"

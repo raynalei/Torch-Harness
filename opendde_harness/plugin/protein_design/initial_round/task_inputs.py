@@ -45,13 +45,14 @@ class DesignTask(RoundModel):
     hotspots: list[StrictInt | str]
     initial_samples: int = Field(ge=1, le=10000)
     name: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
-    generators: list[Literal["ppiflow", "torchcraft"]] | None = None
+    generators: list[Literal["ppiflow", "torchcraft", "rfd4"]] | None = None
     generator_samples: dict[str, int] | None = None
     framework_dir: str | None = None
     framework_cif_path: str | None = None
     fixed_positions: str | None = None
     generator_overrides: dict[str, dict] = Field(default_factory=dict)
     target_sequence_csv: Path | None = None
+    rfd4_inputs: str | None = None
 
 
 def _stable_text(path, text):
@@ -123,6 +124,8 @@ def prepare_design_task(task, settings, *, planner_layout=None):
     enabled = task.generators or list(value.get("generators", {}))
     if not enabled or len(enabled) != len(set(enabled)):
         raise ValueError("select at least one distinct configured generator")
+    if "rfd4" in enabled and "rfd4" not in value.get("generators", {}):
+        value.setdefault("generators", {})["rfd4"] = {"request": {}, "structure_glob": "*.pdb"}
     if set(enabled) - set(value.get("generators", {})) or set(task.generator_overrides) - set(enabled):
         raise ValueError("task requests a generator not configured in its design profile")
     value["generators"] = {
@@ -194,7 +197,17 @@ def prepare_design_task(task, settings, *, planner_layout=None):
             chains["target"] = [normalized_chain]
             # A template can carry another antigen's MSAs or prepared target features.
             generator["fold_template"] = None
-            if kind == "ppiflow":
+            if kind == "rfd4":
+                if not task.rfd4_inputs:
+                    raise ValueError(
+                        "RFD4 initial generation requires task.rfd4_inputs: a native binder-design spec relative to RFD4_INPUTS; target PDB alone is not a binder spec"
+                    )
+                if task.fixed_positions is not None:
+                    raise ValueError("encode RFD4 initial fixed residue constraints in its native spec")
+                generator["expected_target_sequences"] = {normalized_chain: sequence}
+                generator["design_type"] = task.design_type
+                request.update(inputs=task.rfd4_inputs, generation="inference_base", num_replicates=counts[kind])
+            elif kind == "ppiflow":
                 mode = {"vhh": "nanobody", "antibody": "antibody", "minibinder": "binder"}[task.design_type]
                 request.update(
                     mode=mode,

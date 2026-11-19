@@ -344,8 +344,11 @@ Two independent skills/tools are available on feat/autonomous_score_routing:
 
 RFD4 supports inference_base, inverse_folding and partial trajectory (fraction only
 with inference_base). ProteinMPNN's exact uploaded API supports chain-level sequence
-design, with no per-residue masks/fixed-point fields. Neither tool is yet part of the
-autonomous generator/optimizer menu. Both return immediately and use the existing
+design, with no per-residue masks/fixed-point fields. The autonomous planner additionally supports RFD4 initial generation from a native
+binder spec, rfd4_partial, and proteinmpnn optimization. Partial and MPNN masks
+are enforced by output validation; incompatible outputs fail. MPNN sequences are
+realized by TorchFold before fresh TorchScore, then follow the same two-stage route.
+Independent calls both return immediately and use the existing
 local request_id/status/results/monitor mechanism; retain an uncertain request ID
 rather than retrying with a new ID.
 

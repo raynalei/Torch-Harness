@@ -135,8 +135,25 @@ class Generator(RoundModel):
     # Optional explicit key in /results holding a candidate manifest.
     candidates_field: str = "candidates"
     structure_glob: str = "*.pdb"
+    expected_target_sequences: dict[str, str] = Field(default_factory=dict)
+    design_type: Literal["vhh", "antibody", "minibinder"] | None = None
     per_source_refold_limit: int | None = Field(default=None, ge=1, le=1000)
     deduplicate_sequences: bool = True
+
+    @property
+    def scientific_mode(self):
+        return self.request.get("mode") or {"vhh": "vhh", "antibody": "antibody", "minibinder": "mini_binder"}.get(
+            self.design_type
+        )
+
+    @model_serializer(mode="wrap")
+    def serialize(self, handler):
+        value = handler(self)
+        if not self.expected_target_sequences:
+            value.pop("expected_target_sequences", None)
+        if self.design_type is None:
+            value.pop("design_type", None)
+        return value
 
 
 class Evaluation(RoundModel):
@@ -147,6 +164,11 @@ class Evaluation(RoundModel):
     rosetta: Service | None = None
     torchopt: Service | None = None
     torchopt_options: dict[str, Any] = Field(default_factory=dict)
+    rfd4: Service | None = None
+    rfd4_options: dict[str, Any] = Field(default_factory=dict)
+    rfd4_input_root: str | None = None
+    proteinmpnn: Service | None = None
+    proteinmpnn_options: dict[str, Any] = Field(default_factory=dict)
     af3score_options: dict[str, Any] = Field(default_factory=dict)
     torchscore_options: dict[str, Any] = Field(default_factory=dict)
     torchfold_options: dict[str, Any] = Field(default_factory=lambda: {"run_data_pipeline": False})
@@ -156,6 +178,13 @@ class Evaluation(RoundModel):
     min_torchscore_ptm: float = Field(default=0.8, ge=0, le=1)
     min_refold_iptm: float = Field(default=0.8, ge=0, le=1)
     min_dockq: float = Field(default=0.49, ge=0, le=1)
+
+    @field_validator("rfd4_input_root")
+    @classmethod
+    def absolute_rfd4_root(cls, value):
+        if value is not None and (not Path(value).is_absolute() or ".." in Path(value).parts):
+            raise ValueError("rfd4_input_root must be an absolute cluster directory without traversal")
+        return value
 
     @field_validator("dockq_python", mode="before")
     @classmethod
@@ -191,6 +220,12 @@ class Evaluation(RoundModel):
         if self.torchopt is None and not self.torchopt_options:
             value.pop("torchopt", None)
             value.pop("torchopt_options", None)
+        for kind in ("rfd4", "proteinmpnn"):
+            if getattr(self, kind) is None and not getattr(self, kind + "_options"):
+                value.pop(kind, None)
+                value.pop(kind + "_options", None)
+        if self.rfd4_input_root is None:
+            value.pop("rfd4_input_root", None)
         # Preserve the historical config hash for unchanged AF3Score runs.
         if (
             self.scoring_backend == "af3score"
@@ -271,7 +306,7 @@ class InitialRoundConfig(RoundModel):
     name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
     work_dir: Path
     path_mappings: list[PathMapping] = Field(min_length=1)
-    generators: dict[Literal["ppiflow", "torchcraft"], Generator]
+    generators: dict[Literal["ppiflow", "torchcraft", "rfd4"], Generator]
     evaluation: Evaluation
     autonomous: AutonomousRound | None = None
 
@@ -296,7 +331,9 @@ class InitialRoundConfig(RoundModel):
             if self.evaluation.scoring_backend != "torchscore":
                 raise ValueError("autonomous rounds require scoring_backend=torchscore")
             for source, generator in self.generators.items():
-                validate_request(source, {"name": self.name, **generator.request})
+                validate_request(
+                    source, generator.request if source == "rfd4" else {"name": self.name, **generator.request}
+                )
         if not self.generators:
             raise ValueError("initial round requires at least one generator")
         if "ppiflow" in self.generators and "torchcraft" in self.generators:
@@ -309,6 +346,15 @@ class InitialRoundConfig(RoundModel):
         for name, generator in self.generators.items():
             if any(type(seed) is not int or seed < 0 for seed in generator.fold_seeds):
                 raise ValueError("fold_seeds must contain nonnegative integers")
+            if set(generator.expected_target_sequences) - set(generator.chains.target):
+                raise ValueError("expected_target_sequences may only name configured target chains")
+            if name == "rfd4":
+                if self.evaluation.rfd4 is not None and self.evaluation.rfd4 != generator.service:
+                    raise ValueError("RFD4 generation and optimization must use the same registered service")
+                validate_request(name, generator.request)
+                if generator.request.get("generation", "inference_base") != "inference_base":
+                    raise ValueError("RFD4 initial generation requires inference_base")
+                continue
             if generator.request.get("mode") not in modes[name]:
                 raise ValueError(f"{name} initial round supports {sorted(modes[name])}")
             required = {

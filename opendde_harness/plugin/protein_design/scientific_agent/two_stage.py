@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 
 from ..initial_round.autonomous import rank_score, sample_count
+from ..initial_round.native_models import OPTIMIZATION_ACTIONS, optimize_native
 from ..initial_round.policy import candidate_stage, rule_actions
 from ..initial_round.storage import write_json
 from . import planner
@@ -110,7 +111,9 @@ async def execute_stage_decision(runner, decision, index):
             state["used_samples"] += decision["samples"]
             decision["sample_recorded"] = True
             runner.save_candidates()
-        if action == "torchopt":
+        if action in {"rfd4_partial", "proteinmpnn"}:
+            batch = await optimize_native(runner, decision, index)
+        elif action == "torchopt":
             batch = await runner.optimize(decision, index)
         elif action == "partial_flow":
             batch = await runner.generate(
@@ -177,7 +180,7 @@ async def run_two_stage(runner):
                 if choice.option_id not in {o["option_id"] for o in context["options"]}:
                     raise ValueError("planner selected an option outside the visible stage menu")
                 option = options[choice.option_id]
-                if option["action"] in {"partial_flow", "torchopt"}:
+                if option["action"] in OPTIMIZATION_ACTIONS:
                     parent = next(c for c in current if c["candidate_id"] == option["parent_id"])
                     option = planner.prepare_optimization(runner, parent, option, choice, index)
                 elif choice.selection is not None:
@@ -188,7 +191,7 @@ async def run_two_stage(runner):
                 runner.save_candidates()
                 choice = planner.fallback_choice(runner, options)
                 option = options[choice.option_id]
-                if option["action"] in {"partial_flow", "torchopt"}:
+                if option["action"] in OPTIMIZATION_ACTIONS:
                     parent = next(c for c in current if c["candidate_id"] == option["parent_id"])
                     option = planner.prepare_optimization(runner, parent, option, choice, index)
             decision = {

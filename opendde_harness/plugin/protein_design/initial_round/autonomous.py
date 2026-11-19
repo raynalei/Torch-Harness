@@ -52,7 +52,10 @@ async def agent_choice(context):
 
 
 def sample_count(source, request):
-    return int(request.get("samples_per_target" if source == "ppiflow" else "num_designs", 1))
+    key = {"ppiflow": "samples_per_target", "rfd4": "num_replicates", "proteinmpnn": "num_seq_per_target"}.get(
+        source, "num_designs"
+    )
+    return int(request.get(key, 1))
 
 
 def quality(candidate, score_metric):
@@ -196,7 +199,7 @@ def options_for(runner, candidates, index, repaired):
                 )
         if "torchopt" in allowed:
             generator = runner.config.generators[candidate["source"]]
-            if not torchopt_supported(generator.chains, generator.request["mode"], evaluation.torchopt):
+            if not torchopt_supported(generator.chains, generator.scientific_mode, evaluation.torchopt):
                 evidence.setdefault("unavailable_actions", {})["torchopt"] = (
                     "no registered compatible single-chain optimizer"
                 )
@@ -211,7 +214,7 @@ def options_for(runner, candidates, index, repaired):
                     **evaluation.torchopt_options,
                     "name": f"{runner.config.name}_r{index}",
                     "pdb_paths": [runner.files.remote(path)],
-                    "binder_type": "vhh" if generator.request["mode"] in {"nanobody", "vhh"} else "mini-binder",
+                    "binder_type": "vhh" if generator.scientific_mode in {"nanobody", "vhh"} else "mini-binder",
                     "binder_chain": generator.chains.binder[0],
                     "target_chain": generator.chains.target[0],
                     "full_jobs": 1,

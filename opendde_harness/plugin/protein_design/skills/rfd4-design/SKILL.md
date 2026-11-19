@@ -10,8 +10,10 @@ metadata:
 
 Use this skill when the user explicitly requests RFD4/RDF4 generation, inverse
 folding or partial trajectory. Call `protein_model_list` to select a registered
-`rfd4` alias; submit with `protein_model_rfd4`. These are standalone tasks: RFD4 is
-not automatically added to autonomous generation or optimization menus.
+`rfd4` alias; submit with `protein_model_rfd4`. Independent submissions remain available. The autonomous workflow also supports
+RFD4 initial generation from a task-supplied native binder spec, and rfd4_partial
+when the service and shared input root are configured. See protein-design guidance
+for the two-stage route and output-validated sequence constraints.
 
 Reuse authorized inputs and compute scope. Use a stable local `request_id` on
 retries and set `user_confirmed: true` only for authorized execution. Submission

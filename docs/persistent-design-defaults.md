@@ -235,6 +235,19 @@ protein_model_rosetta HTTP submissions are not used for native workflow evaluati
 its catalogue directs native execution to protein_design_start.
 
 RFD4 and ProteinMPNN are additionally registered as independent tools/skills in the
-bundled deployment (nine model kinds total). They do not expand the autonomous
-generator/optimizer menu. See [standalone model tools](protein-model-tools.md#standalone-rfd4-and-proteinmpnn)
+bundled deployment (nine model kinds total). The autonomous menu additionally supports RFD4 initial generation, RFD4 Partial
+Flow and ProteinMPNN optimization when compatible. See [standalone model tools](protein-model-tools.md#standalone-rfd4-and-proteinmpnn)
 for input/output contracts, required deployment updates and the RFD4 port change.
+
+
+For RFD4 initial generation, select task.generators: [rfd4], supply task.rfd4_inputs
+(a native binder spec relative to RFD4_INPUTS), and set current-task chain roles
+in generator_overrides.rfd4.chains. A standalone target PDB is not itself a binder
+generation spec. The task target sequence is checked against generated output.
+The registered service environment RFD4_INPUTS supplies evaluation.rfd4_input_root
+for partial-trajectory staging; advanced run_config callers may set it explicitly.
+All four optimization actions use mutation_selector. RFD4 Partial Flow and
+ProteinMPNN have no native residue mask and reject out-of-mask sequence changes.
+ProteinMPNN emits FASTA and requires an extra TorchFold call to realize an
+admitted sequence before TorchScore. DockQ then uses this realized pose as the
+reference. Second-stage optimization still goes straight to final validation.

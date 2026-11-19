@@ -52,20 +52,20 @@ their endpoints. Model environment activation belongs in each registered sbatch.
 
 ## Qwen planner and fallback
 
-New generic starts default to decision_policy=planner, planner_layout=two_stage: PPIFlow/TorchCraft generate initial candidates,
+New generic starts default to decision_policy=planner, planner_layout=two_stage: PPIFlow/TorchCraft/RFD4 generate initial candidates (RFD4 requires a native binder spec),
 then TorchScore measures ipTM/pTM. First evaluate only TorchScore and Rosetta, then let Qwen stop, advance or select
 one compatible optimization. Finish the batch first-stage decisions before stage two.
 Second evaluate the current candidate using TorchScore, Rosetta and full native
 evaluation skills; then let Qwen stop, optimize or request final TorchFold/DockQ.
 The context builder loads stage-specific skills and metrics, history and constraints. Rule recommendations are advisory, not menu gates.
 Qwen chooses stop (discard poor candidate), continue (TorchFold/DockQ then final
-completion), analysis (one selected evaluation skill), partial_flow or torchopt.
+completion), analysis (one selected evaluation skill), partial_flow, torchopt, rfd4_partial or proteinmpnn when compatible.
 Stage-one continue/analysis advances to full stage-two evaluation. Results are saved
 and passed into the second scientific decision. A second-stage optimization child
 is freshly TorchScored and finally validated without a third Qwen decision. Optimization children
 are scored afresh before replanning; never carry parent scores as child measurements.
 
-Before either optimizer call use protein_design_mutation_selector with explicit
+Before any optimizer call use protein_design_mutation_selector with explicit
 one-based observed binder fixed_positions or mask_positions. Python validates
 inherited fixed points, allowed regions, chain IDs, numbering and nonempty masks.
 Partial Flow receives real encoded mask/fixed ranges; TorchOptimization lacks a
@@ -77,16 +77,21 @@ Set decision_policy=rules to run rules explicitly. Legacy agent profiles preserv
 their earlier rule-constrained priority mode. Model execution failures pause the
 planned action for recovery; they do not trigger another scientific submission.
 There is no global round, sample, batch or patience cap; each surviving lineage has
-two scientific decision stages and either optimizer may be selected when compatible.
+two scientific decision stages and any compatible optimizer may be selected when compatible.
 Final acceptance requires real TorchFold/DockQ validation. Existing iterative planner
 snapshots remain compatible; new generic starts use the two-stage layout.
 
 Use dedicated `protein_model_*` tools for authorized standalone requests, preserving
 request_id and uncertain remote IDs. A model registration is not proof of inference.
-PPIFlow supports configured antibody/nanobody/binder modes; TorchCraft and the current
-optimizer do not support paired VH/VL. Mini-binder Partial Flow is unavailable.
-Inverse-folding and ESM2 skills remain capability-gated references, not executable
-operations in the current registered model set. Do not mislabel another model as them.
+PPIFlow supports configured antibody/nanobody/binder modes; TorchCraft and
+TorchOptimization do not support paired VH/VL. PPIFlow mini-binder Partial Flow is unavailable;
+RFD4 Partial Flow is separately capability-filtered. RFD4/ProteinMPNN sequence masks
+are validated on output, not native mask guarantees. ProteinMPNN FASTA designs
+require TorchFold structure realization before fresh TorchScore. RFD4 native input
+contracts are documented in rfd4-design; do not invent specs from a target PDB.
+Legacy inverse-folding and ESM2 skills remain capability-gated references. RFD4
+native inverse_folding is available through its independent tool, not as another
+autonomous optimizer. Do not mislabel one model as another.
 
 ## Native evidence tools
 
