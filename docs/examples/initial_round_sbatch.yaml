@@ -26,7 +26,9 @@ generators:
       mode: antibody
       name: 7n0a
       antigen_pdb: /lustre/grp/cmclab/share/guoly/app_code/test_data/antigen/clean_7n0a.pdb
-      # Harness defaults: antigen C, heavy A, light B.
+      antigen_chain: C
+      heavy_chain: A
+      light_chain: B
       specified_hotspots: C4,C10,C117,C125
       framework_dir: /lustre/grp/cmclab/share/guoly/app_code/test_data/framework_scfv
       cdr_length: CDRH1,8-9,CDRH2,7-8,CDRH3,10-20,CDRL1,7-7,CDRL2,3-3,CDRL3,9-11

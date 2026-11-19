@@ -458,20 +458,20 @@ def fake_services(round_config, tmp_path, monkeypatch):
     return httpx.MockTransport(handler), calls
 
 
-@pytest.mark.parametrize("use_default_chains", [False, True])
+@pytest.mark.parametrize("use_identity_refold_map", [False, True])
 async def test_both_generators_complete_round_and_resume_without_resubmitting(
-    round_config, fake_services, use_default_chains
+    round_config, fake_services, use_identity_refold_map
 ):
     transport, calls = fake_services
     config = round_config
-    if use_default_chains:
+    if use_identity_refold_map:
         from opendde_harness.plugin.protein_design.initial_round.artifacts import chain_sequences
 
         value = round_config.model_dump(mode="json")
         for source, generator in value["generators"].items():
-            generator.pop("chains")
+            generator["chains"] = {"target": ["D"], "binder": ["H"]}
             generator["fold_template"] = None
-            pdb(round_config.work_dir / source / "generated.pdb", target="C", chain="A")
+            pdb(round_config.work_dir / source / "generated.pdb", target="D", chain="H")
         request = value["generators"]["ppiflow"]["request"]
         request.pop("antigen_chain")
         request.pop("heavy_chain")
@@ -479,30 +479,30 @@ async def test_both_generators_complete_round_and_resume_without_resubmitting(
         handle_request = transport.handler
         files = SharedFiles(config.path_mappings)
 
-        def verify_default_chains(request):
+        def verify_user_chains(request):
             source = request.url.host.split(".")[0]
             if request.method != "POST":
                 return handle_request(request)
             body = json.loads(request.content)
             if source == "ppiflow":
-                assert body["antigen_chain"] == "C" and body["heavy_chain"] == "A"
+                assert body["antigen_chain"] == "D" and body["heavy_chain"] == "H"
             elif source == "af3score":
                 (candidate,) = files.local(body["input_pdb_dir"]).glob("*.pdb")
-                assert set(chain_sequences(candidate)) == {"C", "A"}
+                assert set(chain_sequences(candidate)) == {"D", "H"}
             elif source == "torchfold":
                 fold_input = json.loads(files.local(body["json_path"]).read_text())
-                assert [entry["protein"]["id"] for entry in fold_input["sequences"]] == ["C", "A"]
+                assert [entry["protein"]["id"] for entry in fold_input["sequences"]] == ["D", "H"]
             elif source == "rosetta":
-                assert (body["chain_group_a"], body["chain_group_b"]) == ("A", "C")
+                assert (body["chain_group_a"], body["chain_group_b"]) == ("H", "D")
                 # The existing fixture checks explicit refold names X/Y for legacy configurations.
                 calls[(source, request.method)] += 1
-                return httpx.Response(202, json={"task_id": "default-rosetta"})
+                return httpx.Response(202, json={"task_id": "identity-rosetta"})
             return handle_request(request)
 
         def respond(request):
-            if request.url.path.endswith("/default-rosetta/results"):
+            if request.url.path.endswith("/identity-rosetta/results"):
                 return httpx.Response(200, json={"metrics": {"dG_separated": -12.0}})
-            return verify_default_chains(request)
+            return verify_user_chains(request)
 
         transport = httpx.MockTransport(respond)
     result = await InitialRoundRunner(config, transport=transport).run()
@@ -2098,17 +2098,19 @@ def test_ppiflow_binder_chain_is_optional_in_request_and_workflow(round_config, 
         ),
     ],
 )
-def test_ppiflow_workflow_resolves_omitted_chain_fields(round_config, mode, request_fields, chain_fields):
+def test_ppiflow_workflow_uses_explicit_request_chains(round_config, mode, request_fields, chain_fields):
     from opendde_harness.plugin.protein_design.initial_round.automation import prepare_run
 
     value = round_config.model_dump(mode="json")
     ppiflow = value["generators"]["ppiflow"]
     value["generators"] = {"ppiflow": ppiflow}
     ppiflow.pop("chains")
-    ppiflow["request"] = {"mode": mode, "name": value["name"], **request_fields}
+    ppiflow["request"] = {"mode": mode, "name": value["name"], **request_fields, **chain_fields}
     generator = prepare_run(value, registrations={}).generators["ppiflow"]
     assert generator.chains.target == ["C"]
     assert generator.chains.binder == (["A", "B"] if mode == "antibody" else ["A"])
     assert generator.chains.refold_map == {chain: chain for chain in chain_fields.values()}
     assert {field: generator.request[field] for field in chain_fields} == chain_fields
-    assert not set(chain_fields) & ppiflow["request"].keys()
+    ppiflow["request"].pop(next(iter(chain_fields)))
+    with pytest.raises(ValueError, match="chains.target"):
+        prepare_run(value, registrations={})

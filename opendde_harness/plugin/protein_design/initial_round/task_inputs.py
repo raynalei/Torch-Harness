@@ -17,7 +17,7 @@ from opendde_harness.utils.portable_lock import file_lock
 
 from ..core.model_requests import TARGET_REQUEST_FIELDS
 from .artifacts import structure
-from .config import DEFAULT_BINDER_CHAIN, DEFAULT_LIGHT_CHAIN, DEFAULT_TARGET_CHAIN, PathMapping, RoundModel
+from .config import PathMapping, RoundModel
 from .defaults import merge_defaults, validate_settings
 from .storage import SharedFiles, fingerprint, write_json
 
@@ -41,14 +41,11 @@ class TorchCraftAdapter(RoundModel):
 class DesignTask(RoundModel):
     pdb_path: Path
     design_type: Literal["vhh", "antibody", "minibinder"]
-    target_chain: str = Field(default=DEFAULT_TARGET_CHAIN, pattern=r"^[A-Za-z0-9]$")
+    target_chain: str = Field(pattern=r"^[A-Za-z0-9]$", description="Target chain ID in the input PDB.")
     binder_chains: list[str] = Field(
-        default_factory=lambda data: (
-            [DEFAULT_BINDER_CHAIN, DEFAULT_LIGHT_CHAIN] if data["design_type"] == "antibody" else [DEFAULT_BINDER_CHAIN]
-        ),
         min_length=1,
         max_length=2,
-        description="Defaults to A for VHH/minibinder and A/B (heavy/light) for antibody.",
+        description="Output chain IDs specified by the user: binder for minibinder, heavy for VHH, or [heavy, light] for paired antibody.",
     )
     refold_map: dict[str, str] | None = None
     hotspots: list[StrictInt | str]

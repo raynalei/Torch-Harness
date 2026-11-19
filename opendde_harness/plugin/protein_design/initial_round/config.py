@@ -82,10 +82,6 @@ class Service(RoundModel):
         return self
 
 
-DEFAULT_TARGET_CHAIN = "C"
-DEFAULT_BINDER_CHAIN = "A"
-DEFAULT_LIGHT_CHAIN = "B"
-
 PPIFLOW_CHAIN_FIELDS = {
     "binder": ("target_chain", ("binder_chain",)),
     "nanobody": ("antigen_chain", ("heavy_chain",)),
@@ -125,31 +121,23 @@ class Generator(RoundModel):
 
     @model_validator(mode="before")
     @classmethod
-    def resolve_default_chains(cls, value):
+    def resolve_explicit_chains(cls, value):
         if not isinstance(value, dict) or not isinstance(request := value.get("request"), dict):
             return value
         mode = request.get("mode")
-        if not isinstance(mode, str) or mode not in (*PPIFLOW_CHAIN_FIELDS, "vhh", "mini_binder"):
+        if not isinstance(mode, str) or mode not in PPIFLOW_CHAIN_FIELDS:
             return value
-        chains = value.get("chains")
-        if chains is None:
-            chains = {}
+        chains = value.get("chains", {})
         if not isinstance(chains, dict):
             return value
-        target_field, binder_fields = PPIFLOW_CHAIN_FIELDS.get(mode, (None, ()))
-        target = chains.get("target", [request.get(target_field) or DEFAULT_TARGET_CHAIN])
-        defaults = (DEFAULT_BINDER_CHAIN, DEFAULT_LIGHT_CHAIN)
-        binder = chains.get(
-            "binder",
-            [request.get(field) or default for field, default in zip(binder_fields, defaults)]
-            or [DEFAULT_BINDER_CHAIN],
-        )
+        target_field, binder_fields = PPIFLOW_CHAIN_FIELDS[mode]
+        target = chains.get("target", [request.get(target_field)])
+        binder = chains.get("binder", [request.get(field) for field in binder_fields])
         request = request.copy()
-        if target_field and isinstance(target, list) and target and request.get(target_field) is None:
+        if isinstance(target, list) and target and request.get(target_field) is None:
             request[target_field] = target[0]
-        # Preserve the payload of saved binder runs that explicitly declared both chain roles.
-        legacy_binder = mode == "binder" and "target" in chains and "binder" in chains
-        if isinstance(binder, list) and not legacy_binder:
+        # Older saved binder runs can omit the API field while declaring both roles.
+        if isinstance(binder, list) and not (mode == "binder" and {"target", "binder"} <= chains.keys()):
             for field, chain in zip(binder_fields, binder):
                 if request.get(field) is None:
                     request[field] = chain

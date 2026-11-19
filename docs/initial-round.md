@@ -47,11 +47,9 @@ uses paired VH/VL: PPIFlow `antibody` with target C, heavy A and light B,
 and no TorchCraft generator. VHH uses PPIFlow `nanobody` plus optional TorchCraft
 `vhh`. For minibinders use PPIFlow
 `binder` with `input_pdb`, `samples_min_length`, and `samples_max_length`.
-The input PDB can contain only the target. Harness defaults to target C,
-minibinder A, VHH heavy A, and paired antibody heavy A/light B. The same chain
-roles apply to PPIFlow and TorchCraft VHH/minibinder workflows. Omit the chain
-fields to populate `chains`, the identity `refold_map`, and the chain fields
-accepted by each generator API. Both scoring backends read the chain IDs in the
+The input PDB can contain only the target. Supply the target chain ID and the
+output binder chain IDs for the design type. PPIFlow and TorchCraft VHH/minibinder
+workflows use the same chain roles. An omitted `refold_map` keeps those IDs. Both scoring backends read the chain IDs in the
 candidate PDB. TorchFold uses the refold mapping, DockQ uses the same mapping
 and roles, and Rosetta groups the binder chains together against the target.
 PPIFlow Partial Flow and TorchOptimization reuse the candidate's chain roles

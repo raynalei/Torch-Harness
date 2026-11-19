@@ -118,7 +118,7 @@ that the interpreter exists and DockQ imports successfully.
 
 For example:
 
-> Use target `/shared/inputs/new.pdb`, VHH, hotspots C42 and C73,
+> Use target `/shared/inputs/new.pdb`, target chain C, VHH heavy chain H, hotspots C42 and C73,
 > framework `/shared/frameworks/current`, initial total 10, and run the configured autonomous workflow.
 
 The assistant calls `protein_initial_round_start` with:
@@ -127,6 +127,8 @@ The assistant calls `protein_initial_round_start` with:
 {
   "task": {
     "pdb_path": "/shared/inputs/new.pdb",
+    "target_chain": "C",
+    "binder_chains": ["H"],
     "design_type": "vhh",
     "hotspots": ["C42", "C73"],
     "initial_samples": 10,
@@ -137,9 +139,9 @@ The assistant calls `protein_initial_round_start` with:
 ```
 
 Only use `user_confirmed=true` within the user's authorized computation scope.
-The target defaults to C. Harness assigns binder A for minibinder, heavy A
-for VHH, and heavy A/light B for paired antibodies. Provide `target_chain` or
-`binder_chains` only for an explicit override.
+Supply `target_chain` and `binder_chains` for every compact task. The binder
+list contains one ID for minibinder or VHH, or two IDs in heavy/light order
+for paired antibody. An omitted `refold_map` keeps the supplied IDs.
 
 For a PPIFlow minibinder, provide any task-specific length bounds under
 `task.generator_overrides.ppiflow.request`, for example:

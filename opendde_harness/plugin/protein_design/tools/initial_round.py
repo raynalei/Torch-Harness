@@ -74,14 +74,13 @@ class InitialRoundTool(Tool):
             }
         run_schema = InitialRoundConfig.model_json_schema()
         definitions = run_schema.pop("$defs", {})
-        definitions["Generator"]["required"].remove("chains")
         return {
             "type": "object",
             "$defs": definitions,
             "properties": {
                 "task": {
                     **DesignTask.model_json_schema(),
-                    "description": "New target task using persistent workflow/design/model defaults. Supply the target PDB, design type, explicit hotspots and total initial_samples; optional framework/fixed-point overrides. Omit chain fields unless the user explicitly overrides the defaults: target C, binder or heavy A, and light B for paired antibody. Choose generators explicitly from the user prompt: [ppiflow] or [torchcraft]; neither is mandatory. Paired VH/VL requires PPIFlow. No YAML or deployment paths needed.",
+                    "description": "New target task using persistent workflow/design/model defaults. Supply the target PDB, design type, explicit hotspots and total initial_samples; optional framework/fixed-point overrides. Require user-supplied target_chain and binder_chains: binder for minibinder, heavy for VHH, or ordered heavy/light for paired antibody. Choose generators explicitly from the user prompt: [ppiflow] or [torchcraft]; neither is mandatory. Paired VH/VL requires PPIFlow. No YAML or deployment paths needed.",
                 },
                 "pdb_path": {"type": "string", "description": "Absolute local mounted shared-filesystem PDB path."},
                 "config_path": {
@@ -90,7 +89,7 @@ class InitialRoundTool(Tool):
                 },
                 "run_config": {
                     **run_schema,
-                    "description": "Structured workflow assembled from existing inputs; omit chain fields to use the Harness defaults. Mutually exclusive with config_path.",
+                    "description": "Structured workflow assembled from existing inputs and user-supplied chain IDs. Mutually exclusive with config_path.",
                 },
                 "name": {"type": "string", "description": "Unique experiment name; reuse on retry."},
                 "user_confirmed": {"type": "boolean", "const": True},

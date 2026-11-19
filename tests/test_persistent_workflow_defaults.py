@@ -484,24 +484,24 @@ def test_minibinder_prompt_selects_generator_and_native_mode(task, settings, sou
             "minibinder",
             "binder",
             {"samples_min_length": 50, "samples_max_length": 70},
-            {"target_chain": "C", "binder_chain": "A"},
+            {"target_chain": "D", "binder_chain": "H"},
         ),
-        ("vhh", "nanobody", {}, {"antigen_chain": "C", "heavy_chain": "A"}),
+        ("vhh", "nanobody", {}, {"antigen_chain": "D", "heavy_chain": "H"}),
         (
             "antibody",
             "antibody",
             {"cdr_length": "CDRH3,10-20,CDRL3,9-11"},
-            {"antigen_chain": "C", "heavy_chain": "A", "light_chain": "B"},
+            {"antigen_chain": "D", "heavy_chain": "H", "light_chain": "L"},
         ),
     ],
 )
-def test_compact_task_fills_default_chain_roles(task, settings, design_type, mode, request_fields, chain_fields):
+def test_compact_task_uses_user_chain_roles(task, settings, design_type, mode, request_fields, chain_fields):
     from opendde_harness.plugin.protein_design.initial_round.artifacts import structure
 
     source = Path(task["pdb_path"])
     source.write_text(
         "\n".join(
-            line[:21] + "C" + line[22:]
+            line[:21] + "D" + line[22:]
             for line in source.read_text().splitlines()
             if line.startswith("ATOM") and line[21] == "A"
         )
@@ -510,9 +510,9 @@ def test_compact_task_fills_default_chain_roles(task, settings, design_type, mod
     profile = copy.deepcopy(settings["design_profiles"]["vhh"])
     profile["generators"]["ppiflow"]["request"] = {"mode": mode, **request_fields}
     settings["design_profiles"][design_type] = profile
-    task.pop("target_chain")
-    task.pop("binder_chains")
-    task.update(design_type=design_type, generators=["ppiflow"])
+    task.update(
+        target_chain="D", binder_chains=list(chain_fields.values())[1:], design_type=design_type, generators=["ppiflow"]
+    )
     config = prepare_design_task(task, settings)
     generator = config.generators["ppiflow"]
     assert {field: generator.request[field] for field in chain_fields} == chain_fields
@@ -521,7 +521,7 @@ def test_compact_task_fills_default_chain_roles(task, settings, design_type, mod
     target = SharedFiles(config.path_mappings).local(
         generator.request["input_pdb" if mode == "binder" else "antigen_pdb"]
     )
-    assert set(structure(target).chain_id) == {"C"}
+    assert set(structure(target).chain_id) == {"D"}
 
 
 @pytest.mark.parametrize("value", ["", "   ", None])
@@ -712,7 +712,14 @@ def test_task_refold_map_is_only_used_when_explicit(task, settings):
     assert all(g.chains.refold_map == {"A": "X", "D": "Y"} for g in config.generators.values())
 
 
-def test_missing_default_target_chain_does_not_rename_input(task, settings):
-    task.pop("target_chain")
-    with pytest.raises(ValueError, match="target chain 'C' is absent"):
+@pytest.mark.parametrize("field", ["target_chain", "binder_chains"])
+def test_compact_task_requires_user_chain_roles(task, settings, field):
+    task.pop(field)
+    with pytest.raises(ValueError, match=field):
+        prepare_design_task(task, settings)
+
+
+def test_paired_antibody_requires_user_light_chain(task, settings):
+    task["design_type"] = "antibody"
+    with pytest.raises(ValueError, match="heavy/light"):
         prepare_design_task(task, settings)
