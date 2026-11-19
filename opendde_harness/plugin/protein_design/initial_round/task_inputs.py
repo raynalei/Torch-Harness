@@ -15,7 +15,7 @@ from pydantic import Field, StrictInt, model_validator
 
 from opendde_harness.utils.portable_lock import file_lock
 
-from ..core.model_requests import TARGET_REQUEST_FIELDS
+from ..core.model_requests import TARGET_REQUEST_FIELDS, ppiflow_defaults_for_mode
 from .artifacts import structure
 from .config import PathMapping, RoundModel
 from .defaults import merge_defaults, validate_settings
@@ -171,6 +171,12 @@ def prepare_design_task(task, settings):
         raise ValueError("select at least one distinct configured generator")
     if set(enabled) - set(value.get("generators", {})) or set(task.generator_overrides) - set(enabled):
         raise ValueError("task requests a generator not configured in its design profile")
+    ppiflow_mode = {"vhh": "nanobody", "antibody": "antibody", "minibinder": "binder"}[task.design_type]
+    if "ppiflow" in enabled:
+        if ppiflow_mode == "binder" and (task.framework_dir is not None or task.fixed_positions is not None):
+            raise ValueError("PPIFlow binder does not support framework_dir or fixed_positions")
+        generator = value["generators"]["ppiflow"]
+        generator["request"] = ppiflow_defaults_for_mode(generator.get("request", {}), ppiflow_mode)
     value["generators"] = {
         kind: merge_defaults(value["generators"][kind], task.generator_overrides.get(kind, {})) for kind in enabled
     }
@@ -184,10 +190,10 @@ def prepare_design_task(task, settings):
         ]
         if len(matches) > 1:
             raise ValueError(f"select persistent model_aliases.{kind} for ambiguous registrations")
-        generator["request"] = {
-            **copy.deepcopy(matches[0].get("request_defaults", {}) if matches else {}),
-            **generator.get("request", {}),
-        }
+        request_defaults = matches[0].get("request_defaults", {}) if matches else {}
+        if kind == "ppiflow":
+            request_defaults = ppiflow_defaults_for_mode(request_defaults, ppiflow_mode)
+        generator["request"] = {**copy.deepcopy(request_defaults), **generator.get("request", {})}
     normalized_chain = task.target_chain
     counts = task.generator_samples
     if counts is None:
@@ -233,7 +239,7 @@ def prepare_design_task(task, settings):
             # A template can carry another antigen's MSAs or prepared target features.
             generator["fold_template"] = None
             if kind == "ppiflow":
-                mode = {"vhh": "nanobody", "antibody": "antibody", "minibinder": "binder"}[task.design_type]
+                mode = ppiflow_mode
                 request.update(
                     mode=mode,
                     name=name,
@@ -252,7 +258,7 @@ def prepare_design_task(task, settings):
                 if task.framework_dir is not None:
                     request["framework_dir"] = task.framework_dir
                 if task.fixed_positions is not None:
-                    request["fixed_positions"] = task.fixed_positions
+                    generator.setdefault("partial_flow", {})["fixed_positions"] = task.fixed_positions
             else:
                 if task.design_type == "antibody":
                     raise ValueError("registered TorchCraft does not support paired VH/VL")

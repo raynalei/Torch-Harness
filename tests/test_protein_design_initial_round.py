@@ -93,6 +93,7 @@ def round_config(tmp_path):
                     "service": service("ppiflow"),
                     "request": {
                         "mode": "nanobody",
+                        "samples_per_target": 1,
                         "antigen_pdb": "/shared/input.pdb",
                         "antigen_chain": "A",
                         "framework_dir": "/shared/frameworks",
@@ -2051,8 +2052,7 @@ def test_configuration_identity_normalizes_aliases_but_keeps_scientific_changes(
     ]
 
 
-@pytest.mark.parametrize("explicit_binder", [False, True])
-def test_ppiflow_binder_chain_is_optional_in_request_and_workflow(round_config, explicit_binder):
+def test_ppiflow_binder_requires_api_chain_and_resolves_explicit_workflow_chain(round_config):
     from opendde_harness.plugin.protein_design.core.model_requests import validate_request
 
     request = {
@@ -2063,15 +2063,25 @@ def test_ppiflow_binder_chain_is_optional_in_request_and_workflow(round_config, 
         "samples_min_length": 30,
         "samples_max_length": 60,
     }
-    if explicit_binder:
-        request["binder_chain"] = "B"
-    payload = validate_request("ppiflow", request)
-    assert ("binder_chain" in payload) is explicit_binder
+    with pytest.raises(ValueError, match="binder_chain"):
+        validate_request("ppiflow", request)
     value = round_config.model_dump(mode="json")
     value["generators"] = {"ppiflow": value["generators"]["ppiflow"]}
-    value["generators"]["ppiflow"]["request"] = payload
+    value["generators"]["ppiflow"]["request"] = request
     config = InitialRoundConfig.model_validate(value)
-    assert ("binder_chain" in config.generators["ppiflow"].request) is explicit_binder
+    assert config.generators["ppiflow"].request["binder_chain"] == "B"
+
+    for field, value_to_reject in (
+        ("framework_dir", "/shared/frameworks"),
+        ("fixed_positions", "B1"),
+        ("num_timesteps", 200),
+    ):
+        rejected = {**request, field: value_to_reject}
+        with pytest.raises(ValueError, match=f"unsupported fields.*{field}"):
+            validate_request("ppiflow", {**rejected, "binder_chain": "B"})
+        value["generators"]["ppiflow"]["request"] = rejected
+        with pytest.raises(ValueError, match=f"unsupported fields.*{field}"):
+            InitialRoundConfig.model_validate(value)
 
 
 @pytest.mark.parametrize(
@@ -2114,3 +2124,35 @@ def test_ppiflow_workflow_uses_explicit_request_chains(round_config, mode, reque
     ppiflow["request"].pop(next(iter(chain_fields)))
     with pytest.raises(ValueError, match="chains.target"):
         prepare_run(value, registrations={})
+
+
+@pytest.mark.parametrize(
+    ("mode", "overrides", "field"),
+    [
+        ("nanobody", {"light_chain": "L"}, "light_chain"),
+        ("antibody", {"fixed_positions": "H1"}, "fixed_positions"),
+        ("partial_nanobody", {"fixed_positions": ["H1"]}, "fixed_positions"),
+        ("partial_nanobody", {"start_t": 1.01}, "start_t"),
+        ("partial_antibody", {"cdr_position": ["H2"]}, "cdr_position"),
+        ("partial_antibody", {"framework_dir": "/shared/framework"}, "framework_dir"),
+        ("nanobody", {"num_timesteps": 2001}, "num_timesteps"),
+    ],
+)
+def test_ppiflow_request_matches_deployed_mode_schema(mode, overrides, field):
+    from opendde_harness.plugin.protein_design.core.model_requests import validate_request
+
+    payload = {"mode": mode, "antigen_chain": "C", "heavy_chain": "H"}
+    if mode.startswith("partial_"):
+        payload.update(complex_pdb="/shared/complex.pdb", fixed_positions="", cdr_position="H2", start_t=1)
+    else:
+        payload.update(antigen_pdb="/shared/target.pdb", framework_dir="/shared/framework")
+    if mode.endswith("antibody"):
+        payload["light_chain"] = "L"
+    if mode == "antibody":
+        payload["cdr_length"] = "CDRH3,10-20"
+
+    resolved = validate_request("ppiflow", payload)
+    assert resolved["name"] == "target"
+    assert resolved["samples_per_target"] == 5
+    with pytest.raises(ValueError, match=field):
+        validate_request("ppiflow", {**payload, **overrides})

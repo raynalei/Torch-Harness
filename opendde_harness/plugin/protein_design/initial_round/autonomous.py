@@ -7,7 +7,7 @@ import json
 
 from pydantic import Field
 
-from opendde_harness.plugin.protein_design.core.model_requests import validate_request
+from opendde_harness.plugin.protein_design.core.model_requests import PPIFLOW_DEFAULT_SAMPLES, validate_request
 
 from .config import RoundModel
 from .diagnostics import analyze
@@ -52,7 +52,9 @@ async def agent_choice(context):
 
 
 def sample_count(source, request):
-    return int(request.get("samples_per_target" if source == "ppiflow" else "num_designs", 1))
+    if source == "ppiflow":
+        return int(request.get("samples_per_target", PPIFLOW_DEFAULT_SAMPLES))
+    return int(request.get("num_designs", 1))
 
 
 def quality(candidate, score_metric):
@@ -95,7 +97,8 @@ def _partial_request(runner, candidate, name):
     )
     from .regions import encode_positions, selection_positions
 
-    inherited = candidate.get("generation_request", request)
+    parent = runner.config.generators[candidate["source"]]
+    inherited = parent.refinement_request(candidate.get("generation_request", parent.request))
     if inherited.get("fixed_positions") or inherited.get("cdr_position"):
         atoms = structure(runner.files.local(candidate["generated_structure"]))
         locked = selection_positions(inherited.get("fixed_positions"), atoms, chains.binder)
@@ -134,7 +137,7 @@ def _partial_request(runner, candidate, name):
         samples_per_target=1,
         cdr_position=regions["cdr_position"],
         fixed_positions=regions["fixed_positions"],
-        start_t=request.get("start_t", 0.01),
+        start_t=generator.refinement_request(request).get("start_t", 0.01),
         output_dir=runner.files.remote(runner.root / name),
     )
     return validate_request("ppiflow", value), regions

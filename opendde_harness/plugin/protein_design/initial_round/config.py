@@ -11,6 +11,7 @@ from pydantic import AliasChoices, ConfigDict, Field, field_validator, model_ser
 
 from opendde_harness.plugin.protein_design.core.contracts import ContractModel
 from opendde_harness.plugin.protein_design.core.model_requests import (
+    PPIFLOW_DEFAULT_SAMPLES,
     AF3ScoreControls,
     TorchScoreControls,
     validate_request,
@@ -107,9 +108,16 @@ class Chains(RoundModel):
         return self
 
 
+class PPIFlowRefinement(RoundModel):
+    fixed_positions: str | None = None
+    cdr_position: str | None = None
+    start_t: float | None = Field(default=None, ge=0, le=1)
+
+
 class Generator(RoundModel):
     service: Service | None = None
     request: dict[str, Any]
+    partial_flow: PPIFlowRefinement | None = Field(default=None, exclude_if=lambda value: value is None)
     chains: Chains
     fold_template: Path | None = None
     fold_seeds: list[int] = Field(default_factory=lambda: [1], min_length=1)
@@ -136,12 +144,19 @@ class Generator(RoundModel):
         request = request.copy()
         if isinstance(target, list) and target and request.get(target_field) is None:
             request[target_field] = target[0]
-        # Older saved binder runs can omit the API field while declaring both roles.
-        if isinstance(binder, list) and not (mode == "binder" and {"target", "binder"} <= chains.keys()):
+        if isinstance(binder, list):
             for field, chain in zip(binder_fields, binder):
                 if request.get(field) is None:
                     request[field] = chain
+        if mode in {"antibody", "nanobody"}:
+            legacy = {key: request.pop(key) for key in PPIFlowRefinement.model_fields if key in request}
+            if legacy:
+                value = {**value, "partial_flow": {**legacy, **(value.get("partial_flow") or {})}}
         return {**value, "request": request, "chains": {**chains, "target": target, "binder": binder}}
+
+    def refinement_request(self, generation_request: dict) -> dict:
+        constraints = self.partial_flow.model_dump(exclude_none=True) if self.partial_flow else {}
+        return {**constraints, **generation_request}
 
 
 class Evaluation(RoundModel):
@@ -282,7 +297,11 @@ class InitialRoundConfig(RoundModel):
             for source, generator in self.generators.items():
                 validate_request(source, {"name": self.name, **generator.request})
             initial_samples = sum(
-                int(g.request.get("samples_per_target" if source == "ppiflow" else "num_designs", 1))
+                int(
+                    g.request.get("samples_per_target", PPIFLOW_DEFAULT_SAMPLES)
+                    if source == "ppiflow"
+                    else g.request.get("num_designs", 1)
+                )
                 for source, g in self.generators.items()
             )
             if initial_samples > self.autonomous.max_samples:
@@ -311,15 +330,20 @@ class InitialRoundConfig(RoundModel):
                     "cdr_length",
                 ),
                 "nanobody": ("antigen_pdb", "antigen_chain", "framework_dir", "heavy_chain"),
-                "binder": ("input_pdb", "target_chain", "samples_min_length", "samples_max_length"),
+                "binder": ("input_pdb", "target_chain", "binder_chain", "samples_min_length", "samples_max_length"),
                 "vhh": ("pdb_path", "hotspot_indices", "framework_cif_path"),
                 "mini_binder": ("pdb_path", "hotspot_indices", "design_length"),
             }[generator.request["mode"]]
             if any(generator.request.get(key) in (None, "") for key in required):
                 raise ValueError(f"{name} {generator.request['mode']} requires {', '.join(required)}")
+            if name == "ppiflow":
+                validate_request("ppiflow", {"name": self.name, **generator.request})
+            if name == "ppiflow" and generator.request["mode"] == "binder":
+                if generator.chains.target != [generator.request["target_chain"]] or generator.chains.binder != [
+                    generator.request["binder_chain"]
+                ]:
+                    raise ValueError("PPIFlow binder request chains must match the declared target/binder roles")
             if generator.request["mode"] == "antibody":
-                # Use the same request contract as the public model tools.
-                validate_request("ppiflow", generator.request)
                 heavy = generator.request["heavy_chain"]
                 light = generator.request["light_chain"]
                 if heavy == light or set(generator.chains.binder) != {heavy, light}:

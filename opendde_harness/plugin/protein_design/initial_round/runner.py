@@ -294,8 +294,9 @@ class InitialRoundRunner:
         generator = self.config.generators[parent["source"]]
         before_atoms = structure(self.files.local(parent["generated_structure"]))
         original_request = parent.get("generation_request", generator.request)
-        fixed = selection_positions(original_request.get("fixed_positions"), before_atoms, generator.chains.binder)
-        allowed = selection_positions(original_request.get("cdr_position"), before_atoms, generator.chains.binder)
+        constraints = generator.refinement_request(original_request)
+        fixed = selection_positions(constraints.get("fixed_positions"), before_atoms, generator.chains.binder)
+        allowed = selection_positions(constraints.get("cdr_position"), before_atoms, generator.chains.binder)
         admitted = []
         for path in sorted(set(paths)):
             sequences = chain_sequences(path)

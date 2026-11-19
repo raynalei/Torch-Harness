@@ -16,6 +16,7 @@ from opendde_harness.plugin.protein_design.core.model_requests import (
     REQUEST_TYPES,
     ROSETTA_OPERATIONS,
     AF3ScoreRequest,
+    ppiflow_defaults_for_mode,
     validate_request,
     validate_request_defaults,
 )
@@ -294,7 +295,12 @@ class ProteinModelRegistry:
 
     async def submit(self, name: str, request_id: str, request: dict, operation: str | None = None):
         model = self.model(name)
-        payload = validate_request(model.kind, {**model.request_defaults, **request}, operation)
+        request_defaults = model.request_defaults
+        if model.kind == "ppiflow":
+            request_defaults = ppiflow_defaults_for_mode(
+                request_defaults, request.get("mode", request_defaults.get("mode"))
+            )
+        payload = validate_request(model.kind, {**request_defaults, **request}, operation)
         self.validate_paths(model, payload)
         for field in (
             "num_samples",

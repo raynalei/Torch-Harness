@@ -328,7 +328,17 @@ Use the actual deployed node/port in registration for each tool. Native
 model Python/weights remain configured in that service's environment, never in
 new user-supplied workflow annotations.
 
-PPIFlow `mode: binder` accepts an omitted `binder_chain`; Harness does not require
-that request field or insert one during request validation. An explicitly supplied
-value is still checked against workflow chain-role metadata. Other mode requirements
-and downstream chain mapping are unchanged.
+PPIFlow `mode: binder` requires `input_pdb`, `target_chain`, `binder_chain`,
+`samples_min_length`, and `samples_max_length`. A workflow can populate the
+request's chain fields from its explicitly supplied chain roles. The binder API
+does not accept `framework_dir`, `fixed_positions`, or `num_timesteps`. Harness
+excludes incompatible deployment defaults from binder requests and rejects
+incompatible fields supplied in API requests before submission.
+
+Each of the five PPIFlow modes validates its own supported fields. Partial Flow
+uses string selections for `fixed_positions` and `cdr_position` and accepts
+`start_t` in [0, 1]. In modes that accept `num_timesteps`, the maximum is 2000.
+If omitted, the API's default `samples_per_target` is 5. Use the compact task's
+`fixed_positions` for future antibody/VHH refinement, or set
+`generators.ppiflow.partial_flow` in an explicit workflow. Harness keeps these
+constraints out of the initial generation request.
