@@ -37,7 +37,7 @@ class InitialRoundTool(Tool):
             return "Resume an authorized workflow from its existing run_dir and immutable snapshot. Reuse completed generation/scoring/folding/results; retry confirmed failed steps only, preserving attempt history. Never choose a new run name to recover. Running or uncertain jobs retain their remote IDs; failed infrastructure does not imply scientific failure."
         if self.action == "status":
             return "Read saved automatic initial-round progress once. If pending_regions is present, show its question, candidate PDB and reason to the user and request their CDR ranges. Otherwise the worker already polls Slurm; do not use repeated LLM calls to poll."
-        return "Start the authorized checkpointed workflow. Autonomous rounds use TorchScore ipTM/pTM: initial ipTM<0.5 terminates that candidate; both scores>0.8 go directly to TorchFold/DockQ. Other initial candidates use Rosetta ResResE logs and the supplied interface-energy algorithm to fix binder residues with energy<-5 for Partial Flow. Rescore Partial Flow output: both>0.8 go to TorchFold/DockQ, otherwise run registered TorchOptimization. Rescore optimization output: both>0.8 go to TorchFold/DockQ, otherwise terminate. Hotspot contacts are diagnostic. Qwen chooses only executable menu entries within the round/sample budget. Missing scores/logs are failures, never assumed passes. Do not invent residue energies or bypass Harness. Prefer compact task inputs with persistent design profiles and model defaults; no repeated source/weights/framework/deployment configuration or YAML is required. Advanced callers can supply run_config or config_path. Return run_dir; use status/list/resume after disconnects."
+        return "Start the authorized checkpointed workflow. Autonomous rounds use TorchScore ipTM/pTM: initial ipTM<0.5 terminates that candidate; both scores>0.8 go directly to TorchFold/DockQ. Other initial candidates use Rosetta ResResE logs and the supplied interface-energy algorithm to fix binder residues with energy<-5 for Partial Flow. Rescore Partial Flow output: both>0.8 go to TorchFold/DockQ, otherwise run registered TorchOptimization. Rescore optimization output: both>0.8 go to TorchFold/DockQ, otherwise terminate. Hotspot contacts are diagnostic. Qwen chooses only executable menu entries within the round/sample budget. Missing scores/logs are failures, never assumed passes. Do not invent residue energies or bypass Harness. Prefer compact task inputs with persistent deployment settings and server-side model defaults; never load a historical YAML or copy optional model parameters unless explicitly requested; no repeated source/weights/framework/deployment configuration or YAML is required. Advanced callers can supply run_config or config_path. Return run_dir; use status/list/resume after disconnects."
 
     @property
     def parameters(self):
@@ -85,7 +85,7 @@ class InitialRoundTool(Tool):
                 "pdb_path": {"type": "string", "description": "Absolute local mounted shared-filesystem PDB path."},
                 "config_path": {
                     "type": "string",
-                    "description": "Pipeline YAML; optional when plugin initial_round_config is configured.",
+                    "description": "Explicitly requested pipeline YAML only; historical initial_round_config is not loaded automatically.",
                 },
                 "run_config": {
                     **run_schema,
@@ -143,13 +143,13 @@ class InitialRoundTool(Tool):
                     return ToolResult(
                         json.dumps(result, ensure_ascii=False), "Automatic workflow started", retryable=False
                     )
-                profile = kwargs.get("config_path") or self.config.get("initial_round_config")
+                profile = kwargs.get("config_path")
                 inline = kwargs.get("run_config")
                 if inline is not None and kwargs.get("config_path"):
                     raise ValueError("use run_config or config_path, not both")
                 if inline is None and not profile:
                     raise ValueError(
-                        "assemble run_config from known tool inputs and registered services, or reuse a configured profile; no handwritten YAML is required"
+                        "supply task inputs using persistent deployment settings, or an explicit run_config/config_path; historical initial_round_config is never loaded automatically"
                     )
                 config = prepare_run(
                     inline if inline is not None else Path(profile),

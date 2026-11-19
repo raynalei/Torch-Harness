@@ -258,7 +258,7 @@ ROSETTA_OPERATIONS = (
 )
 
 
-def validate_request(kind: str, request: dict, operation: str | None = None) -> dict:
+def validate_request(kind: str, request: dict, operation: str | None = None, *, omit_defaults=False) -> dict:
     value = REQUEST_TYPES[kind].model_validate(request)
     if kind == "rosetta":
         if operation not in ROSETTA_OPERATIONS:
@@ -270,7 +270,7 @@ def validate_request(kind: str, request: dict, operation: str | None = None) -> 
             raise ValueError("mutation_binding_ddg requires mutation")
     elif operation is not None:
         raise ValueError("operation is only used for Rosetta")
-    return value.model_dump(exclude_none=True)
+    return value.model_dump(exclude_none=True, exclude_unset=omit_defaults)
 
 
 TARGET_REQUEST_FIELDS = frozenset(

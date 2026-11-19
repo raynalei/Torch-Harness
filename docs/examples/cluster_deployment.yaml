@@ -1,0 +1,141 @@
+# PROTOTYPE deployment configuration, not a historical design/run_config.
+# Import once after filling every __REQUIRED_ marker:
+# ddeharness protein-design models register --services-file cluster_deployment.yaml
+# Add --replace-existing only to deliberately update existing registrations/settings.
+# Restart Harness after importing. Runtime config remains JSON; this source may be YAML.
+# No target PDB, framework, hotspot or fixed-residue information belongs here.
+# Known paths/ports below come from this deployment's supplied scripts/configuration.
+# __REQUIRED_ fields are UNKNOWN, not working paths. Import rejects unfilled markers.
+# slurm-api.invalid is intentional: Harness resolves the sbatch allocation hostname.
+# Source/checkpoint/algorithm defaults stay in each API's own sbatch/main.py environment.
+# request_defaults stay empty so HTTP requests do not override those server defaults.
+# environment variables affect sbatch only if that script actually honors them.
+model_services:
+  ppiflow:
+    kind: ppiflow
+    max_samples: 1000
+    allowed_input_roots: [/lustre/grp/cmclab]
+    request_defaults: {}
+    service:
+      url: http://slurm-api.invalid:8010
+      health_path: /openapi.json
+      sbatch_script: /lustre/grp/cmclab/leiy/ppiflow_api/ppiflow-api.sbatch
+      sbatch_resolve_host: true
+      environment:
+        PPIFLOW_ROOT: /lustre/grp/cmclab/leiy/v3_basic
+        PPIFLOW_PYTHON: /lustre/grp/cmclab/leiy/conda_envs/ppi_env/bin/python
+        PPIFLOW_API_WORK: /lustre/grp/cmclab/leiy/ppiflow_api_jobs
+        # binder-design is NOT under PPIFLOW_ROOT; retain its actual location in
+        # the deployed API's own configuration, never derive it from this root.
+  torchcraft:
+    kind: torchcraft
+    max_samples: 1000
+    allowed_input_roots: [/lustre/grp/cmclab]
+    request_defaults: {}
+    service:
+      url: http://slurm-api.invalid:8020  # Confirm this port against the actual script.
+      health_path: /openapi.json
+      sbatch_script: /lustre/grp/cmclab/leiy/torchcraft_api/torchcraft-api.sbatch
+      sbatch_resolve_host: true
+      # Its sbatch must activate its own environment and resolve source/weights.
+      environment: {}
+  af3score:
+    kind: af3score
+    allowed_input_roots: [/lustre/grp/cmclab]
+    request_defaults: {}
+    service:
+      url: http://slurm-api.invalid:8030
+      sbatch_script: /lustre/grp/cmclab/leiy/af3score_api/af3score-api.sbatch
+      sbatch_resolve_host: true
+      environment: {}
+  torchfold:
+    kind: torchfold
+    allowed_input_roots: [/lustre/grp/cmclab]
+    request_defaults: {}
+    service:
+      url: http://slurm-api.invalid:8040
+      sbatch_script: /lustre/grp/cmclab/leiy/torchfold_api/torchfold-api.sbatch
+      sbatch_resolve_host: true
+      environment: {}
+  rosetta:
+    kind: rosetta
+    allowed_input_roots: [/lustre/grp/cmclab]
+    request_defaults: {}
+    service:
+      url: http://slurm-api.invalid:8050
+      sbatch_script: /lustre/grp/cmclab/leiy/rosetta_biotools_api/rosetta-api.sbatch
+      sbatch_resolve_host: true
+      metric_fields: {interface_dg: dG_separated}
+      environment:
+        ROSETTA_API_DIR: /lustre/grp/cmclab/leiy/rosetta_biotools_api
+        ROSETTA_API_PYTHON: /lustre/grp/cmclab/leiy/conda_envs/ppi_env/bin/python
+        ROSETTA_CONDA_ENV: /lustre/grp/cmclab/leiy/conda_envs/ppi_env
+        ROSETTA_API_WORK: /lustre/grp/cmclab/leiy/rosetta_api_jobs
+        ROSETTA_ALLOWED_INPUT_ROOTS: /lustre/grp/cmclab
+        ROSETTA_PARTITION: sugon
+        # ROSETTA_CONDA_SH: set once if conda is unavailable in batch startup.
+  torchopt:
+    kind: torchopt
+    allowed_input_roots: [/lustre/grp/cmclab]
+    request_defaults: {}
+    service:
+      url: http://slurm-api.invalid:8060  # Confirm against actual script.
+      status_field: state
+      sbatch_script: /lustre/grp/cmclab/leiy/torchoptimization-api/torchopt_api.sbatch
+      sbatch_resolve_host: true
+      environment: {}
+  torchscore:
+    kind: torchscore
+    allowed_input_roots: [/lustre/grp/cmclab]
+    request_defaults: {}
+    service:
+      url: http://slurm-api.invalid:8070
+      sbatch_script: /lustre/grp/cmclab/leiy/Torchscore-api/torchscore-api.sbatch
+      sbatch_resolve_host: true
+      metric_fields: {iptm: iptm, ptm: ptm}
+      environment: {}
+workflow_defaults:
+  work_dir: /lustre/grp/cmclab/leiy/harness/runs
+  path_mappings:
+    # This assumes Harness runs on the cluster and sees this same absolute mount.
+    # Change local if Harness mounts Lustre elsewhere; remote remains cluster path.
+    - {local: /lustre/grp/cmclab, remote: /lustre/grp/cmclab}
+  evaluation:
+    scoring_backend: torchscore
+    dockq_python: /lustre/grp/cmclab/leiy/conda_envs/ppi_env/bin/python
+    rosetta_residue_glob: '*.out'
+  autonomous:
+    decision_policy: agent
+    # No extra limits are imposed here; prototype's existing defaults still apply.
+design_profiles:
+  vhh:
+    generators:
+      ppiflow:
+        request: {mode: nanobody, antigen_chain: C, heavy_chain: A}
+        chains: {target: [C], binder: [A], refold_map: {C: C, A: A}}
+      torchcraft:
+        request: {mode: vhh}
+        chains: {target: [C], binder: [A], refold_map: {C: C, A: A}}
+  antibody:
+    generators:
+      ppiflow:
+        # Supply framework_dir and cdr_length in the current task.
+        request: {mode: antibody, antigen_chain: C, heavy_chain: A, light_chain: B}
+        chains: {target: [C], binder: [A, B], refold_map: {C: C, A: A, B: B}}
+  minibinder:
+    generators:
+      ppiflow:
+        # Supply required design lengths with generator_overrides in current task.
+        request: {mode: binder, target_chain: C, binder_chain: A}
+        chains: {target: [C], binder: [A], refold_map: {C: C, A: A}}
+      torchcraft:
+        # Supply design_length through the current task generator_overrides.
+        request: {mode: mini_binder}
+        chains: {target: [C], binder: [A], refold_map: {C: C, A: A}}
+# The task/agent chooses generators: [ppiflow] or [torchcraft] explicitly.
+# CSV column names and indexing must come from the actual TorchCraft reader.
+target_adapters:
+  torchcraft:
+    hotspot_numbering: __REQUIRED_TORCHCRAFT_HOTSPOT_NUMBERING__
+    csv_id_column: __REQUIRED_TORCHCRAFT_CSV_ID_COLUMN__
+    csv_sequence_column: __REQUIRED_TORCHCRAFT_CSV_SEQUENCE_COLUMN__

@@ -55,7 +55,9 @@ class InitialRoundRunner:
             raise RuntimeError("install optional dependencies with uv sync --locked --extra dev --extra initial-round")
         if not self.config.evaluation.dockq_python.is_absolute() or not self.config.evaluation.dockq_python.is_file():
             raise ValueError(
-                "evaluation.dockq_python must name an existing absolute interpreter path in an isolated DockQ environment"
+                "evaluation.dockq_python must name an existing absolute interpreter path in an isolated DockQ environment; "
+                f"configured path: {self.config.evaluation.dockq_python}. Repair this deployment path; "
+                "do not search for another environment or regenerate candidates."
             )
         self.files.remote(self.root)
         path_keys = {
@@ -181,7 +183,7 @@ class InitialRoundRunner:
                 continue
             try:
                 if self.config.autonomous is not None:
-                    request = validate_request(source, {"name": self.config.name, **request})
+                    request = validate_request(source, {"name": self.config.name, **request}, omit_defaults=True)
                 if self.config.autonomous is not None and round_index:
                     (self.root / f"round-{round_index}" / source).mkdir(parents=True, exist_ok=True)
                 result = await self.job(source, f"generate/{stage}", "/v1/designs", "design_id", request)

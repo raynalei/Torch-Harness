@@ -1,6 +1,6 @@
 # Configure once, then describe each new protein
 
-The complete workflow tool now accepts a compact `task`. Deployment information
+The complete workflow tool now accepts a compact `task`. New compact tasks omit optional model tuning parameters, weights/config paths and inherited evaluation options so the API uses its own defaults. Only current task generator_overrides are sent as explicit overrides. Historical initial_round_config YAML is never loaded implicitly; config_path remains an explicit opt-in. Deployment information
 is loaded from the active Harness instance config, not recalled from conversation
 history. Existing `run_config`, YAML and checkpoint entry points remain supported.
 The current prototype routing rules and budgets are unchanged.
@@ -37,7 +37,7 @@ if the native reader requires additional fixed CSV columns.
 
 The importer removes the previous target PDB, hotspots, target CSV, task name and
 output folder. Old fold templates are cleared because they can contain another
-antigen's MSAs/features. It removes framework and fixed/designable residue requirements as task inputs. It keeps weights/request settings, output root,
+antigen's MSAs/features. It removes framework and fixed/designable residue requirements as task inputs. It keeps weights/request settings for explicit legacy configurations, output root,
 shared mappings and DockQ environment. Services uniquely registered globally are
 reused rather than copied into the new profile. The imported common evaluation
 selects TorchScore and enables autonomous; check the resulting configuration before
@@ -89,7 +89,7 @@ For example, add fixed request fields to an existing registration:
 }
 ```
 
-All seven model kinds support `request_defaults` using their real request schema.
+Standalone model calls and explicit legacy workflows support `request_defaults` using the real request schemas. Compact tasks ignore inherited optional model defaults so the API uses server defaults; current task generator_overrides remain explicit.
 Target-specific paths, hotspots, task names and old target sequence files are
 rejected as persistent request defaults. Framework and fixed/designable residue requirements must be supplied by the current task, not persisted in profiles or request defaults. Legacy persisted values are ignored by the workflow for new tasks. If several registrations
 share a kind, select an alias once with profile `model_aliases`, for example
@@ -163,8 +163,7 @@ inherited fixed points and allowed regions.
   An optional `target_sequence_csv` must match the observed target sequence; stale
   or mismatched files are rejected.
 - Clear old target-specific fields and prepared fold templates. Generated requests
-  use current PDB, hotspots, chain roles and per-run output directories. Static
-  weights/evaluation settings are loaded from defaults. Framework and residue constraints come from the current task.
+  use current PDB, hotspots, chain roles and per-run output directories. Optional model tuning/weights values are omitted from compact-task requests; APIs resolve their defaults. Harness evaluation thresholds and deployment settings remain configured. Framework and residue constraints come from the current task.
 - Snapshot the resolved configuration to `worker-config.json` / `run-config.json`.
   Editing defaults affects new tasks, not existing runs. Missing or invalid inputs
   produce actionable errors before Slurm submission rather than guessed paths.
@@ -179,3 +178,25 @@ Precedence is model request defaults, then common workflow defaults, then the
 selected design profile, then explicit task values. The final complete request is
 validated against the original scientific API schema. Missing services, frameworks,
 DockQ interpreters or incompatible budgets remain errors, not automatic substitutions.
+
+## Deployment-only YAML, without historical task parameters
+
+Use `docs/examples/cluster_deployment.yaml` as the single deployment source. It
+covers all seven registrations, known service environments and shared paths,
+DockQ, and scientific chain-role profiles. Source/weights/algorithm defaults stay
+in the API sbatch/server, not copied from a past design. All seven sbatch paths are supplied by the deployment owner. Unknown TorchCraft CSV/indexing settings are marked `__REQUIRED_...`; import refuses them until filled. Empty environment maps
+mean the existing sbatch owns that service's environment, not that its deployment
+was verified. TorchCraft CSV conventions also require the actual native contract.
+
+```bash
+ddeharness protein-design models register \
+  --services-file /actual/path/cluster_deployment.yaml \
+  --opendde-config /actual/path/config.json
+```
+
+Once imported and Harness restarted, new tasks read that instance's configuration.
+They do not locate an arbitrary prior YAML. Explicit `config_path` is still supported
+when the user deliberately requests a saved workflow. An empty/null DockQ interpreter
+uses the persisted interpreter (or the built-in default), never the current directory.
+A missing configured interpreter is reported as a deployment failure; it is not a
+reason for the agent to search for a different environment or regenerate candidates.

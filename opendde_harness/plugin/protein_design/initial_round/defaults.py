@@ -40,6 +40,11 @@ def deployment_settings(settings):
 
 def workflow_values(value, settings):
     settings = deployment_settings(settings)
+    value = copy.deepcopy(value)
+    evaluation = value.get("evaluation", {})
+    dockq = evaluation.get("dockq_python")
+    if dockq is None or (isinstance(dockq, str) and not dockq.strip()):
+        evaluation.pop("dockq_python", None)
     mode = value.get("generators", {}).get("ppiflow", {}).get("request", {}).get("mode")
     design = value.get("design_type") or DESIGN_MODES.get(mode)
     base = merge_defaults(settings.get("workflow_defaults", {}), settings.get("design_profiles", {}).get(design, {}))
@@ -90,3 +95,37 @@ def validate_settings(settings):
         from .task_inputs import TorchCraftAdapter
 
         TorchCraftAdapter.model_validate(adapters["torchcraft"])
+
+
+# Scientific shape/chain requirements are not model tuning defaults.
+SCIENTIFIC_GENERATOR_FIELDS = frozenset(
+    {
+        "mode",
+        "antigen_chain",
+        "target_chain",
+        "binder_chain",
+        "heavy_chain",
+        "light_chain",
+        "cdr_length",
+        "samples_min_length",
+        "samples_max_length",
+        "design_length",
+    }
+)
+
+
+def server_default_settings(settings):
+    settings = deployment_settings(settings)
+    for model in settings.get("model_services", {}).values():
+        model["request_defaults"] = {
+            key: value for key, value in model.get("request_defaults", {}).items() if key in SCIENTIFIC_GENERATOR_FIELDS
+        }
+    for profile in [settings.get("workflow_defaults", {}), *settings.get("design_profiles", {}).values()]:
+        for generator in profile.get("generators", {}).values():
+            generator["request"] = {
+                key: value for key, value in generator.get("request", {}).items() if key in SCIENTIFIC_GENERATOR_FIELDS
+            }
+        for key in list(profile.get("evaluation", {})):
+            if key.endswith("_options"):
+                profile["evaluation"].pop(key)
+    return settings

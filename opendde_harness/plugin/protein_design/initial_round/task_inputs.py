@@ -73,9 +73,9 @@ def prepare_design_task(task, settings):
     from .automation import prepare_run
 
     task = DesignTask.model_validate(task)
-    from .defaults import deployment_settings
+    from .defaults import server_default_settings
 
-    settings = deployment_settings(settings)
+    settings = server_default_settings(settings)
     validate_settings(settings)
     profile = settings.get("design_profiles", {}).get(task.design_type)
     if profile is None:

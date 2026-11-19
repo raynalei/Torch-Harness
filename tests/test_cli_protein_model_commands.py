@@ -222,3 +222,28 @@ def test_replacing_static_defaults_requires_explicit_flag(tmp_path):
     assert invoke(path, "register", "--services-file", str(source)).exit_code == 1
     assert json.loads(path.read_text()) == original
     assert invoke(path, "register", "--services-file", str(source), "--replace-existing").exit_code == 0
+
+
+def test_cluster_deployment_yaml_requires_native_contract_and_imports_when_completed(tmp_path):
+    from pathlib import Path
+
+    source = tmp_path / "deployment.yaml"
+    content = (Path(__file__).resolve().parents[1] / "docs/examples/cluster_deployment.yaml").read_text()
+    source.write_text(content)
+    path = tmp_path / "config.json"
+    result = invoke(path, "register", "--services-file", str(source))
+    assert result.exit_code == 1
+    assert not path.exists()
+    content = content.replace("__REQUIRED_TORCHCRAFT_HOTSPOT_NUMBERING__", "sequence_0_based")
+    content = content.replace("__REQUIRED_TORCHCRAFT_CSV_ID_COLUMN__", "id")
+    content = content.replace("__REQUIRED_TORCHCRAFT_CSV_SEQUENCE_COLUMN__", "sequence")
+    source.write_text(content)
+    result = invoke(path, "register", "--services-file", str(source))
+    assert result.exit_code == 0, result.output
+    settings = json.loads(path.read_text())["plugins"]["config"]["protein-design"]
+    assert len(settings["model_services"]) == 7
+    assert (
+        settings["workflow_defaults"]["evaluation"]["dockq_python"]
+        == "/lustre/grp/cmclab/leiy/conda_envs/ppi_env/bin/python"
+    )
+    assert all(not model["request_defaults"] for model in settings["model_services"].values())

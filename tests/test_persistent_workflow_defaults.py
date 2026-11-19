@@ -68,8 +68,8 @@ def test_new_target_uses_static_settings_and_creates_fresh_csv(task, settings):
     ppiflow = config.generators["ppiflow"].request
     craft = config.generators["torchcraft"].request
     assert ppiflow["samples_per_target"] == craft["num_designs"] == 5
-    assert ppiflow["model_weights"] == "/shared/static/weights.ckpt"
-    assert ppiflow["num_timesteps"] == 77
+    assert "model_weights" not in ppiflow
+    assert "num_timesteps" not in ppiflow
     assert ppiflow["specified_hotspots"] == "A1,A2"
     assert craft["hotspot_indices"] == "0,1"
     files = SharedFiles(config.path_mappings)
@@ -448,3 +448,48 @@ def test_minibinder_prompt_selects_generator_and_native_mode(task, settings, sou
     config = prepare_design_task(task, settings)
     assert set(config.generators) == {source}
     assert config.generators[source].request["mode"] == ("binder" if source == "ppiflow" else "mini_binder")
+
+
+@pytest.mark.parametrize("value", ["", "   ", None])
+def test_empty_dockq_uses_deployment_default(value):
+    from opendde_harness.plugin.protein_design.initial_round.config import Evaluation
+    from opendde_harness.plugin.protein_design.initial_round.defaults import workflow_values
+
+    config = Evaluation(dockq_python=value, af3score={"url": "https://score.test"})
+    assert str(config.dockq_python) == "/lustre/grp/cmclab/leiy/conda_envs/ppi_env/bin/python"
+    merged = workflow_values(
+        {"evaluation": {"dockq_python": value}},
+        {"workflow_defaults": {"evaluation": {"dockq_python": "/shared/custom/python"}}},
+    )
+    assert merged["evaluation"]["dockq_python"] == "/shared/custom/python"
+
+
+async def test_historical_yaml_is_not_implicitly_loaded(tmp_path, monkeypatch):
+    from opendde_harness.plugin.protein_design.tools.initial_round import InitialRoundTool
+
+    path = tmp_path / "old.yaml"
+    path.write_text("this is not a workflow")
+    result = json.loads(
+        (await InitialRoundTool({"initial_round_config": str(path)}, "start").execute(user_confirmed=True)).model_text
+    )
+    assert "never loaded automatically" in result["error"]
+
+
+def test_unspecified_generator_parameters_are_omitted_from_payload():
+    from opendde_harness.plugin.protein_design.core.model_requests import validate_request
+
+    value = validate_request(
+        "torchcraft",
+        {
+            "mode": "mini_binder",
+            "name": "new",
+            "pdb_path": "/shared/x.pdb",
+            "hotspot_indices": "0",
+            "target_full_seq": "/shared/x.csv",
+            "design_length": 50,
+            "num_designs": 100,
+        },
+        omit_defaults=True,
+    )
+    assert "seed" not in value
+    assert value["num_designs"] == 100

@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import AliasChoices, ConfigDict, Field, model_serializer, model_validator
+from pydantic import AliasChoices, ConfigDict, Field, field_validator, model_serializer, model_validator
 
 from opendde_harness.plugin.protein_design.core.contracts import ContractModel
 from opendde_harness.plugin.protein_design.core.model_requests import (
@@ -128,6 +128,14 @@ class Evaluation(RoundModel):
     min_torchscore_ptm: float = Field(default=0.8, ge=0, le=1)
     min_refold_iptm: float = Field(default=0.8, ge=0, le=1)
     min_dockq: float = Field(default=0.49, ge=0, le=1)
+
+    @field_validator("dockq_python", mode="before")
+    @classmethod
+    def default_dockq_interpreter(cls, value):
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return cls.model_fields["dockq_python"].default
+        return value
+
     dockq_python: Path = Path("/lustre/grp/cmclab/leiy/conda_envs/ppi_env/bin/python")
     dockq_timeout: float = Field(default=300, gt=0)
     # Explicit scalar field in TorchFold confidence JSON, selected by Service.metric_fields.
