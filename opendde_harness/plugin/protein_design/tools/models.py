@@ -144,12 +144,15 @@ def _tool(ctx: PluginContext, action: str):
     root = Path(ctx.config.get("model_jobs_dir") or storage.root / "protein_model_jobs" / storage.scope).expanduser()
     if not root.is_absolute():
         raise ValueError("model_jobs_dir must be an absolute path")
+    from ..initial_round.defaults import load_deployment_defaults
+
+    deployment = load_deployment_defaults(ctx.config)
     registry = ProteinModelRegistry(
-        ctx.config.get("model_services") or {},
+        deployment.get("model_services") or {},
         root,
         config_path=get_config_path(),
         auto_monitor=True,
-        workflow_settings=ctx.config,
+        workflow_settings=deployment,
     )
     return ProteinModelTool(registry, action)
 

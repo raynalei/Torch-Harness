@@ -3,9 +3,9 @@
 The complete workflow tool now accepts a compact `task`. New compact tasks omit optional model tuning parameters, weights/config paths and inherited evaluation options so the API uses its own defaults. Only current task generator_overrides are sent as explicit overrides. Historical initial_round_config YAML is never loaded implicitly; config_path remains an explicit opt-in. Deployment information
 is loaded from the active Harness instance config, not recalled from conversation
 history. Existing `run_config`, YAML and checkpoint entry points remain supported.
-The current prototype routing rules and budgets are unchanged.
+The current prototype routing rules and budgets are unchanged. Missing deployment settings automatically fall back to `docs/examples/cluster_deployment.yaml` in a checkout (the exact same YAML is bundled beside defaults.py in installed wheels). No import or historical task YAML is required for that fallback.
 
-## One-time setup using an existing working configuration
+## Optional explicit import from an existing working configuration
 
 Keep the existing seven registrations in `plugins.config.protein-design.model_services`.
 Import a known task once to save its fixed deployment and workflow settings:
@@ -30,7 +30,7 @@ ddeharness protein-design models defaults \
   --opendde-config /actual/path/to/config.json
 ```
 
-Other supported conventions are `sequence_1_based` and `pdb_residue_id`. CSV column
+The bundled deployment uses `target` / `real_sequence` and `pdb_residue_id` with `csv_optional: true`. Other supported conventions are `sequence_1_based` and `pdb_residue_id`. CSV column
 names must match the actual TorchCraft deployment; Harness does not infer that
 contract from hotspot numbers. Configure `target_adapters.torchcraft.csv_extra_columns`
 if the native reader requires additional fixed CSV columns.
@@ -160,8 +160,7 @@ inherited fixed points and allowed regions.
   fabricated missing biological sequence. If the native model needs a longer full
   sequence than the supplied structure represents, provide a compatible complete
   structure/verified sequence input; this adapter does not infer unobserved residues.
-  An optional `target_sequence_csv` must match the observed target sequence; stale
-  or mismatched files are rejected.
+  An optional `target_sequence_csv` may supply the full biological sequence; it must be compatible with observed residues. A missing target row uses native PDB fallback, while duplicate rows or incompatible matched sequences are rejected.
 - Clear old target-specific fields and prepared fold templates. Generated requests
   use current PDB, hotspots, chain roles and per-run output directories. Optional model tuning/weights values are omitted from compact-task requests; APIs resolve their defaults. Harness evaluation thresholds and deployment settings remain configured. Framework and residue constraints come from the current task.
 - Snapshot the resolved configuration to `worker-config.json` / `run-config.json`.
@@ -184,7 +183,7 @@ DockQ interpreters or incompatible budgets remain errors, not automatic substitu
 Use `docs/examples/cluster_deployment.yaml` as the single deployment source. It
 covers all seven registrations, known service environments and shared paths,
 DockQ, and scientific chain-role profiles. Source/weights/algorithm defaults stay
-in the API sbatch/server, not copied from a past design. All seven sbatch paths are supplied by the deployment owner. Unknown TorchCraft CSV/indexing settings are marked `__REQUIRED_...`; import refuses them until filled. Empty environment maps
+in the API sbatch/server, not copied from a past design. All seven sbatch paths are supplied by the deployment owner. TorchCraft is configured with target/real_sequence columns, pdb_residue_id hotspot numbering and optional CSV fallback. Empty environment maps
 mean the existing sbatch owns that service's environment, not that its deployment
 was verified. TorchCraft CSV conventions also require the actual native contract.
 
@@ -200,3 +199,24 @@ when the user deliberately requests a saved workflow. An empty/null DockQ interp
 uses the persisted interpreter (or the built-in default), never the current directory.
 A missing configured interpreter is reported as a deployment failure; it is not a
 reason for the agent to search for a different environment or regenerate candidates.
+
+
+## Automatic deployment fallback
+
+New task/run_config preparation and model discovery load the single source YAML `docs/examples/cluster_deployment.yaml` in editable checkouts, or its packaged copy
+`opendde_harness/plugin/protein_design/initial_round/cluster_deployment.yaml`.
+It is the same configuration as `docs/examples/cluster_deployment.yaml`, not a
+historical experiment. Existing instance settings override its defaults; an explicit
+nonempty model registry defines available models and is not silently expanded.
+Set `plugins.config.protein-design.deployment_config` to an absolute deployment
+YAML path to use an operator-owned file instead. That file must contain deployment
+sections, not a task's name/generators/evaluation. The model catalogue reports its
+resolved path. Current task inputs override defaults; existing runs retain snapshots.
+
+TorchCraft CSV is optional; omit it to use the native sequence extracted from PDB.
+When a complete sequence CSV is supplied, match its `target` value to the original
+PDB filename without extension and read `real_sequence`. Harness preserves the full
+sequence and rewrites the row's identifier to match the prepared PDB filename.
+A missing matching row uses the PDB fallback; duplicate matches or an incompatible
+sequence are rejected. No complete sequence is invented from missing structure
+residues. `hotspot_indices` are comma-separated input-PDB residue IDs.

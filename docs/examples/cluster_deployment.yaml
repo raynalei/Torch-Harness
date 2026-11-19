@@ -1,13 +1,13 @@
 # PROTOTYPE deployment configuration, not a historical design/run_config.
-# Import once after filling every __REQUIRED_ marker:
+# This is also bundled beside defaults.py as the automatic deployment fallback.
+# To persist operator edits, import this file once:
 # ddeharness protein-design models register --services-file cluster_deployment.yaml
 # Add --replace-existing only to deliberately update existing registrations/settings.
 # Restart Harness after importing. Runtime config remains JSON; this source may be YAML.
 # No target PDB, framework, hotspot or fixed-residue information belongs here.
 # Known paths/ports below come from this deployment's supplied scripts/configuration.
-# __REQUIRED_ fields are UNKNOWN, not working paths. Import rejects unfilled markers.
 # slurm-api.invalid is intentional: Harness resolves the sbatch allocation hostname.
-# Source/checkpoint/algorithm defaults stay in each API's own sbatch/main.py environment.
+# Source/checkpoint/algorithm defaults remain in each API sbatch/main.py.
 # request_defaults stay empty so HTTP requests do not override those server defaults.
 # environment variables affect sbatch only if that script actually honors them.
 model_services:
@@ -136,6 +136,7 @@ design_profiles:
 # CSV column names and indexing must come from the actual TorchCraft reader.
 target_adapters:
   torchcraft:
-    hotspot_numbering: __REQUIRED_TORCHCRAFT_HOTSPOT_NUMBERING__
-    csv_id_column: __REQUIRED_TORCHCRAFT_CSV_ID_COLUMN__
-    csv_sequence_column: __REQUIRED_TORCHCRAFT_CSV_SEQUENCE_COLUMN__
+    hotspot_numbering: pdb_residue_id
+    csv_id_column: target
+    csv_sequence_column: real_sequence
+    csv_optional: true

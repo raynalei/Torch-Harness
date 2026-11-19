@@ -45,9 +45,13 @@ def prepare_run(
             plugin_config = load_config().plugins.config.get("protein-design", {})
         else:
             plugin_config = {}
-    from .defaults import deployment_settings, workflow_values
+    from .defaults import deployment_settings, load_deployment_defaults, workflow_values
 
+    if registrations is None:
+        plugin_config = load_deployment_defaults(plugin_config)
     plugin_config = deployment_settings(plugin_config)
+    if registrations is None:
+        plugin_config = load_deployment_defaults(plugin_config)
     plugin_config = deployment_settings(plugin_config)
     value = workflow_values(value, plugin_config)
     aliases = value.pop("model_aliases", {})

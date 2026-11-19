@@ -74,7 +74,7 @@ def test_new_target_uses_static_settings_and_creates_fresh_csv(task, settings):
     assert craft["hotspot_indices"] == "0,1"
     files = SharedFiles(config.path_mappings)
     rows = list(csv.DictReader(files.local(craft["target_full_seq"]).open()))
-    assert rows == [{"id": config.name, "sequence": "GGGGGG"}]
+    assert rows == [{"id": "target", "sequence": "GGGGGG"}]
     assert craft["target_full_seq"] != "/shared/target.csv"
     assert config.evaluation.dockq_python == Path(before["workflow_defaults"]["evaluation"]["dockq_python"])
     assert settings["design_profiles"] == before["design_profiles"]
@@ -130,10 +130,10 @@ def test_bad_new_task_inputs_are_rejected_before_submission(task, settings, chan
         prepare_design_task(task, settings)
 
 
-def test_torchcraft_indexing_is_required_once_not_guessed(task, settings):
+def test_torchcraft_indexing_uses_confirmed_deployment_when_not_overridden(task, settings):
     settings.pop("target_adapters")
-    with pytest.raises(ValueError):
-        prepare_design_task(task, settings)
+    config = prepare_design_task(task, settings)
+    assert config.generators["torchcraft"].request["hotspot_indices"] == "1,2"
 
 
 def test_old_target_inputs_cannot_be_persisted_as_defaults(settings):
@@ -144,12 +144,12 @@ def test_old_target_inputs_cannot_be_persisted_as_defaults(settings):
         validate_settings(settings)
 
 
-def test_explicit_sequence_csv_cannot_silently_reuse_old_target(task, settings, tmp_path):
+def test_unmatched_sequence_csv_uses_native_pdb_fallback(task, settings, tmp_path):
     path = tmp_path / "wrong.csv"
     path.write_text("id,sequence\nold,AAAAAA\n")
     task["target_sequence_csv"] = str(path)
-    with pytest.raises(ValueError, match="does not match"):
-        prepare_design_task(task, settings)
+    config = prepare_design_task(task, settings)
+    assert "target_full_seq" not in config.generators["torchcraft"].request
 
 
 async def test_compact_tool_launches_without_yaml_or_repeated_static_inputs(task, settings, monkeypatch):
@@ -493,3 +493,113 @@ def test_unspecified_generator_parameters_are_omitted_from_payload():
     )
     assert "seed" not in value
     assert value["num_designs"] == 100
+
+
+def test_bundled_deployment_is_the_only_automatic_fallback(task, tmp_path):
+    import yaml
+
+    from opendde_harness.plugin.protein_design.initial_round.defaults import (
+        DEFAULT_DEPLOYMENT_CONFIG,
+        load_deployment_defaults,
+    )
+
+    task["generators"] = ["torchcraft"]
+    config = prepare_design_task(
+        task,
+        {
+            "workflow_defaults": {
+                "work_dir": str(tmp_path / "runs"),
+                "path_mappings": [{"local": str(tmp_path), "remote": "/shared"}],
+            }
+        },
+    )
+    request = config.generators["torchcraft"].request
+    assert request["hotspot_indices"] == "1,2"
+    assert "target_full_seq" not in request
+    assert str(config.evaluation.dockq_python) == "/lustre/grp/cmclab/leiy/conda_envs/ppi_env/bin/python"
+    assert (
+        str(config.generators["torchcraft"].service.sbatch_script)
+        == "/lustre/grp/cmclab/leiy/torchcraft_api/torchcraft-api.sbatch"
+    )
+    assert len(load_deployment_defaults({})["model_services"]) == 7
+    assert yaml.safe_load(DEFAULT_DEPLOYMENT_CONFIG.read_text()) == yaml.safe_load(
+        (Path(__file__).resolve().parents[1] / "docs/examples/cluster_deployment.yaml").read_text()
+    )
+
+
+def test_native_csv_preserves_full_sequence_and_matches_prepared_pdb(task, settings, tmp_path):
+    settings["target_adapters"]["torchcraft"] = {
+        "hotspot_numbering": "pdb_residue_id",
+        "csv_id_column": "target",
+        "csv_sequence_column": "real_sequence",
+        "csv_optional": True,
+    }
+    path = tmp_path / "full.csv"
+    path.write_text("target,real_sequence\nnew,MGGGGGGK\nother,AAAAAA\n")
+    task.update(generators=["torchcraft"], target_sequence_csv=str(path))
+    config = prepare_design_task(task, settings)
+    request = config.generators["torchcraft"].request
+    rows = list(csv.DictReader(SharedFiles(config.path_mappings).local(request["target_full_seq"]).open()))
+    assert rows == [{"target": Path(request["pdb_path"]).stem, "real_sequence": "MGGGGGGK"}]
+    assert request["hotspot_indices"] == "1,2"
+
+
+def test_deployment_override_never_accepts_a_historical_run_config(tmp_path):
+    from opendde_harness.plugin.protein_design.initial_round.defaults import load_deployment_defaults
+
+    path = tmp_path / "old-task.yaml"
+    path.write_text("name: old-task\ngenerators: {}\n")
+    with pytest.raises(ValueError, match="not a historical task"):
+        load_deployment_defaults({"deployment_config": str(path)})
+    path.write_text("workflow_defaults:\n  evaluation:\n    dockq_python: /shared/custom/python\n")
+    assert (
+        load_deployment_defaults({"deployment_config": str(path)})["workflow_defaults"]["evaluation"]["dockq_python"]
+        == "/shared/custom/python"
+    )
+
+
+async def test_launch_tool_uses_deployment_yaml_for_incomplete_run_config(task, tmp_path, monkeypatch):
+    from opendde_harness.plugin.protein_design.tools.initial_round import InitialRoundTool
+
+    launched = []
+    monkeypatch.setattr(
+        "opendde_harness.plugin.protein_design.tools.initial_round.start_round",
+        lambda config: launched.append(config) or {"state": "starting", "run_dir": str(config.work_dir / config.name)},
+    )
+    tool = InitialRoundTool(
+        {
+            "workflow_defaults": {
+                "work_dir": str(tmp_path / "runs"),
+                "path_mappings": [{"local": str(tmp_path), "remote": "/shared"}],
+            }
+        },
+        "start",
+    )
+    result = json.loads(
+        (
+            await tool.execute(
+                user_confirmed=True,
+                run_config={
+                    "name": "fallback-test",
+                    "design_type": "vhh",
+                    "evaluation": {"dockq_python": ""},
+                    "generators": {
+                        "ppiflow": {
+                            "request": {
+                                "mode": "nanobody",
+                                "antigen_pdb": "/shared/new.pdb",
+                                "framework_dir": "/shared/frameworks",
+                                "samples_per_target": 100,
+                            }
+                        }
+                    },
+                },
+            )
+        ).model_text
+    )
+    assert result["state"] == "starting", result
+    assert str(launched[0].evaluation.dockq_python) == "/lustre/grp/cmclab/leiy/conda_envs/ppi_env/bin/python"
+    assert (
+        str(launched[0].generators["ppiflow"].service.sbatch_script)
+        == "/lustre/grp/cmclab/leiy/ppiflow_api/ppiflow-api.sbatch"
+    )

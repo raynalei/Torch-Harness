@@ -84,6 +84,7 @@ class ProteinModelRegistry:
         return {
             "jobs_dir": str(self.root.resolve()),
             "workflow_defaults_configured": bool(self.workflow_settings.get("workflow_defaults")),
+            "deployment_config_source": self.workflow_settings.get("deployment_config"),
             "design_profiles": sorted(self.workflow_settings.get("design_profiles", {})),
             "compact_task_tool": "protein_initial_round_start",
             "known_job_directories": [str(root) for root in self.known_directories()],

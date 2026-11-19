@@ -84,6 +84,7 @@ allow-direct-references = true
 packages = ["opendde_harness"]
 
 [tool.hatch.build.targets.wheel.force-include]
+"docs/examples/cluster_deployment.yaml" = "opendde_harness/plugin/protein_design/initial_round/cluster_deployment.yaml"
 # The quickstart designs the agent reads before writing a new one. Without them
 # in the wheel, an installed release had no examples at all: they were found by
 # locating a source checkout, which a pip install does not have.

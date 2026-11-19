@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import copy
+from pathlib import Path
+
+import yaml
 
 from ..core.model_requests import TASK_DESIGN_FIELDS, validate_request_defaults
 from .config import InitialRoundConfig
 
-SETTINGS_KEYS = ("workflow_defaults", "design_profiles", "target_adapters")
+SETTINGS_KEYS = ("workflow_defaults", "design_profiles", "target_adapters", "deployment_config")
 DESIGN_MODES = {"nanobody": "vhh", "antibody": "antibody", "binder": "minibinder"}
 
 
@@ -62,6 +65,8 @@ def workflow_values(value, settings):
 
 
 def validate_settings(settings):
+    if settings.get("deployment_config") and not Path(settings["deployment_config"]).is_absolute():
+        raise ValueError("deployment_config must be an absolute YAML path")
     allowed = set(InitialRoundConfig.model_fields) | {"model_aliases"}
     for profile in [settings.get("workflow_defaults", {}), *settings.get("design_profiles", {}).values()]:
         if not isinstance(profile, dict) or set(profile) - allowed:
@@ -129,3 +134,29 @@ def server_default_settings(settings):
             if key.endswith("_options"):
                 profile["evaluation"].pop(key)
     return settings
+
+
+DEFAULT_DEPLOYMENT_CONFIG = Path(__file__).with_name("cluster_deployment.yaml")
+if not DEFAULT_DEPLOYMENT_CONFIG.is_file():
+    # Editable source checkout; wheel builds copy this exact file beside defaults.py.
+    DEFAULT_DEPLOYMENT_CONFIG = Path(__file__).resolve().parents[4] / "docs/examples/cluster_deployment.yaml"
+
+
+def load_deployment_defaults(settings):
+    """Use only the dedicated deployment YAML; never inspect historical tasks."""
+    path = Path(settings.get("deployment_config") or DEFAULT_DEPLOYMENT_CONFIG).expanduser()
+    if not path.is_file():
+        raise ValueError(f"deployment configuration not found: {path}")
+    defaults = yaml.safe_load(path.read_text())
+    if not isinstance(defaults, dict) or set(defaults) - {"model_services", *SETTINGS_KEYS}:
+        raise ValueError("deployment YAML must contain deployment sections, not a historical task run_config")
+    result = merge_defaults(defaults, settings)
+    result["deployment_config"] = str(path.resolve())
+    # An explicitly configured registry/adapter declares the available capabilities.
+    for key in ("model_services", "target_adapters"):
+        if settings.get(key):
+            result[key] = copy.deepcopy(settings[key])
+    for name, profile in settings.get("design_profiles", {}).items():
+        if "generators" in profile:
+            result["design_profiles"][name]["generators"] = copy.deepcopy(profile["generators"])
+    return result

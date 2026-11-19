@@ -185,7 +185,8 @@ class TorchCraftRequest(ContractModel):
     pdb_path: str | None = None
     hotspot_indices: str | None = None
     target_full_seq: str | None = Field(
-        default=None, description="Absolute remote path to the target sequence CSV, not a sequence string."
+        default=None,
+        description="Optional absolute remote CSV path (target,real_sequence); target matches PDB filename stem. Omit to use the native PDB-sequence fallback.",
     )
     json_path: str | None = None
     design_length: int | None = Field(default=None, ge=1)
@@ -204,8 +205,10 @@ class TorchCraftRequest(ContractModel):
             ):
                 raise ValueError("TorchCraft monomer_unconditional uses json_path, not target/framework inputs")
             return self
-        if not all((self.pdb_path, self.hotspot_indices, self.target_full_seq)):
-            raise ValueError(f"TorchCraft {self.mode} requires pdb_path, hotspot_indices and target_full_seq CSV path")
+        if not all((self.pdb_path, self.hotspot_indices)):
+            raise ValueError(
+                f"TorchCraft {self.mode} requires pdb_path and hotspot_indices; target_full_seq CSV is optional"
+            )
         if self.json_path is not None:
             raise ValueError("json_path is currently documented for TorchCraft monomer_unconditional only")
         if self.mode == "vhh" and not self.framework_cif_path:
