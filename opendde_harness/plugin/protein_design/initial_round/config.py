@@ -86,13 +86,15 @@ class Chains(RoundModel):
     target: list[str] = Field(min_length=1)
     binder: list[str] = Field(min_length=1)
     # Generated chain ID -> TorchFold input/output chain ID.
-    refold_map: dict[str, str]
+    refold_map: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def complete_map(self):
         chains = self.target + self.binder
         if len(set(chains)) != len(chains) or any(not c for c in chains):
             raise ValueError("target/binder chain IDs must be distinct and nonempty")
+        if not self.refold_map:
+            self.refold_map = {chain: chain for chain in chains}
         if set(self.refold_map) != set(chains) or len(set(self.refold_map.values())) != len(chains):
             raise ValueError("refold_map must map every target/binder chain exactly once")
         return self
@@ -293,7 +295,13 @@ class InitialRoundConfig(RoundModel):
                     raise ValueError("antibody binder chains must match distinct heavy_chain and light_chain")
                 if generator.request["antigen_chain"] not in generator.chains.target:
                     raise ValueError("antibody antigen_chain must be included in target chains")
-            elif len(generator.chains.binder) != 1:
+            elif name == "ppiflow":
+                mode = generator.request["mode"]
+                target = generator.request["target_chain" if mode == "binder" else "antigen_chain"]
+                binder = generator.request["binder_chain" if mode == "binder" else "heavy_chain"]
+                if generator.chains.target != [target] or generator.chains.binder != [binder]:
+                    raise ValueError("PPIFlow request chain names must match the declared target/binder roles")
+            if generator.request["mode"] != "antibody" and len(generator.chains.binder) != 1:
                 raise ValueError("initial round VHH/minibinder modes require exactly one binder chain")
         if not math.isfinite(self.evaluation.dockq_timeout):
             raise ValueError("dockq_timeout must be finite")

@@ -50,6 +50,7 @@ def task(tmp_path):
     return {
         "pdb_path": str(pdb(tmp_path / "new.pdb")),
         "target_chain": "A",
+        "binder_chains": ["B"],
         "design_type": "vhh",
         "hotspots": [1, 2],
         "initial_samples": 10,
@@ -173,6 +174,7 @@ async def test_complete_compact_workflow_reuses_registered_services(task, settin
     from opendde_harness.plugin.protein_design.initial_round.runner import InitialRoundRunner
 
     task["initial_samples"] = 2
+    task["refold_map"] = {"A": "X", "B": "Y"}
     config = prepare_design_task(task, settings)
     result = await InitialRoundRunner(config, transport=fake_services[0]).run()
     assert result["accepted"] == 2
@@ -267,13 +269,10 @@ def test_invalid_request_defaults_are_rejected_at_registration(tmp_path, default
         )
 
 
-def test_target_chain_collision_is_normalized_and_recorded(task, settings):
+def test_chain_collision_is_rejected_instead_of_renaming_user_input(task, settings):
     task.update(target_chain="B", hotspots=[1])
-    config = prepare_design_task(task, settings)
-    assert config.generators["ppiflow"].request["antigen_chain"] != "B"
-    provenance = json.loads((config.work_dir / config.name / "inputs/target-provenance.json").read_text())
-    assert provenance["source_chain"] == "B"
-    assert provenance["normalized_chain"] == config.generators["ppiflow"].chains.target[0]
+    with pytest.raises(ValueError, match="distinct"):
+        prepare_design_task(task, settings)
 
 
 def test_explicit_budget_conflicts_are_not_silently_changed(task, settings):
@@ -322,6 +321,8 @@ def test_other_design_types_use_their_own_static_profile(task, settings, design)
         profile["generators"]["torchcraft"]["request"] = {"mode": "mini_binder", "design_length": 60}
     settings["design_profiles"][design] = profile
     task["design_type"] = design
+    if design == "antibody":
+        task["binder_chains"] = ["B", "L"]
     config = prepare_design_task(task, settings)
     assert config.generators["ppiflow"].request["mode"] == ("antibody" if design == "antibody" else "binder")
     assert (
@@ -410,7 +411,7 @@ def test_persistent_experimental_choices_are_rejected(field):
 async def test_prompt_can_select_either_generator_without_submitting_other(task, settings, fake_services, source):
     from opendde_harness.plugin.protein_design.initial_round.runner import InitialRoundRunner
 
-    task.update(generators=[source], initial_samples=1)
+    task.update(generators=[source], initial_samples=1, refold_map={"A": "X", "B": "Y"})
     config = prepare_design_task(task, settings)
     assert set(config.generators) == {source}
     result = await InitialRoundRunner(config, transport=fake_services[0]).run()
@@ -588,6 +589,8 @@ async def test_launch_tool_uses_deployment_yaml_for_incomplete_run_config(task, 
                             "request": {
                                 "mode": "nanobody",
                                 "antigen_pdb": "/shared/new.pdb",
+                                "antigen_chain": "A",
+                                "heavy_chain": "B",
                                 "framework_dir": "/shared/frameworks",
                                 "samples_per_target": 100,
                             }
@@ -603,3 +606,40 @@ async def test_launch_tool_uses_deployment_yaml_for_incomplete_run_config(task, 
         str(launched[0].generators["ppiflow"].service.sbatch_script)
         == "/lustre/grp/cmclab/leiy/ppiflow_api/ppiflow-api.sbatch"
     )
+
+
+@pytest.mark.parametrize("source", ["ppiflow", "torchcraft"])
+def test_task_chain_names_override_deployment_and_refold_is_identity(task, settings, source):
+    task.update(generators=[source], binder_chains=["D"], design_type="minibinder")
+    profile = copy.deepcopy(settings["design_profiles"]["vhh"])
+    profile["generators"][source]["request"] = (
+        {"mode": "binder", "target_chain": "C", "binder_chain": "Z", "samples_min_length": 30, "samples_max_length": 60}
+        if source == "ppiflow"
+        else {"mode": "mini_binder", "design_length": 50}
+    )
+    settings["design_profiles"]["minibinder"] = profile
+    config = prepare_design_task(task, settings)
+    generator = config.generators[source]
+    assert generator.chains.target == ["A"]
+    assert generator.chains.binder == ["D"]
+    assert generator.chains.refold_map == {"A": "A", "D": "D"}
+    if source == "ppiflow":
+        assert generator.request["target_chain"] == "A"
+        assert generator.request["binder_chain"] == "D"
+    from opendde_harness.plugin.protein_design.initial_round.artifacts import prepare_fold
+
+    path = config.work_dir / config.name / "test-fold.json"
+    prepare_fold(None, {"A": "GGGGGG", "D": "AAAAAA"}, generator.chains, "test", path)
+    assert {row["protein"]["id"] for row in json.loads(path.read_text())["sequences"]} == {"A", "D"}
+
+
+def test_task_refold_map_is_only_used_when_explicit(task, settings):
+    task.update(binder_chains=["D"], refold_map={"A": "X", "D": "Y"})
+    config = prepare_design_task(task, settings)
+    assert all(g.chains.refold_map == {"A": "X", "D": "Y"} for g in config.generators.values())
+
+
+def test_missing_task_binder_names_cannot_use_yaml_defaults(task, settings):
+    task.pop("binder_chains")
+    with pytest.raises(ValueError, match="binder_chains"):
+        prepare_design_task(task, settings)

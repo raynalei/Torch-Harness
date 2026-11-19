@@ -55,7 +55,7 @@ Under `plugins.config.protein-design` in the active `config.json`:
 | `model_services.<alias>.service.environment` | Fixed source/Conda/Python/model locations exported to that API allocation |
 | `model_services.<alias>.request_defaults` | Fixed HTTP request fields such as checkpoint, config and algorithm defaults |
 | `workflow_defaults` | `work_dir`, `path_mappings`, DockQ/evaluation options and autonomous defaults |
-| `design_profiles.<type>` | Enabled generators, design modes, generator settings and chain roles |
+| `design_profiles.<type>` | Enabled generators, design modes and generator settings; chain IDs belong to each task |
 | `target_adapters.torchcraft` | Actual CSV columns and hotspot indexing convention |
 
 `service.environment` accepts string environment values and is passed only to the
@@ -118,7 +118,7 @@ that the interpreter exists and DockQ imports successfully.
 
 For example:
 
-> Use target `/shared/inputs/new.pdb`, chain C, VHH, hotspots C42 and C73,
+> Use target `/shared/inputs/new.pdb`, chain C, binder chain A, VHH, hotspots C42 and C73,
 > framework `/shared/frameworks/current`, initial total 10, and run the configured autonomous workflow.
 
 The assistant calls `protein_initial_round_start` with:
@@ -128,6 +128,7 @@ The assistant calls `protein_initial_round_start` with:
   "task": {
     "pdb_path": "/shared/inputs/new.pdb",
     "target_chain": "C",
+    "binder_chains": ["A"],
     "design_type": "vhh",
     "hotspots": ["C42", "C73"],
     "initial_samples": 10,
@@ -152,8 +153,7 @@ inherited fixed points and allowed regions.
 - Check the selected chain and every hotspot against the actual new structure.
   Hotspot inputs use PDB residue IDs, not assumed sequence offsets.
 - Extract that target chain into the run's own `inputs/target.pdb`. Preserve residue
-  numbers; if the chain conflicts with binder IDs, assign a free target chain and
-  record the mapping. Unsupported insertion/negative/ambiguous numbering fails before
+  numbers and the user-provided chain IDs. Reject overlapping target/binder names rather than renaming them. Unsupported insertion/negative/ambiguous numbering fails before
   submission because the current Rosetta residue-energy contract cannot encode it.
 - Generate a new TorchCraft sequence CSV and convert hotspot indices using the
   configured adapter. Sequence provenance is **observed structure residues**, never
@@ -220,3 +220,18 @@ sequence and rewrites the row's identifier to match the prepared PDB filename.
 A missing matching row uses the PDB fallback; duplicate matches or an incompatible
 sequence are rejected. No complete sequence is invented from missing structure
 residues. `hotspot_indices` are comma-separated input-PDB residue IDs.
+
+
+## Task-owned chain names
+
+`cluster_deployment.yaml` contains no chain names or refold maps. Every compact task
+must provide target_chain and binder_chains: one binder ID for VHH/minibinder, or
+ordered heavy/light IDs for antibody. Both lists must contain distinct single
+alphanumeric IDs. Missing binder IDs are an input question, not a reason to choose
+an example's chains. An explicit task refold_map enables deliberate TorchFold
+renaming; otherwise generated and refolded IDs are identical. Old persisted profile
+chain metadata cannot override these task inputs. Legacy run_config callers may
+provide explicit chains metadata, or PPIFlow request chain fields; missing maps are
+identity maps. A conflicting PPIFlow request/role declaration is rejected. Model
+outputs must honor the declared chain roles; mismatches are errors, not guessed
+renames. Existing runs retain their saved configuration and mapping.

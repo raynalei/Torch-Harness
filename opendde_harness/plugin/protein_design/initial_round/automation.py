@@ -101,6 +101,16 @@ def prepare_run(
             if defaults:
                 option_key = kind + "_options"
                 evaluation[option_key] = {**defaults, **evaluation.get(option_key, {})}
+    for kind, generator in value.get("generators", {}).items():
+        request = generator.get("request", {})
+        if kind == "ppiflow" and not generator.get("chains"):
+            mode = request.get("mode")
+            target = request.get("target_chain" if mode == "binder" else "antigen_chain")
+            binder = [request.get("binder_chain" if mode == "binder" else "heavy_chain")]
+            if mode == "antibody":
+                binder.append(request.get("light_chain"))
+            if target and all(binder):
+                generator["chains"] = {"target": [target], "binder": binder}
     config = InitialRoundConfig.model_validate(value)
     value = config.model_dump(mode="json")
     if name:
