@@ -134,7 +134,6 @@ class WorkflowTool(Tool):
             }
         schema = InitialRoundConfig.model_json_schema()
         definitions = schema.pop("$defs", {})
-        definitions["Generator"]["required"].remove("chains")
         definitions["AutonomousRound"]["properties"]["planner_layout"]["default"] = "two_stage"
         return {
             "type": "object",

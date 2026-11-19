@@ -131,7 +131,7 @@ that the interpreter exists and DockQ imports successfully.
 
 For example:
 
-> Use target `/shared/inputs/new.pdb`, chain C, VHH, hotspots C42 and C73,
+> Use target `/shared/inputs/new.pdb`, target chain C, VHH heavy chain H, hotspots C42 and C73,
 > framework `/shared/frameworks/current`, initial total 10, and run the configured autonomous workflow.
 
 The assistant calls `protein_design_start` with:
@@ -140,6 +140,8 @@ The assistant calls `protein_design_start` with:
 {
   "task": {
     "pdb_path": "/shared/inputs/new.pdb",
+    "target_chain": "C",
+    "binder_chains": ["H"],
     "design_type": "vhh",
     "hotspots": ["C42", "C73"],
     "initial_samples": 10,
@@ -150,9 +152,9 @@ The assistant calls `protein_design_start` with:
 ```
 
 Only use `user_confirmed=true` within the user's authorized computation scope.
-By default, Harness fills target C, binder/heavy A and, for paired antibody,
-light B, with an identity refold map. Omit chain fields unless explicitly
-overriding those IDs.
+Supply `target_chain` and `binder_chains` for every compact task. The binder
+list contains one ID for minibinder or VHH, or two IDs in heavy/light order
+for paired antibody. An omitted `refold_map` keeps the supplied IDs.
 Optional fields include `name`, `generators`, `generator_samples`, `framework_dir`,
 `framework_cif_path`, `fixed_positions` and validated `generator_overrides`. Total
 samples are split evenly across configured generators, with the remainder assigned
@@ -243,9 +245,9 @@ for input/output contracts, required deployment updates and the RFD4 port change
 
 
 For RFD4 initial generation, select task.generators: [rfd4], supply task.rfd4_inputs
-(a native binder spec relative to RFD4_INPUTS). If the spec uses non-default
-output chain IDs, set generator_overrides.rfd4.chains. A standalone target PDB is not itself a binder
-generation spec. The task target sequence is checked against generated output.
+(a native binder spec relative to RFD4_INPUTS). The spec's output chain IDs
+must match the task's target_chain and binder_chains. A standalone target PDB
+is not itself a binder generation spec. The task target sequence is checked against generated output.
 The registered service environment RFD4_INPUTS supplies evaluation.rfd4_input_root
 for partial-trajectory staging; advanced run_config callers may set it explicitly.
 All four optimization actions use mutation_selector. RFD4 Partial Flow and

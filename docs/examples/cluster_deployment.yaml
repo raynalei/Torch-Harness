@@ -141,7 +141,7 @@ workflow_defaults:
     planner_layout: two_stage
     # Existing finite two-stage decisions; no global round/sample/batch caps.
 design_profiles:
-  # Harness fills chain IDs and refold_map unless explicitly overridden.
+  # Supply chain IDs in each task. An omitted refold_map preserves those IDs.
   vhh:
     generators:
       ppiflow:

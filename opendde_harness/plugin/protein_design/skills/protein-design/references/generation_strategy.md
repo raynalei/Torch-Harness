@@ -11,7 +11,7 @@ hotspots and requested sample counts come from the authorized task configuration
 RFD4 supports native binder-generation specs supplied by the task as rfd4_inputs,
 relative to the service RFD4_INPUTS root. Do not invent a binder spec from a target
 PDB or reuse an old target spec. Its output chain IDs must match the workflow
-roles (target C, binder/heavy A, light B for paired antibodies by default).
+roles explicitly supplied by the user.
 The output target sequence must match the current task.
 The current autonomous menu does not regenerate or expand initial batches.
 Standalone monomer generation is a separate tool capability, not target binding.

@@ -17,7 +17,7 @@ from opendde_harness.utils.portable_lock import file_lock
 
 from ..core.model_requests import TARGET_REQUEST_FIELDS
 from .artifacts import structure
-from .config import DEFAULT_TARGET_CHAIN, PPIFLOW_CHAIN_FIELDS, PathMapping, RoundModel, default_binder_chains
+from .config import PPIFLOW_CHAIN_FIELDS, PathMapping, RoundModel
 from .defaults import merge_defaults, validate_settings
 from .storage import SharedFiles, fingerprint, write_json
 
@@ -40,7 +40,13 @@ class TorchCraftAdapter(RoundModel):
 
 class DesignTask(RoundModel):
     pdb_path: Path
-    target_chain: str = Field(default=DEFAULT_TARGET_CHAIN, min_length=1, max_length=1)
+    target_chain: str = Field(pattern=r"^[A-Za-z0-9]$", description="Target chain ID in the input PDB.")
+    binder_chains: list[str] = Field(
+        min_length=1,
+        max_length=2,
+        description="Output chain IDs specified by the user: binder for minibinder, heavy for VHH, or [heavy, light] for paired antibody.",
+    )
+    refold_map: dict[str, str] | None = None
     design_type: Literal["vhh", "antibody", "minibinder"]
     hotspots: list[StrictInt | str]
     initial_samples: int = Field(ge=1, le=10000)
@@ -53,6 +59,24 @@ class DesignTask(RoundModel):
     generator_overrides: dict[str, dict] = Field(default_factory=dict)
     target_sequence_csv: Path | None = None
     rfd4_inputs: str | None = None
+
+    @model_validator(mode="after")
+    def explicit_chain_roles(self):
+        expected = 2 if self.design_type == "antibody" else 1
+        if len(self.binder_chains) != expected:
+            raise ValueError(
+                "binder_chains must contain one ID for VHH/minibinder or ordered heavy/light IDs for antibody"
+            )
+        names = [self.target_chain, *self.binder_chains]
+        if len(set(names)) != len(names) or any(not re.fullmatch(r"[A-Za-z0-9]", chain) for chain in names):
+            raise ValueError("target and binder chain names must be distinct single alphanumeric IDs")
+        if self.refold_map is not None and (
+            set(self.refold_map) != set(names)
+            or len(set(self.refold_map.values())) != len(names)
+            or any(not re.fullmatch(r"[A-Za-z0-9]", chain) for chain in self.refold_map.values())
+        ):
+            raise ValueError("task refold_map must map every task chain to a distinct single alphanumeric ID")
+        return self
 
 
 def _stable_text(path, text):
@@ -145,16 +169,7 @@ def prepare_design_task(task, settings, *, planner_layout=None):
             **copy.deepcopy(matches[0].get("request_defaults", {}) if matches else {}),
             **generator.get("request", {}),
         }
-    for generator in value["generators"].values():
-        chains = generator.setdefault("chains", {})
-        chains.setdefault("target", [task.target_chain])
-        chains.setdefault("binder", default_binder_chains(task.design_type))
-    binders = {c for g in value["generators"].values() for c in g["chains"]["binder"]}
     normalized_chain = task.target_chain
-    if normalized_chain in binders or not re.fullmatch("[A-Z]", normalized_chain):
-        normalized_chain = next((c for c in "CABCDEFGHIJKLMNOPQRSTUVWXYZ" if c not in binders), None)
-        if normalized_chain is None:
-            raise ValueError("no free supported chain ID for the new target")
     counts = task.generator_samples
     if counts is None:
         quotient, remainder = divmod(task.initial_samples, len(enabled))
@@ -187,15 +202,21 @@ def prepare_design_task(task, settings, *, planner_layout=None):
             request = generator["request"]
             for key in TARGET_REQUEST_FIELDS:
                 request.pop(key, None)
-            chains = generator["chains"]
-            if len(chains["target"]) != 1:
-                raise ValueError("compact target tasks support one target chain")
-            previous = chains["target"][0]
-            if chains.get("refold_map"):
-                chains["refold_map"] = {
-                    normalized_chain if key == previous else key: mapped for key, mapped in chains["refold_map"].items()
-                }
-            chains["target"] = [normalized_chain]
+            chains = {
+                "target": [task.target_chain],
+                "binder": task.binder_chains,
+                "refold_map": task.refold_map or {c: c for c in [task.target_chain, *task.binder_chains]},
+            }
+            if "chains" in task.generator_overrides.get(kind, {}):
+                supplied = task.generator_overrides[kind]["chains"]
+                if (
+                    supplied.get("target", chains["target"]) != chains["target"]
+                    or supplied.get("binder", chains["binder"]) != chains["binder"]
+                ):
+                    raise ValueError("generator_overrides.chains must match the user-supplied task chain roles")
+                if task.refold_map is None and supplied.get("refold_map"):
+                    chains["refold_map"] = supplied["refold_map"]
+            generator["chains"] = chains
             # A template can carry another antigen's MSAs or prepared target features.
             generator["fold_template"] = None
             if kind == "rfd4":
@@ -219,10 +240,7 @@ def prepare_design_task(task, settings, *, planner_layout=None):
                 request["input_pdb" if mode == "binder" else "antigen_pdb"] = normalized_path
                 target_field, binder_fields = PPIFLOW_CHAIN_FIELDS[mode]
                 request[target_field] = normalized_chain
-                if any(request.get(field) is None for field in binder_fields) or {
-                    request.get(field) for field in binder_fields
-                } != set(chains["binder"]):
-                    request.update(zip(binder_fields, chains["binder"]))
+                request.update(zip(binder_fields, task.binder_chains, strict=True))
                 request["specified_hotspots"] = ",".join(normalized_chain + str(ids[i][0]) for i in positions)
                 if task.framework_dir is not None:
                     request["framework_dir"] = task.framework_dir

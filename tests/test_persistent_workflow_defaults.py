@@ -51,6 +51,7 @@ def task(tmp_path):
     return {
         "pdb_path": str(pdb(tmp_path / "new.pdb")),
         "target_chain": "A",
+        "binder_chains": ["B"],
         "design_type": "vhh",
         "hotspots": [1, 2],
         "initial_samples": 10,
@@ -173,7 +174,7 @@ async def test_compact_tool_launches_without_yaml_or_repeated_static_inputs(task
 async def test_complete_compact_workflow_reuses_registered_services(task, settings, fake_services):
     from opendde_harness.plugin.protein_design.initial_round.runner import InitialRoundRunner
 
-    task["initial_samples"] = 2
+    task.update(initial_samples=2, refold_map={"A": "X", "B": "Y"})
     config = prepare_design_task(task, settings)
     result = await InitialRoundRunner(config, transport=fake_services[0]).run()
     assert result["accepted"] == 2
@@ -268,13 +269,10 @@ def test_invalid_request_defaults_are_rejected_at_registration(tmp_path, default
         )
 
 
-def test_target_chain_collision_is_normalized_and_recorded(task, settings):
+def test_target_chain_collision_is_rejected_without_renaming(task, settings):
     task.update(target_chain="B", hotspots=[1])
-    config = prepare_design_task(task, settings)
-    assert config.generators["ppiflow"].request["antigen_chain"] != "B"
-    provenance = json.loads((config.work_dir / config.name / "inputs/target-provenance.json").read_text())
-    assert provenance["source_chain"] == "B"
-    assert provenance["normalized_chain"] == config.generators["ppiflow"].chains.target[0]
+    with pytest.raises(ValueError, match="distinct"):
+        prepare_design_task(task, settings)
 
 
 def test_persistent_defaults_do_not_introduce_global_budgets(task, settings):
@@ -324,6 +322,8 @@ def test_other_design_types_use_their_own_static_profile(task, settings, design)
         profile["generators"]["torchcraft"]["request"] = {"mode": "mini_binder", "design_length": 60}
     settings["design_profiles"][design] = profile
     task["design_type"] = design
+    if design == "antibody":
+        task["binder_chains"] = ["B", "L"]
     config = prepare_design_task(task, settings)
     assert config.generators["ppiflow"].request["mode"] == ("antibody" if design == "antibody" else "binder")
     assert (
@@ -335,25 +335,24 @@ def test_other_design_types_use_their_own_static_profile(task, settings, design)
 @pytest.mark.parametrize(
     ("design", "sources", "binders", "ppiflow_chains"),
     [
-        ("minibinder", ["ppiflow", "torchcraft", "rfd4"], ["A"], {"target_chain": "C", "binder_chain": "A"}),
-        ("vhh", ["ppiflow", "torchcraft"], ["A"], {"antigen_chain": "C", "heavy_chain": "A"}),
-        ("antibody", ["ppiflow"], ["A", "B"], {"antigen_chain": "C", "heavy_chain": "A", "light_chain": "B"}),
+        ("minibinder", ["ppiflow", "torchcraft", "rfd4"], ["H"], {"target_chain": "D", "binder_chain": "H"}),
+        ("vhh", ["ppiflow", "torchcraft"], ["H"], {"antigen_chain": "D", "heavy_chain": "H"}),
+        ("antibody", ["ppiflow"], ["H", "L"], {"antigen_chain": "D", "heavy_chain": "H", "light_chain": "L"}),
     ],
 )
-def test_target_only_compact_workflow_uses_default_chains(task, settings, design, sources, binders, ppiflow_chains):
+def test_target_only_compact_workflow_uses_user_chains(task, settings, design, sources, binders, ppiflow_chains):
     from opendde_harness.plugin.protein_design.initial_round.artifacts import chain_sequences
 
     source = Path(task["pdb_path"])
     source.write_text(
         "\n".join(
-            line[:21] + "C" + line[22:]
+            line[:21] + "D" + line[22:]
             for line in source.read_text().splitlines()
             if line.startswith("ATOM") and line[21] == "A"
         )
         + "\nEND\n"
     )
-    task.pop("target_chain")
-    task.update(design_type=design, generators=sources)
+    task.update(target_chain="D", binder_chains=binders, design_type=design, generators=sources)
     profile = copy.deepcopy(settings["design_profiles"]["vhh"])
     for generator in profile["generators"].values():
         generator.pop("chains")
@@ -373,23 +372,20 @@ def test_target_only_compact_workflow_uses_default_chains(task, settings, design
     config = prepare_design_task(task, settings)
     assert set(config.generators) == set(sources)
     for generator in config.generators.values():
-        assert generator.chains.target == ["C"]
+        assert generator.chains.target == ["D"]
         assert generator.chains.binder == binders
-        assert generator.chains.refold_map == {chain: chain for chain in ["C", *binders]}
+        assert generator.chains.refold_map == {chain: chain for chain in ["D", *binders]}
     request = config.generators["ppiflow"].request
     assert {field: request[field] for field in ppiflow_chains} == ppiflow_chains
     assert ("light_chain" in request) == (design == "antibody")
     path = SharedFiles(config.path_mappings).local(request["input_pdb" if design == "minibinder" else "antigen_pdb"])
-    assert chain_sequences(path) == {"C": "GGGGGG"}
+    assert chain_sequences(path) == {"D": "GGGGGG"}
     if "rfd4" in sources:
         assert config.generators["rfd4"].request["inputs"] == task["rfd4_inputs"]
-        assert config.generators["rfd4"].expected_target_sequences == {"C": "GGGGGG"}
+        assert config.generators["rfd4"].expected_target_sequences == {"D": "GGGGGG"}
 
     run_config = config.model_dump(mode="json")
-    for generator in run_config["generators"].values():
-        generator.pop("chains")
-    for field in ppiflow_chains:
-        run_config["generators"]["ppiflow"]["request"].pop(field)
+    run_config["generators"]["ppiflow"].pop("chains")
     assert type(config).model_validate(run_config) == config
 
 
@@ -473,7 +469,7 @@ def test_persistent_experimental_choices_are_rejected(field):
 async def test_prompt_can_select_either_generator_without_submitting_other(task, settings, fake_services, source):
     from opendde_harness.plugin.protein_design.initial_round.runner import InitialRoundRunner
 
-    task.update(generators=[source], initial_samples=1)
+    task.update(generators=[source], initial_samples=1, refold_map={"A": "X", "B": "Y"})
     config = prepare_design_task(task, settings)
     assert set(config.generators) == {source}
     result = await InitialRoundRunner(config, transport=fake_services[0]).run()
@@ -697,3 +693,16 @@ async def test_public_workflow_task_uses_two_stage_planner_and_persistent_defaul
     result = json.loads((await tool.execute(task=task, run_config={}, user_confirmed=True)).model_text)
     assert "mutually exclusive" in result["error"]
     assert len(launched) == 1
+
+
+@pytest.mark.parametrize("field", ["target_chain", "binder_chains"])
+def test_compact_task_requires_user_chain_roles(task, settings, field):
+    task.pop(field)
+    with pytest.raises(ValueError, match=field):
+        prepare_design_task(task, settings)
+
+
+def test_paired_antibody_requires_user_light_chain(task, settings):
+    task["design_type"] = "antibody"
+    with pytest.raises(ValueError, match="heavy/light"):
+        prepare_design_task(task, settings)

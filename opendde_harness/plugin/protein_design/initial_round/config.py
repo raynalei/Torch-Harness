@@ -110,16 +110,11 @@ class Service(RoundModel):
         return self
 
 
-DEFAULT_TARGET_CHAIN = "C"
 PPIFLOW_CHAIN_FIELDS = {
     "binder": ("target_chain", ("binder_chain",)),
     "nanobody": ("antigen_chain", ("heavy_chain",)),
     "antibody": ("antigen_chain", ("heavy_chain", "light_chain")),
 }
-
-
-def default_binder_chains(design_type: str | None) -> list[str]:
-    return ["A", "B"] if design_type == "antibody" else ["A"]
 
 
 class Chains(RoundModel):
@@ -156,28 +151,22 @@ class Generator(RoundModel):
 
     @model_validator(mode="before")
     @classmethod
-    def resolve_default_chains(cls, value):
+    def resolve_explicit_chains(cls, value):
         if not isinstance(value, dict) or not isinstance(request := value.get("request"), dict):
             return value
-        chains = value.get("chains")
-        if chains is None:
-            chains = {}
+        mode = request.get("mode")
+        if not isinstance(mode, str) or mode not in PPIFLOW_CHAIN_FIELDS:
+            return value
+        chains = value.get("chains", {})
         if not isinstance(chains, dict):
             return value
-        mode = request.get("mode")
-        design_type = value.get("design_type")
-        target_field, binder_fields = (
-            PPIFLOW_CHAIN_FIELDS.get(mode, (None, ())) if isinstance(mode, str) else (None, ())
-        )
-        defaults = default_binder_chains("antibody" if mode == "antibody" else design_type)
-        target = chains.get("target", [request.get(target_field) or DEFAULT_TARGET_CHAIN])
-        binder = chains.get(
-            "binder", [request.get(field) or default for field, default in zip(binder_fields, defaults)] or defaults
-        )
+        target_field, binder_fields = PPIFLOW_CHAIN_FIELDS[mode]
+        target = chains.get("target", [request.get(target_field)])
+        binder = chains.get("binder", [request.get(field) for field in binder_fields])
         request = request.copy()
-        if target_field and isinstance(target, list) and target and request.get(target_field) is None:
+        if isinstance(target, list) and target and request.get(target_field) is None:
             request[target_field] = target[0]
-        # Keep the request payload of older snapshots with fully specified binder roles.
+        # Older saved binder runs can omit the API field while declaring both roles.
         if isinstance(binder, list) and not (mode == "binder" and {"target", "binder"} <= chains.keys()):
             for field, chain in zip(binder_fields, binder):
                 if request.get(field) is None:
