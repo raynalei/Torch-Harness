@@ -274,16 +274,6 @@ class AutonomousRound(RoundModel):
     decision_policy: Literal["agent", "rules"] = "agent"
     decision_timeout: float = Field(default=120, gt=0)
 
-    @model_validator(mode="before")
-    @classmethod
-    def ignore_score_routing_fields(cls, value):
-        """Accept shared deployment defaults and snapshots from score routing."""
-        if isinstance(value, dict):
-            return {
-                key: item for key, item in value.items() if key not in {"planner_layout", "decision_context_tokens"}
-            }
-        return value
-
 
 class InitialRoundConfig(RoundModel):
     name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
