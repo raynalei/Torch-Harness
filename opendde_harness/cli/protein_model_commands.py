@@ -13,6 +13,7 @@ from opendde_harness.config.loader import get_config_path
 from opendde_harness.plugin.protein_design.core.model_registry import ProteinModelRegistry
 from opendde_harness.plugin.protein_design.initial_round.defaults import (
     SETTINGS_KEYS,
+    load_deployment_defaults,
     merge_defaults,
     validate_settings,
 )
@@ -209,15 +210,16 @@ def list_models(
     opendde_config: Path | None = typer.Option(None, "--opendde-config", dir_okay=False),
     check_health: bool = typer.Option(False, "--check-health", help="Probe APIs without submitting jobs."),
 ):
-    """Show which actual configuration file supplies registered endpoints."""
+    """Show effective endpoints from the selected configuration and bundled deployment."""
     try:
         path = (opendde_config or get_config_path()).expanduser().resolve()
         data = _object_file(path)
+        deployment = load_deployment_defaults(_section(data))
         registry = ProteinModelRegistry(
-            _section(data).get("model_services", {}),
+            deployment.get("model_services", {}),
             path.parent / "unused",
             config_path=path,
-            workflow_settings=_section(data),
+            workflow_settings=deployment,
         )
         value = asyncio.run(registry.catalogue_with_health()) if check_health else registry.catalogue()
         value["plugin_enabled"] = "protein-design" not in data.get("plugins", {}).get("disabled", [])

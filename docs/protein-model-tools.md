@@ -368,22 +368,34 @@ ProteinMPNN uses 8090. New registrations verify the health response's service na
 and Slurm allocation ID before submission. Both need sbatch_chdir pointing at their
 API directory. The confirmed paths and server environments are in
 [cluster_deployment.yaml](examples/cluster_deployment.yaml). Copy the updated server
-files/launchers to those locations and restart Harness after updating configuration.
-Existing instances with an explicit model registry must import the new registrations
-once. Use the existing registration command with a services file. To import
-only these two entries, create a fragment from the supplied configurations:
+files/launchers to those locations if needed.
+On the cluster, install the matching adapters and launchers from the checkout:
 
 ```bash
-jq '.plugins.config["protein-design"].model_services | {model_services: {rfd4, proteinmpnn}}' \
-  docs/examples/model_services.json > native-model-services.json
-uv run --frozen ddeharness protein-design models register --services-file native-model-services.json
+api_root=/lustre/grp/cmclab/leiy
+install -D -m 0644 deploy/rfd4/main.py "$api_root/rfd4_api/main.py"
+install -D -m 0755 deploy/rfd4/rfd4_api.sbatch "$api_root/rfd4_api/rfd4_api.sbatch"
+install -D -m 0644 deploy/proteinmpnn/main.py "$api_root/proteinmpnn_api/main.py"
+install -D -m 0755 deploy/proteinmpnn/proteinmpnn_api.sbatch "$api_root/proteinmpnn_api/proteinmpnn_api.sbatch"
+```
+
+Use the RFD4 launcher from the checkout, which honors `RFD4_PORT` and defaults
+to 8080. Harness starts each service through its registered sbatch script on the
+first request. The API and model environments read images, weights and inputs
+from the configured shared paths.
+
+Harness automatically loads RFD4 and ProteinMPNN from the deployment defaults
+when the configured registry lacks those model kinds. Existing registrations of
+either kind take precedence, including custom aliases. Restart Harness after a
+code update. Verify the effective registrations with:
+
+```bash
 uv run --frozen ddeharness protein-design models list
 ```
 
-Pass `--opendde-config /absolute/path/config.json` to both Harness commands if
-your TUI uses a separate configuration. Add `--replace-existing` when
-deliberately changing an existing alias. The model list reports each
-registration's skill and request schema.
+Use `--opendde-config /absolute/path/config.json` if your TUI uses a separate
+configuration. The list shows each registration's skill, sbatch script and
+request schema.
 
 The model skills are `ppiflow-design`, `torchcraft-design`,
 `torchfold-prediction`, `af3score-scoring`, `torchscore-scoring`,

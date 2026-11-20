@@ -75,25 +75,31 @@ def test_import_documented_fragment_and_list_active_file(tmp_path):
     assert not payload["models"][0]["inference_verified"]
 
 
-def test_empty_registry_identifies_config_and_missing_models(tmp_path):
+def test_missing_config_lists_bundled_models_without_creating_config(tmp_path):
     path = tmp_path / "missing.json"
     result = invoke(path, "list")
     assert result.exit_code == 0
     value = json.loads(result.output)
-    assert value["models"] == []
-    assert set(value["unconfigured_model_kinds"]) == {
-        "af3score",
-        "torchscore",
-        "torchopt",
-        "torchfold",
-        "torchcraft",
-        "ppiflow",
-        "rosetta",
-        "rfd4",
-        "proteinmpnn",
-    }
+    assert len(value["models"]) == 9
+    assert value["unconfigured_model_kinds"] == []
     assert value["active_config_path"] == str(path)
     assert not path.exists()
+
+
+def test_custom_registry_automatically_loads_missing_native_model(tmp_path):
+    path = tmp_path / "config.json"
+    custom = {"kind": "rfd4", "service": {"url": "http://custom.test:8888"}}
+    settings = {"plugins": {"config": {"protein-design": {"model_services": {"custom_rfd4": custom}}}}}
+    path.write_text(json.dumps(settings))
+
+    result = invoke(path, "list")
+
+    assert result.exit_code == 0, result.output
+    models = {item["model"]: item for item in json.loads(result.output)["models"]}
+    assert set(models) == {"custom_rfd4", "proteinmpnn"}
+    assert models["custom_rfd4"]["service"]["url"] == "http://custom.test:8888"
+    assert models["proteinmpnn"]["service"]["sbatch_script"].endswith("/proteinmpnn_api/proteinmpnn_api.sbatch")
+    assert json.loads(path.read_text()) == settings
 
 
 def test_registration_does_not_silently_enable_disabled_plugin(tmp_path):

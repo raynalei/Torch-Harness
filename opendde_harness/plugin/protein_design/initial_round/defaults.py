@@ -12,6 +12,7 @@ from .config import InitialRoundConfig
 
 SETTINGS_KEYS = ("workflow_defaults", "design_profiles", "target_adapters", "deployment_config", "public_lookup_url")
 DESIGN_MODES = {"nanobody": "vhh", "antibody": "antibody", "binder": "minibinder"}
+BUILTIN_NATIVE_MODELS = frozenset({"rfd4", "proteinmpnn"})
 
 
 def merge_defaults(base, overrides):
@@ -168,10 +169,27 @@ def load_deployment_defaults(settings):
         settings["workflow_defaults"]["evaluation"].pop("rosetta")
     result = merge_defaults(defaults, settings)
     result["deployment_config"] = str(path.resolve())
-    # An explicitly configured registry/adapter declares the available capabilities.
+    # Explicit registrations take precedence over deployment entries.
     for key in ("model_services", "target_adapters"):
         if settings.get(key):
             result[key] = copy.deepcopy(settings[key])
+    models = result.setdefault("model_services", {})
+    configured_kinds = {model.get("kind") for model in models.values()}
+    if BUILTIN_NATIVE_MODELS - configured_kinds:
+        bundled = (
+            defaults
+            if path.resolve() == DEFAULT_DEPLOYMENT_CONFIG.resolve()
+            else yaml.safe_load(DEFAULT_DEPLOYMENT_CONFIG.read_text())
+        )
+        for source in (defaults, bundled):
+            for alias, model in source.get("model_services", {}).items():
+                kind = model.get("kind")
+                if kind not in BUILTIN_NATIVE_MODELS or kind in configured_kinds:
+                    continue
+                if alias in models:
+                    raise ValueError(f"model alias {alias!r} conflicts with the automatic {kind} registration")
+                models[alias] = copy.deepcopy(model)
+                configured_kinds.add(kind)
     for name, profile in settings.get("design_profiles", {}).items():
         if "generators" in profile:
             result["design_profiles"][name]["generators"] = copy.deepcopy(profile["generators"])

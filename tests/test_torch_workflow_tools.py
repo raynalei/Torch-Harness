@@ -43,7 +43,11 @@ async def test_context_reports_capabilities_without_leaking_credentials():
     )
     result = await tool.execute()
     value = json.loads(result.model_text)
-    assert value["models"] == [{"alias": "score", "kind": "torchscore"}]
+    assert {item["alias"]: item["kind"] for item in value["models"]} == {
+        "score": "torchscore",
+        "rfd4": "rfd4",
+        "proteinmpnn": "proteinmpnn",
+    }
     assert value["compute_service_required"] is False
     assert "EpiMatrix" in value["unavailable"]
     assert "secret" not in result.model_text

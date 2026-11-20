@@ -111,6 +111,9 @@ def prepare_run(
         model = registration(kind, evaluation.get(kind))
         if model:
             if evaluation.get(kind) is None:
+                script = model["service"].get("sbatch_script")
+                if kind in {"rfd4", "proteinmpnn"} and script and not Path(script).is_file():
+                    continue
                 evaluation[kind] = copy.deepcopy(model["service"])
             if kind == "rfd4" and not evaluation.get("rfd4_input_root"):
                 evaluation["rfd4_input_root"] = evaluation[kind].get("environment", {}).get("RFD4_INPUTS")
