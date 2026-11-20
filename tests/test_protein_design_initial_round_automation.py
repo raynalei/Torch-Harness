@@ -529,6 +529,25 @@ def test_detached_resume_accepts_status_selector_fix_but_preserves_scientific_gu
     assert len(calls) == 2
 
 
+def test_prepare_run_accepts_score_routing_fields_in_deployment_defaults(profile, tmp_path):
+    import yaml
+    from pydantic import ValidationError
+
+    deployment = tmp_path / "cluster_deployment.yaml"
+    autonomous = {"planner_layout": "two_stage", "decision_context_tokens": 16384, "min_score": 0.72}
+    deployment.write_text(yaml.safe_dump({"workflow_defaults": {"autonomous": autonomous}}))
+    settings = {"deployment_config": str(deployment)}
+
+    config = prepare_run(profile, plugin_config=settings)
+    assert config.autonomous.min_score == 0.72
+    assert {"planner_layout", "decision_context_tokens"}.isdisjoint(config.model_dump()["autonomous"])
+
+    autonomous["min_socre"] = 0.8
+    deployment.write_text(yaml.safe_dump({"workflow_defaults": {"autonomous": autonomous}}))
+    with pytest.raises(ValidationError, match=r"autonomous\.min_socre"):
+        prepare_run(profile, plugin_config=settings)
+
+
 def test_resume_normalizes_legacy_snapshot_defaults_before_launch_comparison(profile, monkeypatch):
     from opendde_harness.plugin.protein_design.initial_round import automation
 
@@ -538,6 +557,7 @@ def test_resume_normalizes_legacy_snapshot_defaults_before_launch_comparison(pro
     legacy = config.model_dump(mode="json")
     legacy["generators"]["ppiflow"]["service"].pop("startup_poll_interval")
     legacy["evaluation"]["torchfold"].pop("slurm_command_timeout")
+    legacy["autonomous"].update(planner_layout="two_stage", decision_context_tokens=16384)
     write_json(root / "worker-config.json", legacy)
     calls = []
 
