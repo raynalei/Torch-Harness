@@ -156,6 +156,10 @@ class Generator(RoundModel):
     per_source_refold_limit: int | None = Field(default=None, ge=1, le=1000)
     deduplicate_sequences: bool = True
 
+    @property
+    def score_only(self) -> bool:
+        return self.request.get("mode") == "binder"
+
     @model_validator(mode="before")
     @classmethod
     def resolve_explicit_chains(cls, value):
@@ -364,16 +368,24 @@ class InitialRoundConfig(RoundModel):
             value.pop("autonomous", None)
         return value
 
+    @property
+    def has_design_followup(self) -> bool:
+        return any(not generator.score_only for generator in self.generators.values())
+
     @model_validator(mode="after")
     def check_workflow(self):
         if self.evaluation.torchfold is None:
             raise ValueError("torchfold service must be configured or uniquely registered")
+        if any(generator.score_only for generator in self.generators.values()) and self.evaluation.rosetta is None:
+            raise ValueError("PPIFlow binder scoring requires the registered Rosetta interface scoring service")
         if any(g.service is None for g in self.generators.values()):
             raise ValueError("generator services must be configured or uniquely registered")
         if self.autonomous is not None:
             if (
-                self.autonomous.decision_policy != "planner" or self.autonomous.planner_layout == "two_stage"
-            ) and self.evaluation.rosetta is None:
+                self.has_design_followup
+                and (self.autonomous.decision_policy != "planner" or self.autonomous.planner_layout == "two_stage")
+                and self.evaluation.rosetta is None
+            ):
                 raise ValueError("autonomous decisions require the registered Rosetta interface scoring service")
             if self.evaluation.scoring_backend != "torchscore":
                 raise ValueError("autonomous rounds require scoring_backend=torchscore")

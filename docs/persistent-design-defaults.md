@@ -129,6 +129,12 @@ that the interpreter exists and DockQ imports successfully.
 
 ## New tasks in natural language
 
+PPIFlow `binder` candidates finish after confidence scoring, Rosetta interface
+scoring of the generated complex, and TorchFold/DockQ. DockQ compares the refold
+with the original generated pose. The run summary lists these candidates under
+`score_only_ranking`; they do not enter the planner or refinement.
+
+
 For example:
 
 > Use target `/shared/inputs/new.pdb`, target chain C, VHH heavy chain H, hotspots C42 and C73,

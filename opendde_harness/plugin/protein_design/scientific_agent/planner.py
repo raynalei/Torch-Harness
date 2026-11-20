@@ -354,6 +354,8 @@ def fallback_choice(runner, options):
 async def score_candidates(runner, candidates):
     all_candidates = runner.checkpoint.data["candidates"]
     for candidate in candidates:
+        if runner.config.generators[candidate["source"]].score_only:
+            continue
         try:
             candidate.pop("error", None)
             await runner.score(candidate)

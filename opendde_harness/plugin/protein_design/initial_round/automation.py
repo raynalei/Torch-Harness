@@ -101,9 +101,12 @@ def prepare_run(
         registered,
     )
     selected = evaluation["scoring_backend"]
+    generator_modes = {generator.get("request", {}).get("mode") for generator in value.get("generators", {}).values()}
     kinds = [selected, "torchfold"]
-    if value.get("autonomous") is not None:
-        kinds.extend(["rosetta", "torchopt", "rfd4", "proteinmpnn"])
+    if value.get("autonomous") is not None or "binder" in generator_modes:
+        kinds.append("rosetta")
+    if value.get("autonomous") is not None and generator_modes - {"binder"}:
+        kinds.extend(["torchopt", "rfd4", "proteinmpnn"])
     for kind in kinds:
         model = registration(kind, evaluation.get(kind))
         if model:

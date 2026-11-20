@@ -10,6 +10,8 @@ import json
 import shutil
 from pathlib import Path
 
+from loguru import logger
+
 from opendde_harness.plugin.protein_design.core.model_requests import validate_request
 from opendde_harness.utils.portable_lock import file_lock
 
@@ -68,12 +70,6 @@ class InitialRoundRunner:
         }
         target_sequences = []
         for source, generator in self.config.generators.items():
-            if generator.fold_template is not None and (
-                not generator.fold_template.is_absolute() or not generator.fold_template.is_file()
-            ):
-                raise ValueError(f"{source}: fold_template must be an existing absolute local path")
-            if generator.fold_template:
-                self.input_hashes[f"{source}/fold_template"] = digest(generator.fold_template)
             for key in path_keys[source]:
                 if key in generator.request:
                     path = self.files.local(generator.request[key])
@@ -94,6 +90,12 @@ class InitialRoundRunner:
                     inputs = sorted(p for p in path.rglob("*") if p.is_file()) if path.is_dir() else [path]
                     for item in inputs:
                         self.input_hashes[f"rfd4/inputs/{self.files.remote(item)}"] = digest(item)
+            if generator.fold_template is not None and (
+                not generator.fold_template.is_absolute() or not generator.fold_template.is_file()
+            ):
+                raise ValueError(f"{source}: fold_template must be an existing absolute local path")
+            if generator.fold_template:
+                self.input_hashes[f"{source}/fold_template"] = digest(generator.fold_template)
             if generator.fold_template is None:
                 continue
             # Validate template shape before submitting expensive GPU jobs.
@@ -161,6 +163,13 @@ class InitialRoundRunner:
                 if getattr(self.config.evaluation, name) is not None
             }
         )
+        if not self.config.has_design_followup:
+            configs = {
+                name: config
+                for name, config in configs.items()
+                if name in self.config.generators
+                or name in {self.config.evaluation.scoring_backend, "rosetta", "torchfold"}
+            }
         result = {}
         for name, config in configs.items():
             if name == "rosetta" and config.backend == "slurm":
@@ -244,19 +253,38 @@ class InitialRoundRunner:
                     paths = [self.files.local(item["structure_path"]) for item in manifest]
                 if not paths:
                     raise ValueError("generator produced no candidate structures")
+                required = set(generator.chains.target + generator.chains.binder)
+                # PPIFlow /results lists every PDB, including standalone binder artifacts.
+                unstructured_binder_results = (
+                    source == "ppiflow" and request.get("mode") == "binder" and manifest is None
+                )
+                structures = []
+                single_chain_files = []
+                for path in sorted(set(paths)):
+                    sequences = chain_sequences(path)
+                    if unstructured_binder_results and len(sequences) == 1:
+                        single_chain_files.append((path, next(iter(sequences))))
+                        continue
+                    if set(sequences) != required:
+                        raise ValueError(
+                            f"{source}: {path} has structure chain IDs {sorted(sequences)}; expected {sorted(required)}"
+                        )
+                    structures.append((path, sequences))
+                if single_chain_files:
+                    examples = ", ".join(f"{path} (chain {chain})" for path, chain in single_chain_files[:3])
+                    if not structures:
+                        raise ValueError(
+                            f"{source}: no target-binder complex with chains {sorted(required)}; "
+                            f"all {len(single_chain_files)} returned structures contain a single chain: {examples}"
+                        )
+                    logger.info("Ignored {} single-chain PPIFlow artifacts: {}", len(single_chain_files), examples)
                 if self.config.autonomous is not None:
                     from .autonomous import sample_count
 
-                    if len(set(paths)) > sample_count(source, request):
+                    if len(structures) > sample_count(source, request):
                         raise ValueError("generator returned more candidates than requested")
                 added = []
-                for path in sorted(set(paths)):
-                    sequences = chain_sequences(path)
-                    required = set(generator.chains.target + generator.chains.binder)
-                    if set(sequences) != required:
-                        raise ValueError(
-                            f"{source}: structure chain IDs {sorted(sequences)} do not match {sorted(required)}"
-                        )
+                for path, sequences in structures:
                     if any(sequences.get(c) != seq for c, seq in generator.expected_target_sequences.items()):
                         raise ValueError("generator output target sequence differs from the current task target")
                     if self.config.autonomous is not None and round_index:
@@ -524,6 +552,8 @@ class InitialRoundRunner:
             candidate["metrics"]["design_refold_dockq"] = measured([scores], "dockq", confidence=True)
             write_json(directory / "dockq.json", scores)
             self.save_candidates()
+        if generator.score_only:
+            return
         if self.config.autonomous is None:
             await self.score_interface(candidate)
         metrics = candidate["metrics"]
@@ -541,7 +571,9 @@ class InitialRoundRunner:
         evaluation = self.config.evaluation
         if evaluation.rosetta is None:
             return
-        autonomous = self.config.autonomous
+        generator = self.config.generators[candidate["source"]]
+        score_only = generator.score_only
+        autonomous = self.config.autonomous if not score_only else None
         if autonomous is not None:
             if "interface_fixed_positions" in candidate:
                 if digest(self.files.local(candidate["rosetta_energy_log"])) != candidate["rosetta_energy_log_sha256"]:
@@ -552,12 +584,13 @@ class InitialRoundRunner:
                         - candidate["metrics"]["rosetta_interface_dg"]
                     )
                     return
-        elif "rosetta_interface_dg" in candidate["metrics"]:
+        elif "rosetta_interface_dg" in candidate["metrics"] and (
+            not score_only or candidate.get("rosetta_structure") == "generated"
+        ):
             return
         key = candidate["candidate_id"]
-        generator = self.config.generators[candidate["source"]]
         directory = self.root / key
-        refolded = autonomous is None and bool(candidate.get("refold_structure"))
+        refolded = not score_only and autonomous is None and bool(candidate.get("refold_structure"))
         model = directory / ("refold.pdb" if refolded else "generated-interface.pdb")
         write_pdb(
             self.files.local(candidate["refold_structure"] if refolded else candidate["generated_structure"]), model
@@ -571,7 +604,7 @@ class InitialRoundRunner:
             raise ValueError("Rosetta chain groups require single-character chain IDs")
         result = await self.job(
             "rosetta",
-            f"interface/{key}",
+            f"interface/{key}" if not score_only else f"binder-interface/{key}",
             "interface_analyze" if evaluation.rosetta.backend == "slurm" else "/v1/tools/interface_analyze",
             "slurm_job_id" if evaluation.rosetta.backend == "slurm" else "task_id",
             {
@@ -629,6 +662,35 @@ class InitialRoundRunner:
         candidate["rosetta_structure"] = "refold" if refolded else "generated"
         self.save_candidates()
 
+    async def score_binder_candidates(self, candidates):
+        from .autonomous import rank_score
+
+        binder_ids = set()
+        for candidate in candidates:
+            if not self.config.generators[candidate["source"]].score_only:
+                continue
+            binder_ids.add(candidate["candidate_id"])
+            candidate["planner_closed"] = True
+            try:
+                candidate.pop("error", None)
+                await self.score(candidate)
+                await self.score_interface(candidate)
+                await self.refold(candidate)
+                ranking = rank_score(candidate, self.config.evaluation.score_metric)
+                if ranking is not None:
+                    candidate["metrics"]["ranking_score"] = ranking
+                candidate["status"] = "scored_only"
+            except SubmissionUncertainError:
+                raise
+            except Exception as exc:
+                candidate.update(status="failed", error=str(exc))
+            self.save_candidates()
+        for decision in self.checkpoint.data.get("autonomous", {}).get("decisions", []):
+            if decision.get("parent_id") in binder_ids and decision["state"] != "completed":
+                decision.update(state="completed", skipped_reason="binder_score_only")
+        if binder_ids:
+            self.save_candidates()
+
     def export(self, candidates: list[dict]) -> dict:
         for candidate in candidates:
             candidate.pop("rank", None)
@@ -669,7 +731,26 @@ class InitialRoundRunner:
             "ranking_policy": "refold_iptm_desc,dockq_desc"
             + (",interface_dg_asc" if self.config.evaluation.rosetta else ""),
         }
-        if self.config.autonomous is not None:
+        scored = sorted(
+            (c for c in candidates if c["status"] == "scored_only"),
+            key=lambda c: (
+                -c["metrics"].get("ranking_score", float("-inf")),
+                -c["metrics"][self.config.evaluation.score_metric],
+                -c["metrics"]["design_refold_dockq"],
+                c["candidate_id"],
+            ),
+        )
+        if scored or not self.config.has_design_followup:
+            result.update(score_only_count=len(scored), score_only_ranking=[c["candidate_id"] for c in scored])
+        if not self.config.has_design_followup:
+            result.update(
+                outcome="incomplete" if failed else "scored_only",
+                scoring_backend=self.config.evaluation.scoring_backend,
+                ranking_policy="ranking_score_desc,scorer_iptm_desc,dockq_desc",
+                stop_reason="binder_score_only",
+                followup_rounds=0,
+            )
+        if self.config.has_design_followup and self.config.autonomous is not None:
             state = self.checkpoint.data["autonomous"]
             result.update(
                 scoring_backend=self.config.evaluation.scoring_backend,
@@ -682,7 +763,8 @@ class InitialRoundRunner:
                 else {"torchopt": "no registered optimization service"},
             )
         if (
-            self.config.autonomous is not None
+            self.config.has_design_followup
+            and self.config.autonomous is not None
             and self.config.autonomous.decision_policy == "planner"
             and self.config.autonomous.planner_layout == "two_stage"
         ):
@@ -772,6 +854,9 @@ class InitialRoundRunner:
                 if check_only:
                     return {"status": "checked", "services": health, "inference_verified": False}
                 candidates = await self.generate()
+                await self.score_binder_candidates(candidates)
+                if not self.config.has_design_followup:
+                    return self.export(candidates)
                 if self.config.autonomous is not None:
                     from .autonomous import run_autonomous
 
@@ -793,6 +878,8 @@ class InitialRoundRunner:
                     await run_autonomous(self)
                     return self.export(candidates)
                 for c in candidates:
+                    if self.config.generators[c["source"]].score_only:
+                        continue
                     try:
                         c.pop("error", None)
                         await self.score(c)
@@ -803,6 +890,8 @@ class InitialRoundRunner:
                         self.save_candidates()
                 # Deduplicate within each source: preserve both generators' quotas.
                 for source, generator in self.config.generators.items():
+                    if generator.score_only:
+                        continue
                     seen = set()
                     selected = 0
                     ordered = sorted(
