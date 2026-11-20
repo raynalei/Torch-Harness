@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import re
+import sys
 from pathlib import Path
 from typing import Any, Literal
 
@@ -114,6 +115,10 @@ class PPIFlowRefinement(RoundModel):
     start_t: float | None = Field(default=None, ge=0, le=1)
 
 
+BINDER_MODES = frozenset({"binder", "mini_binder"})
+ANTIBODY_MODES = frozenset({"antibody", "nanobody", "vhh"})
+
+
 class Generator(RoundModel):
     service: Service | None = None
     request: dict[str, Any]
@@ -124,12 +129,13 @@ class Generator(RoundModel):
     # Optional explicit key in /results holding a candidate manifest.
     candidates_field: str = "candidates"
     structure_glob: str = "*.pdb"
+    # Retained for existing serialized run configurations.
     per_source_refold_limit: int | None = Field(default=None, ge=1, le=1000)
     deduplicate_sequences: bool = True
 
     @property
     def score_only(self) -> bool:
-        return self.request.get("mode") == "binder"
+        return self.request.get("mode") in BINDER_MODES
 
     @model_validator(mode="before")
     @classmethod
@@ -175,6 +181,7 @@ class Evaluation(RoundModel):
     torchscore_options: dict[str, Any] = Field(default_factory=dict)
     torchfold_options: dict[str, Any] = Field(default_factory=lambda: {"run_data_pipeline": False})
     rosetta_options: dict[str, Any] = Field(default_factory=lambda: {"pack_input": False, "pack_separated": True})
+    # Legacy one-pass thresholds retained for existing serialized configurations.
     min_af3score_iptm: float = Field(default=0.5, ge=0, le=1)
     min_torchscore_iptm: float = Field(default=0.5, ge=0, le=1)
     min_torchscore_ptm: float = Field(default=0.8, ge=0, le=1)
@@ -188,7 +195,7 @@ class Evaluation(RoundModel):
             return cls.model_fields["dockq_python"].default
         return value
 
-    dockq_python: Path = Path("/lustre/grp/cmclab/leiy/conda_envs/ppi_env/bin/python")
+    dockq_python: Path = Path(sys.executable)
     dockq_timeout: float = Field(default=300, gt=0)
     # Explicit scalar field in TorchFold confidence JSON, selected by Service.metric_fields.
     fold_confidence_glob: str = "*summary_confidences*.json"
@@ -202,10 +209,6 @@ class Evaluation(RoundModel):
     @property
     def score_metric(self):
         return f"{self.scoring_backend}_iptm"
-
-    @property
-    def score_threshold(self):
-        return getattr(self, f"min_{self.scoring_backend}_iptm")
 
     @model_serializer(mode="wrap")
     def serialize(self, handler):
@@ -278,7 +281,28 @@ class InitialRoundConfig(RoundModel):
     path_mappings: list[PathMapping] = Field(min_length=1)
     generators: dict[Literal["ppiflow", "torchcraft"], Generator]
     evaluation: Evaluation
-    autonomous: AutonomousRound | None = None
+    autonomous: AutonomousRound | None = Field(
+        default=None, description="Follow-up policy settings for antibody and nanobody. Omit or use null for defaults."
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def default_antibody_scorer(cls, value):
+        if not isinstance(value, dict):
+            return value
+        evaluation = value.get("evaluation")
+        generators = value.get("generators")
+        if not isinstance(evaluation, dict) or "scoring_backend" in evaluation or not isinstance(generators, dict):
+            return value
+        for generator in generators.values():
+            request = (
+                generator.request
+                if isinstance(generator, Generator)
+                else (generator.get("request") if isinstance(generator, dict) else None)
+            )
+            if isinstance(request, dict) and isinstance(mode := request.get("mode"), str) and mode in ANTIBODY_MODES:
+                return {**value, "evaluation": {**evaluation, "scoring_backend": "torchscore"}}
+        return value
 
     @model_serializer(mode="wrap")
     def serialize(self, handler):
@@ -289,21 +313,36 @@ class InitialRoundConfig(RoundModel):
 
     @property
     def has_design_followup(self) -> bool:
-        return any(not generator.score_only for generator in self.generators.values())
+        return self.route != "binder"
+
+    @property
+    def route(self) -> Literal["binder", "antibody", "nanobody"]:
+        modes = [g.request.get("mode") for g in self.generators.values()]
+        if "antibody" in modes:
+            return "antibody"
+        if "nanobody" in modes or "vhh" in modes:
+            return "nanobody"
+        return "binder"
 
     @model_validator(mode="after")
     def check_workflow(self):
         if self.evaluation.torchfold is None:
             raise ValueError("torchfold service must be configured or uniquely registered")
-        if any(generator.score_only for generator in self.generators.values()) and self.evaluation.rosetta is None:
-            raise ValueError("PPIFlow binder scoring requires the registered Rosetta interface scoring service")
+        if self.evaluation.rosetta is None:
+            raise ValueError(
+                "binder, antibody and nanobody routes require the registered Rosetta interface scoring service"
+            )
         if any(g.service is None for g in self.generators.values()):
             raise ValueError("generator services must be configured or uniquely registered")
-        if self.autonomous is not None:
-            if self.has_design_followup and self.evaluation.rosetta is None:
-                raise ValueError("autonomous decisions require the registered Rosetta interface scoring service")
+        if self.has_design_followup:
+            if self.autonomous is None:
+                self.autonomous = AutonomousRound()
             if self.evaluation.scoring_backend != "torchscore":
-                raise ValueError("autonomous rounds require scoring_backend=torchscore")
+                raise ValueError("antibody and nanobody routes require scoring_backend=torchscore")
+            if self.evaluation.torchscore is None:
+                raise ValueError(
+                    "antibody and nanobody routes require a configured or uniquely registered TorchScore service"
+                )
             for source, generator in self.generators.items():
                 validate_request(source, {"name": self.name, **generator.request})
             initial_samples = sum(

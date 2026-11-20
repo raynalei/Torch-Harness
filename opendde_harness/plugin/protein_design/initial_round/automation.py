@@ -16,7 +16,7 @@ from pathlib import Path
 
 import yaml
 
-from opendde_harness.plugin.protein_design.initial_round.config import InitialRoundConfig
+from opendde_harness.plugin.protein_design.initial_round.config import ANTIBODY_MODES, InitialRoundConfig
 from opendde_harness.plugin.protein_design.initial_round.policy import choose_scorer
 from opendde_harness.plugin.protein_design.initial_round.storage import (
     SharedFiles,
@@ -90,18 +90,17 @@ def prepare_run(
             generator["request"] = {**copy.deepcopy(request_defaults), **request}
     configured = {kind for kind in ("af3score", "torchscore") if evaluation.get(kind) is not None}
     registered = {item.get("kind") for item in known.values() if item.get("kind") in {"af3score", "torchscore"}}
+    generator_modes = {generator.get("request", {}).get("mode") for generator in value.get("generators", {}).values()}
+    has_design_followup = bool(generator_modes & ANTIBODY_MODES)
     evaluation["scoring_backend"] = choose_scorer(
-        evaluation.get("scoring_backend") or ("torchscore" if value.get("autonomous") is not None else None),
+        evaluation.get("scoring_backend")
+        or ("torchscore" if has_design_followup or value.get("autonomous") is not None else None),
         configured,
         registered,
     )
-    selected = evaluation["scoring_backend"]
-    generator_modes = {generator.get("request", {}).get("mode") for generator in value.get("generators", {}).values()}
-    kinds = [selected, "torchfold"]
-    if value.get("autonomous") is not None or "binder" in generator_modes:
-        kinds.append("rosetta")
-    if value.get("autonomous") is not None and generator_modes - {"binder"}:
-        kinds.extend(["torchopt"])
+    kinds = [evaluation["scoring_backend"], "torchfold", "rosetta"]
+    if has_design_followup:
+        kinds.append("torchopt")
     for kind in kinds:
         model = registration(kind, evaluation.get(kind))
         if model:

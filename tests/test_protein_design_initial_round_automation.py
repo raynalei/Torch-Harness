@@ -43,7 +43,7 @@ def profile(tmp_path, request):
     # These control tests mock the detached worker rather than submit Slurm jobs.
     for service in [
         generator["service"],
-        *(value["evaluation"][name] for name in ("af3score", "torchfold", "rosetta")),
+        *(value["evaluation"][name] for name in ("torchscore", "torchfold", "rosetta")),
     ]:
         service.pop("sbatch_script", None)
         service.pop("sbatch_state_file", None)
@@ -57,7 +57,6 @@ def profile(tmp_path, request):
         generator["chains"]["refold_map"]["L"] = "Z"
     (tmp_path / "input.pdb").write_text("input")
     (tmp_path / "frameworks").mkdir()
-    value["evaluation"]["rosetta"] = None
     path = tmp_path / "profile.yaml"
     path.write_text(yaml.safe_dump(value))
     return path
@@ -94,7 +93,7 @@ def test_detached_launch_reuses_completed_run_and_refuses_changed_config(profile
     assert "worker" in " ".join(calls[0][0])
     write_json(root / "worker-status.json", {"state": "completed", "summary": {"accepted": 1}})
     assert start_round(config)["state"] == "completed" and len(calls) == 1
-    config.evaluation.min_af3score_iptm = 0.9
+    config.autonomous.min_score = 0.9
     with pytest.raises(ValueError, match="configuration changed"):
         start_round(config)
 

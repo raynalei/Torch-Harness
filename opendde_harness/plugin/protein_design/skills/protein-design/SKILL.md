@@ -126,9 +126,8 @@ Use `protein_design_stop` when the user asks to stop or continuing would violate
 
 
 TorchScore is an independent `torchscore` model kind, not an AF3Score alias. For
-initial-round choose `evaluation.scoring_backend: torchscore`, provide the
-`torchscore` service, `torchscore_options`, and `min_torchscore_iptm`; do not change
-an existing run to another scorer. It supports PDB scoring and metrics extraction
+the antibody and nanobody routes, use `evaluation.scoring_backend: torchscore`
+and the registered `torchscore` service. Keep the scorer fixed when resuming a run. It supports PDB scoring and metrics extraction
 with seed=10/one sample, not AF3Score's full preprocessing protocol.
 TorchOptimization (`torchopt`) uses only `/v1/optimizations`: submit registered
 `pdb_paths`, `binder_type` (`vhh` or `mini-binder`), chains and method. Reuse the
@@ -144,8 +143,11 @@ new paths or asking for extra workflow annotations. Autonomous feedback can use
 this registered service for low-confidence candidates without per-round approval.
 
 
-AF3Score and TorchScore remain independent tools for single-round and standalone
-scoring. Autonomous rounds require TorchScore for every generated/refined candidate:
+PPIFlow `binder` and TorchCraft `mini_binder` finish after the configured TorchScore
+or AF3Score confidence scorer, Rosetta interface energy, TorchFold and DockQ.
+PPIFlow `antibody` uses the antibody route. PPIFlow `nanobody` and TorchCraft
+`vhh` use the nanobody route. Both routes use TorchScore for every generated or
+refined candidate and default to the existing follow-up policy:
 initial ipTM < 0.5 terminates that candidate; both ipTM and pTM > 0.8 go directly to
 TorchFold/DockQ. Other initial candidates use the uploaded interface-energy
 algorithm on Rosetta ResResE logs: summed negative target–binder contact energies

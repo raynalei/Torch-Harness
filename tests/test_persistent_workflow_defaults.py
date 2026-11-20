@@ -3,6 +3,7 @@
 import copy
 import csv
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -544,7 +545,7 @@ def test_empty_dockq_uses_deployment_default(value):
     from opendde_harness.plugin.protein_design.initial_round.defaults import workflow_values
 
     config = Evaluation(dockq_python=value, af3score={"url": "https://score.test"})
-    assert str(config.dockq_python) == "/lustre/grp/cmclab/leiy/conda_envs/ppi_env/bin/python"
+    assert config.dockq_python == Path(sys.executable)
     merged = workflow_values(
         {"evaluation": {"dockq_python": value}},
         {"workflow_defaults": {"evaluation": {"dockq_python": "/shared/custom/python"}}},
@@ -604,12 +605,12 @@ def test_bundled_deployment_is_the_only_automatic_fallback(task, tmp_path):
     request = config.generators["torchcraft"].request
     assert request["hotspot_indices"] == "1,2"
     assert "target_full_seq" not in request
-    assert str(config.evaluation.dockq_python) == "/lustre/grp/cmclab/leiy/conda_envs/ppi_env/bin/python"
-    assert (
-        str(config.generators["torchcraft"].service.sbatch_script)
-        == "/lustre/grp/cmclab/leiy/torchcraft_api/torchcraft-api.sbatch"
+    defaults = load_deployment_defaults({})
+    assert config.evaluation.dockq_python == Path(defaults["workflow_defaults"]["evaluation"]["dockq_python"])
+    assert config.generators["torchcraft"].service.sbatch_script == Path(
+        defaults["model_services"]["torchcraft"]["service"]["sbatch_script"]
     )
-    assert len(load_deployment_defaults({})["model_services"]) == 7
+    assert len(defaults["model_services"]) == 7
     assert yaml.safe_load(DEFAULT_DEPLOYMENT_CONFIG.read_text()) == yaml.safe_load(
         (Path(__file__).resolve().parents[1] / "docs/examples/cluster_deployment.yaml").read_text()
     )
@@ -647,6 +648,7 @@ def test_deployment_override_never_accepts_a_historical_run_config(tmp_path):
 
 
 async def test_launch_tool_uses_deployment_yaml_for_incomplete_run_config(task, tmp_path, monkeypatch):
+    from opendde_harness.plugin.protein_design.initial_round.defaults import load_deployment_defaults
     from opendde_harness.plugin.protein_design.tools.initial_round import InitialRoundTool
 
     launched = []
@@ -688,10 +690,10 @@ async def test_launch_tool_uses_deployment_yaml_for_incomplete_run_config(task, 
         ).model_text
     )
     assert result["state"] == "starting", result
-    assert str(launched[0].evaluation.dockq_python) == "/lustre/grp/cmclab/leiy/conda_envs/ppi_env/bin/python"
-    assert (
-        str(launched[0].generators["ppiflow"].service.sbatch_script)
-        == "/lustre/grp/cmclab/leiy/ppiflow_api/ppiflow-api.sbatch"
+    defaults = load_deployment_defaults({})
+    assert launched[0].evaluation.dockq_python == Path(defaults["workflow_defaults"]["evaluation"]["dockq_python"])
+    assert launched[0].generators["ppiflow"].service.sbatch_script == Path(
+        defaults["model_services"]["ppiflow"]["service"]["sbatch_script"]
     )
 
 

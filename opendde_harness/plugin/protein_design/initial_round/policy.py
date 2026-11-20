@@ -40,17 +40,6 @@ def stop_reason(round_index, used_samples, stale_rounds, options):
     return None
 
 
-def score_passes(metrics, metric, iptm_threshold, ptm_threshold=0.8, *, require_ptm=False):
-    import math
-
-    ptm_metric = metric.removesuffix("_iptm") + "_ptm"
-    needs_ptm = require_ptm or metric == "torchscore_iptm"
-    fields = [metric, *([ptm_metric] if needs_ptm else [])]
-    if any(type(metrics.get(key)) not in (int, float) or not math.isfinite(metrics[key]) for key in fields):
-        return False
-    return metrics[metric] > iptm_threshold and (not needs_ptm or metrics[ptm_metric] > ptm_threshold)
-
-
 def candidate_stage(candidate):
     if candidate.get("optimized_by") == "torchopt":
         return "torchopt"

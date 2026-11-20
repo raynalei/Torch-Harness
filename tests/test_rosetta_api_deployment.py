@@ -253,7 +253,7 @@ async def test_github_runner_consumes_the_api_energy_artifact(deployment, tmp_pa
         files=SharedFiles([PathMapping(local=tmp_path, remote=str(tmp_path))]),
         config=SimpleNamespace(
             autonomous=SimpleNamespace(interface_distance=12.0, interface_energy_threshold=-5.0),
-            generators={"ppiflow": SimpleNamespace(chains=chains)},
+            generators={"ppiflow": SimpleNamespace(chains=chains, score_only=False)},
             evaluation=SimpleNamespace(
                 rosetta=service,
                 rosetta_options={"pack_input": False, "pack_separated": True},

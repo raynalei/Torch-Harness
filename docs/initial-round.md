@@ -1,27 +1,18 @@
-# Dual-generator initial round
+# Initial design and scoring routes
 
-For staged TorchScore, Rosetta fixed-point and optimization decisions, see the
-[autonomous feedback prototype](autonomous-feedback.md). The single-round default
-below is unchanged.
+`ddeharness protein-design initial-round` selects a route from the generator
+modes. It uses registered or configured Slurm-backed services and processes
+candidates sequentially.
 
-For the PPIFlow-only automatic single-round chain (PPIFlow -> AF3Score threshold -> TorchFold
--> DockQ), use the [automatic initial-round guide](automatic-initial-round.md).
-TorchCraft and Rosetta are now optional; the dual-generator example below remains
-supported. `fold_template: null` builds the fold input automatically, while a
-prepared template can still be supplied. An unset/null refold limit admits every
-above-threshold candidate; sequence deduplication remains configurable.
+| Route | Generator modes | After generation |
+| --- | --- | --- |
+| `binder` | PPIFlow `binder`, TorchCraft `mini_binder`, or both | TorchScore or AF3Score, Rosetta interface energy, TorchFold and DockQ, then export |
+| `antibody` | PPIFlow `antibody` | TorchScore and bounded follow-up decisions |
+| `nanobody` | PPIFlow `nanobody`, TorchCraft `vhh`, or both | TorchScore and bounded follow-up decisions |
 
-`ddeharness protein-design initial-round` runs a deterministic initial design
-round without LLM credentials or a local GPU. It is separate from the existing
-`protein-design start` evolutionary workflow and uses the supplied PPIFlow,
-TorchCraft, AF3Score, TorchFold and Rosetta HTTP services.
-
-The sequence is: generate with **both** sources, score each candidate with
-AF3Score, select a bounded distinct-sequence shortlist **per source**, refold with
-TorchFold, evaluate design/refold consistency with DockQ, run Rosetta interface
-analysis, and export candidates and rankings. Candidates are processed
-sequentially to avoid flooding Slurm. Large production batches need separately
-measured quotas and throughput; begin with small samples.
+The [antibody and nanobody policy](autonomous-feedback.md) uses default settings
+when the `autonomous` block is omitted or null. Use that block to tune its
+thresholds, budgets and decision policy.
 
 ## Installation
 
@@ -37,7 +28,9 @@ DockQ builds a native extension and needs a C compiler. If the Python toolchain
 expects an unavailable clang and GCC is installed, prefix the tool installation
 with `CC=gcc CXX=g++`. Set `evaluation.dockq_python` to the installed tool
 environment's interpreter, `/lustre/project/tools/dockq/bin/python` in this
-example. Neither CUDA nor the model dependencies belong in the client environment.
+example. If `dockq_python` is omitted, the runner uses its own Python interpreter.
+Specify the isolated interpreter when DockQ is installed separately. Neither CUDA
+nor the model dependencies belong in the client environment.
 
 ## Configuration and execution
 
@@ -52,7 +45,7 @@ output binder chain IDs for the design type. PPIFlow and TorchCraft VHH/minibind
 workflows use the same chain roles. An omitted `refold_map` keeps those IDs. Both scoring backends read the chain IDs in the
 candidate PDB. TorchFold uses the refold mapping, DockQ uses the same mapping
 and roles, and Rosetta groups the binder chains together against the target.
-PPIFlow `binder` candidates finish after the configured confidence scorer,
+Both binder generators finish after the configured confidence scorer,
 Rosetta interface scoring of the generated complex, and TorchFold/DockQ.
 DockQ compares the refold with the original generated pose. Candidate records
 use `scored_only` and a separate score-only ranking.
@@ -60,9 +53,9 @@ PPIFlow Partial Flow and TorchOptimization reuse the candidate's chain roles
 when the workflow routes to them. Explicit overrides must use distinct target
 and binder IDs in the generated complex.
 For optional TorchCraft `mini_binder`, provide `pdb_path`,
-`hotspot_indices`, `target_full_seq`, and `design_length`. Requests otherwise pass
-through to the documented services. Partial-flow modes are not part of this
-initial-round command.
+`hotspot_indices`, and `design_length`. `target_full_seq` is optional.
+Initial requests use generation modes. Follow-up Partial Flow requests are built
+by the antibody and nanobody policy.
 
 ```bash
 uv run --frozen ddeharness protein-design initial-round -c initial.yaml --check
@@ -168,19 +161,16 @@ reference; the minimum scored target/binder interface DockQ is retained. This is
 **design/refold consistency**, not agreement with an experimental structure.
 Rosetta `dG_separated` is an energy score, not measured affinity.
 
-AF3Score thresholding precedes selection. Within each source, candidates are
-ordered by AF3Score ipTM and sequence duplicates removed until the source's
-refold limit is reached. Accepted candidates pass both refold-ipTM and DockQ
-thresholds and have a finite Rosetta interface score. Ranking is lexicographic:
-refold ipTM descending, DockQ descending, Rosetta interface energy ascending;
-no incompatible score scales are added together.
+For binder, successfully scored complexes enter `score_only_ranking`. For antibody
+and nanobody, candidate acceptance and ranking follow the
+[staged policy](autonomous-feedback.md).
 
 ## Results and recovery
 
 The run directory contains `run-config.json`, `checkpoint.json`, `candidates.json`, `ranking.csv`,
 `summary.json`, `initial_candidates.json`, and per-candidate inputs/evidence.
-The accepted export uses the existing `Candidate` fields; its `iptm` alias and
-objective explicitly refer to TorchFold. Use it as reviewed input when preparing
+The summary reports the selected `route`. The accepted export includes
+TorchFold iPTM as `metrics.iptm` and the staged policy score as the objective. Use it as reviewed input when preparing
 a later evolutionary workflow; this command does not automatically launch one.
 
 Job IDs and request hashes are persisted before consuming results. A dropped
@@ -339,12 +329,11 @@ same attempt. If Slurm confirms the server exited, inspect its configured
 `#SBATCH --output` file for the underlying environment, port or resource error.
 
 
-## Choose AF3Score or TorchScore
+## Configure the confidence scorer
 
-`evaluation.scoring_backend` selects one scoring service; default is `af3score`.
-AF3Score profiles remain valid, including existing default-profile checkpoint hashes.
-Both services may be configured, but only the selected scorer is contacted during
-preflight/scoring. TorchScore has separate options, selection threshold and metric names:
+Binder accepts one scorer per run through `evaluation.scoring_backend`. Compact
+tasks default to TorchScore. Antibody and nanobody require TorchScore. The runner
+contacts the selected scorer during preflight and scoring.
 
 ```yaml
 evaluation:
@@ -364,7 +353,6 @@ evaluation:
     num_workers: 4
     seed: 10
     write_fold_input_json_file: false
-  min_torchscore_iptm: 0.5
   # Retain your configured torchfold, rosetta and dockq_python fields.
 ```
 
@@ -372,10 +360,8 @@ This is a fragment to merge with an existing valid workflow. The selected scorer
 service is required; the unused one is optional. To start TorchScore via Slurm,
 configure its `sbatch_script` just as for other services.
 The worker uses `torchscore_input/`, `torchscore-metrics.json`, `torchscore_results`
-and `metrics.torchscore_iptm`; AF3Score keeps its original field names. Thresholding
-is strictly greater than the selected threshold, then per-source sequence deduplication
-and refold limits apply. TorchFold/DockQ/Rosetta stages are unchanged. Do not assume
-TorchScore ipTM is calibrated identically to AF3Score. Use a new run name/directory
-when switching models; a submitted checkpoint cannot be resumed under another scorer.
+and `metrics.torchscore_iptm`. AF3Score keeps its original field names. Use a new
+run name and directory when switching scorers or moving a legacy single-round
+antibody or nanobody profile to the current route.
 Torch Optimization is separately registered as `torchopt`, not an automatic scoring
 or refold step; see [its action protocol](protein-model-tools.md#torch-optimization-structure-optimization).

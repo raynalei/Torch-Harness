@@ -115,8 +115,10 @@ def round_config(tmp_path):
                     "fold_template": str(template),
                 },
             },
+            "autonomous": {"decision_policy": "rules"},
             "evaluation": {
                 "af3score": service("af3score"),
+                "torchscore": service("torchscore"),
                 "torchfold": service("torchfold"),
                 "rosetta": service("rosetta"),
                 "dockq_python": sys.executable,
@@ -385,6 +387,30 @@ def test_refold_pairs_model_with_its_own_confidence(tmp_path):
     assert path.name == "b_model.cif" and score == 0.9
 
 
+def binder_config(config, sources, *, scorer="af3score"):
+    value = config.model_dump(mode="json")
+    value["evaluation"]["scoring_backend"] = scorer
+    if scorer == "af3score":
+        value["evaluation"].pop("torchscore")
+    value["generators"] = {source: value["generators"][source] for source in sources}
+    if "ppiflow" in sources:
+        value["generators"]["ppiflow"]["request"] = {
+            "mode": "binder",
+            "name": value["name"],
+            "input_pdb": "/shared/input.pdb",
+            "target_chain": "A",
+            "binder_chain": "B",
+            "samples_min_length": 30,
+            "samples_max_length": 60,
+            "samples_per_target": 1,
+        }
+    if "torchcraft" in sources:
+        request = value["generators"]["torchcraft"]["request"]
+        request.pop("framework_cif_path")
+        request.update(mode="mini_binder", name=value["name"], design_length=40)
+    return InitialRoundConfig.model_validate(value)
+
+
 @pytest.fixture
 def fake_services(round_config, tmp_path, monkeypatch):
     calls = Counter()
@@ -487,25 +513,15 @@ async def test_both_generators_complete_round_and_resume_without_resubmitting(
             body = json.loads(request.content)
             if source == "ppiflow":
                 assert body["antigen_chain"] == "D" and body["heavy_chain"] == "H"
-            elif source == "af3score":
+            elif source == "torchscore":
                 (candidate,) = files.local(body["input_pdb_dir"]).glob("*.pdb")
                 assert set(chain_sequences(candidate)) == {"D", "H"}
             elif source == "torchfold":
                 fold_input = json.loads(files.local(body["json_path"]).read_text())
                 assert [entry["protein"]["id"] for entry in fold_input["sequences"]] == ["D", "H"]
-            elif source == "rosetta":
-                assert (body["chain_group_a"], body["chain_group_b"]) == ("H", "D")
-                # The existing fixture checks explicit refold names X/Y for legacy configurations.
-                calls[(source, request.method)] += 1
-                return httpx.Response(202, json={"task_id": "identity-rosetta"})
             return handle_request(request)
 
-        def respond(request):
-            if request.url.path.endswith("/identity-rosetta/results"):
-                return httpx.Response(200, json={"metrics": {"dG_separated": -12.0}})
-            return verify_user_chains(request)
-
-        transport = httpx.MockTransport(respond)
+        transport = httpx.MockTransport(verify_user_chains)
     result = await InitialRoundRunner(config, transport=transport).run()
     assert result["status"] == "completed" and result["accepted"] == 2
     root = round_config.work_dir / round_config.name
@@ -516,9 +532,8 @@ async def test_both_generators_complete_round_and_resume_without_resubmitting(
     assert before == {
         ("ppiflow", "POST"): 1,
         ("torchcraft", "POST"): 1,
-        ("af3score", "POST"): 2,
+        ("torchscore", "POST"): 2,
         ("torchfold", "POST"): 2,
-        ("rosetta", "POST"): 2,
     }
     assert await InitialRoundRunner(config, transport=transport).run() == result
     assert {k: v for k, v in calls.items() if k[1] == "POST"} == before
@@ -533,7 +548,7 @@ async def test_check_submits_nothing(round_config, fake_services):
 
 async def test_thresholds_produce_no_hits_without_fabricating_results(round_config, fake_services):
     transport, calls = fake_services
-    round_config.evaluation.min_af3score_iptm = 0.99
+    round_config.autonomous.min_score = 0.99
     result = await InitialRoundRunner(round_config, transport=transport).run()
     assert result["accepted"] == 0 and not result["ranking"]
     assert calls[("torchfold", "POST")] == 0
@@ -542,9 +557,10 @@ async def test_thresholds_produce_no_hits_without_fabricating_results(round_conf
 async def test_resume_refuses_modified_generated_artifact(round_config, fake_services):
     transport, _ = fake_services
     await InitialRoundRunner(round_config, transport=transport).run()
-    (round_config.work_dir / "ppiflow/generated.pdb").write_text("changed")
-    result = await InitialRoundRunner(round_config, transport=transport).run()
-    assert result["status"] == "partial" and len(result["failed"]) == 1
+    candidate = json.loads((round_config.work_dir / round_config.name / "candidates.json").read_text())[0]
+    SharedFiles(round_config.path_mappings).local(candidate["generated_structure"]).write_text("changed")
+    with pytest.raises(ValueError, match="generated artifact changed"):
+        await InitialRoundRunner(round_config, transport=transport).run()
 
 
 def test_checkpoint_refuses_changed_configuration(tmp_path):
@@ -562,11 +578,11 @@ def test_chain_mapping_must_be_bijective():
 
 async def test_bad_result_field_is_a_candidate_error_not_a_zero_score(round_config, fake_services):
     transport, _ = fake_services
-    round_config.evaluation.af3score.metric_fields = {"iptm": "missing_measurement"}
-    result = await InitialRoundRunner(round_config, transport=transport).run()
-    assert result["status"] == "partial" and result["accepted"] == 0
+    round_config.evaluation.torchscore.metric_fields = {"iptm": "missing_measurement"}
+    with pytest.raises(RuntimeError, match="Evaluation step failed"):
+        await InitialRoundRunner(round_config, transport=transport).run()
     candidates = json.loads((round_config.work_dir / round_config.name / "candidates.json").read_text())
-    assert all("af3score_iptm" not in c["metrics"] for c in candidates)
+    assert all("torchscore_iptm" not in c["metrics"] and c["status"] == "failed" for c in candidates)
 
 
 async def test_changed_template_cannot_resume_submitted_jobs(round_config, fake_services):
@@ -662,7 +678,8 @@ async def test_updated_af3score_controls_are_forwarded_in_initial_round(round_co
         "seed": 37,
         "write_fold_input_json_file": True,
     }
-    round_config.evaluation.af3score_options = options
+    config = binder_config(round_config, ("ppiflow", "torchcraft"))
+    config.evaluation.af3score_options = options
     bodies = []
 
     def handler(request):
@@ -671,62 +688,20 @@ async def test_updated_af3score_controls_are_forwarded_in_initial_round(round_co
         return original(request)
 
     transport.handler = handler
-    assert (await InitialRoundRunner(round_config, transport=transport).run())["accepted"] == 2
+    assert (await InitialRoundRunner(config, transport=transport).run())["score_only_count"] == 2
     assert len(bodies) == 2
     assert all(all(body[key] == value for key, value in options.items()) for body in bodies)
 
 
-async def test_ppiflow_only_runs_all_stages_without_torchcraft_rosetta_or_template(round_config, fake_services):
+async def test_ppiflow_nanobody_runs_without_torchcraft_or_template(round_config, fake_services):
     transport, calls = fake_services
     round_config.generators.pop("torchcraft")
     round_config.generators["ppiflow"].fold_template = None
-    round_config.evaluation.rosetta = None
     result = await InitialRoundRunner(round_config, transport=transport).run()
     assert result["status"] == "completed" and result["accepted"] == 1
-    assert calls[("ppiflow", "POST")] == calls[("af3score", "POST")] == calls[("torchfold", "POST")] == 1
-    assert calls[("torchcraft", "GET")] == calls[("rosetta", "GET")] == 0
-    candidate = json.loads((round_config.work_dir / round_config.name / "candidates.json").read_text())[0]
-    assert candidate["metrics"]["design_refold_dockq"] == 1.0
-    assert "rosetta_interface_dg" not in candidate["metrics"]
-
-
-async def test_af3score_must_be_strictly_above_the_gate_before_refold(round_config, fake_services):
-    transport, calls = fake_services
-    round_config.generators.pop("torchcraft")
-    round_config.evaluation.rosetta = None
-    round_config.evaluation.min_af3score_iptm = 0.9
-    result = await InitialRoundRunner(round_config, transport=transport).run()
-    assert result["outcome"] == "no_hits"
-    assert calls[("torchfold", "POST")] == 0
-
-
-async def test_every_passing_structure_can_refold_without_a_top_k_cap(round_config, fake_services):
-    transport, calls = fake_services
-    round_config.generators.pop("torchcraft")
-    round_config.generators["ppiflow"].fold_template = None
-    round_config.generators["ppiflow"].per_source_refold_limit = None
-    round_config.generators["ppiflow"].deduplicate_sequences = False
-    round_config.evaluation.rosetta = None
-    for i in range(7):
-        pdb(round_config.work_dir / "ppiflow" / f"extra-{i}.pdb")
-    original = transport.handler
-
-    def handler(request):
-        if request.url.host == "ppiflow.test" and request.url.path.endswith("/results"):
-            return httpx.Response(
-                200,
-                json={
-                    "files": [
-                        f"/shared/ppiflow/{path.name}" for path in (round_config.work_dir / "ppiflow").glob("*.pdb")
-                    ]
-                },
-            )
-        return original(request)
-
-    transport.handler = handler
-    result = await InitialRoundRunner(round_config, transport=transport).run()
-    assert result["accepted"] == 8
-    assert calls[("torchfold", "POST")] == 8
+    assert result["route"] == "nanobody"
+    assert calls[("ppiflow", "POST")] == calls[("torchscore", "POST")] == calls[("torchfold", "POST")] == 1
+    assert calls[("torchcraft", "GET")] == calls[("rosetta", "POST")] == 0
 
 
 def test_generated_fold_input_supports_query_only_or_pipeline_search(round_config, tmp_path):
@@ -802,6 +777,7 @@ async def test_antibody_round_exports_both_sequences_and_resumes(
     transport, calls = fake_services
     result = await InitialRoundRunner(antibody_config, transport=transport).run()
     assert result["accepted"] == 1 and result["status"] == "completed"
+    assert result["route"] == "antibody"
     root = antibody_config.work_dir / antibody_config.name
     candidate = json.loads((root / "initial_candidates.json").read_text())[0]
     assert candidate["sequence"] == "AAAAAA|VVVVVV"
@@ -860,7 +836,7 @@ async def test_ppiflow_cli_options_are_forwarded_unchanged(round_config, fake_se
     transport, _ = fake_services
     extras = {
         "config": "/shared/test_antibody_v3.yaml",
-        "model_weights": "/shared/model_214.ckpt.enc",
+        "model_weights": "/shared/antibody-test.ckpt",
         "output_dir": "/shared/sample_antibody/3/",
     }
     round_config.generators["ppiflow"].request.update(extras)
@@ -882,7 +858,7 @@ async def test_cold_sbatch_preflight_never_probes_http_or_slurm(round_config, fa
     _, calls = fake_services
     for name, service in [
         *((name, g.service) for name, g in round_config.generators.items()),
-        *((name, getattr(round_config.evaluation, name)) for name in ("af3score", "torchfold", "rosetta")),
+        *((name, getattr(round_config.evaluation, name)) for name in ("torchscore", "torchfold", "rosetta")),
     ]:
         service.sbatch_script = tmp_path / f"{name}.sbatch"
         service.sbatch_script.write_text("#!/bin/bash\n")
@@ -925,32 +901,8 @@ async def test_dockq_preflight_uses_configured_python_and_preserves_actual_error
     assert "No module named 'numpy'" in log.read_text()
 
 
-@pytest.mark.parametrize("threshold,expected", [(0.85, 2), (0.9, 0)])
-async def test_torchscore_is_an_independent_initial_round_selection_backend(
-    round_config, fake_services, threshold, expected
-):
-    transport, calls = fake_services
-    evaluation = round_config.evaluation
-    evaluation.scoring_backend = "torchscore"
-    evaluation.torchscore = Service(url="https://torchscore.test")
-    evaluation.af3score = None
-    evaluation.min_torchscore_iptm = threshold
-    result = await InitialRoundRunner(round_config, transport=transport).run()
-    assert result["accepted"] == expected
-    assert calls[("torchscore", "POST")] == 2
-    assert calls[("af3score", "POST")] == 0
-    assert calls[("torchfold", "POST")] == expected
-    root = round_config.work_dir / round_config.name
-    candidates = json.loads((root / "candidates.json").read_text())
-    assert all(c["metrics"]["torchscore_iptm"] == 0.9 and "af3score_iptm" not in c["metrics"] for c in candidates)
-    assert "torchscore_iptm" in (root / "ranking.csv").read_text().splitlines()[0]
-    before = dict(calls)
-    assert (await InitialRoundRunner(round_config, transport=transport).run())["accepted"] == expected
-    assert all(calls[key] == value for key, value in before.items() if key[1] == "POST")
-
-
 def test_default_af3score_serialization_preserves_existing_checkpoint_shape(round_config):
-    dumped = round_config.model_dump(mode="json")["evaluation"]
+    dumped = binder_config(round_config, ("ppiflow",)).model_dump(mode="json")["evaluation"]
     assert "scoring_backend" not in dumped
     assert not any(key in dumped for key in ("torchscore", "torchscore_options", "min_torchscore_iptm"))
     from opendde_harness.plugin.protein_design.initial_round.config import Evaluation
@@ -1067,11 +1019,16 @@ async def test_followup_resumes_reserved_decision_without_duplicate_submission(
     assert result["followup_rounds"] == 1
 
 
-def test_default_config_hash_shape_is_preserved(round_config):
-    assert "autonomous" not in round_config.model_dump(mode="json")
+@pytest.mark.parametrize("settings", [{}, {"autonomous": None}])
+def test_nanobody_defaults_to_iterative_routing(round_config, settings):
     value = round_config.model_dump(mode="json")
+    value.pop("autonomous")
+    value["evaluation"].pop("scoring_backend")
+    config = InitialRoundConfig.model_validate({**value, **settings})
+    assert config.route == "nanobody"
+    assert config.autonomous.decision_policy == "agent"
+    assert config.evaluation.scoring_backend == "torchscore"
     value["evaluation"]["rosetta"] = None
-    value["autonomous"] = {}
     with pytest.raises(ValueError, match="require.*Rosetta"):
         InitialRoundConfig.model_validate(value)
 
@@ -1434,11 +1391,8 @@ def test_scorer_choice_uses_explicit_configuration_then_registered_kind(round_co
 
 @pytest.mark.parametrize("failed_source", ["ppiflow", "torchcraft", "af3score", "torchscore", "torchfold", "rosetta"])
 async def test_resume_retries_only_failed_model_and_reuses_upstream_results(round_config, fake_services, failed_source):
-    config = round_config
-    if failed_source == "torchscore":
-        config.evaluation.scoring_backend = "torchscore"
-        config.evaluation.torchscore = Service(url="https://torchscore.test", poll_interval=0.001)
-        config.evaluation.af3score = None
+    scorer = "af3score" if failed_source == "af3score" else "torchscore"
+    config = binder_config(round_config, ("ppiflow", "torchcraft"), scorer=scorer)
     base, calls = fake_services
     failed_ids = set()
 
@@ -1464,7 +1418,7 @@ async def test_resume_retries_only_failed_model_and_reuses_upstream_results(roun
     resumed = InitialRoundRunner(config, transport=transport, retry_failed=True)
     result = await resumed.run()
     assert result["status"] == "completed"
-    assert result["accepted"] == 2
+    assert result["score_only_count"] == 2
     for source in config.generators:
         assert calls[(source, "POST")] == before[(source, "POST")] + (source == failed_source)
     if failed_source not in config.generators:
@@ -1567,7 +1521,7 @@ async def test_resume_rehosts_ended_api_and_queries_original_job_without_posting
 
 @pytest.mark.parametrize(
     "iptm,ptm,passes",
-    [(0.51, 0.81, True), (0.5, 0.9, False), (0.9, 0.8, False), (0.49, 0.95, False), (0.9, 0.79, False)],
+    [(0.81, 0.81, True), (0.8, 0.9, False), (0.9, 0.8, False), (0.49, 0.95, False), (0.9, 0.79, False)],
 )
 async def test_torchscore_joint_gate_controls_refold(round_config, fake_services, iptm, ptm, passes):
     round_config.evaluation.scoring_backend = "torchscore"
@@ -1614,7 +1568,8 @@ async def test_missing_torchscore_ptm_is_not_assumed_to_pass(round_config, fake_
         return response
 
     runner = InitialRoundRunner(round_config, transport=httpx.MockTransport(handler))
-    assert (await runner.run())["status"] == "partial"
+    with pytest.raises(RuntimeError, match="Evaluation step failed"):
+        await runner.run()
     assert calls[("torchfold", "POST")] == 0
     assert all("error" in c for c in runner.checkpoint.data["candidates"])
 
@@ -1897,7 +1852,7 @@ async def test_completed_refold_is_harvested_after_worker_crash_and_status_profi
     result = await restored.run()
     assert result["accepted"] == 2
     assert calls[("ppiflow", "POST")] == calls[("torchcraft", "POST")] == 1
-    assert calls[("af3score", "POST")] == 2
+    assert calls[("torchscore", "POST")] == 2
     assert calls[("torchfold", "POST")] == 2  # One per candidate, never a replacement for the completed job.
     assert original_id in remote_ids
     assert sum(job.get("id") == original_id for job in restored.checkpoint.data["jobs"].values()) == 1
@@ -2216,44 +2171,47 @@ async def test_ppiflow_binder_harvests_only_complete_complexes(round_config, out
         await runner.services["ppiflow"].close()
 
 
-@pytest.mark.parametrize(("autonomous", "mixed"), [(False, False), (True, False), (False, True)])
-async def test_ppiflow_binder_stops_after_direct_scoring(round_config, fake_services, autonomous, mixed):
-    config = autonomous_config(round_config) if autonomous else round_config
-    value = config.model_dump(mode="json")
-    flow = value["generators"]["ppiflow"]
-    flow["request"] = {
-        "mode": "binder",
-        "name": value["name"],
-        "input_pdb": "/shared/input.pdb",
-        "target_chain": "A",
-        "binder_chain": "B",
-        "samples_min_length": 30,
-        "samples_max_length": 60,
-        "samples_per_target": 1,
-    }
-    if mixed:
-        value["generators"]["torchcraft"]["request"].update(mode="mini_binder", design_length=40)
-    else:
-        value["generators"] = {"ppiflow": flow}
-    config = InitialRoundConfig.model_validate(value)
+@pytest.mark.parametrize(
+    ("sources", "scorer"),
+    [
+        (("ppiflow",), "af3score"),
+        (("torchcraft",), "torchscore"),
+        (("ppiflow", "torchcraft"), "af3score"),
+    ],
+)
+async def test_binder_generators_stop_after_direct_scoring(round_config, fake_services, sources, scorer):
+    config = binder_config(round_config, sources, scorer=scorer)
     transport, calls = fake_services
+    original = transport.handler
+
+    def handler(request):
+        response = original(request)
+        if request.url.path.endswith("/metrics"):
+            return httpx.Response(200, json={"metrics": [{"iptm": 0.2, "ptm": 0.3}]})
+        return response
+
+    transport.handler = handler
     runner = InitialRoundRunner(config, transport=transport)
     result = await runner.run()
+
     assert result["status"] == "completed"
-    assert result["score_only_count"] == 1
-    assert calls[(config.evaluation.scoring_backend, "POST")] == (2 if mixed else 1)
-    assert calls[("rosetta", "POST")] == (2 if mixed else 1)
-    assert calls[("torchfold", "POST")] == 1 + int(mixed)
-    assert calls[("ppiflow", "POST")] == 1
+    assert result["route"] == "binder"
+    assert result["score_only_count"] == len(sources)
+    assert result["accepted"] == 0
+    assert result["stop_reason"] == "binder_score_only"
+    assert result["followup_rounds"] == 0
+    assert "autonomous" not in runner.checkpoint.data
+    assert calls[(scorer, "POST")] == len(sources)
+    assert calls[("rosetta", "POST")] == len(sources)
+    assert calls[("torchfold", "POST")] == len(sources)
     assert calls[("torchopt", "POST")] == 0
-    if not mixed:
-        assert result["stop_reason"] == "binder_score_only"
-        assert result["followup_rounds"] == 0
-    candidate = next(c for c in runner.checkpoint.data["candidates"] if c["source"] == "ppiflow")
-    assert candidate["status"] == "scored_only"
-    assert candidate["rosetta_structure"] == "generated"
-    assert candidate["metrics"]["rosetta_interface_dg"] == -12
-    assert candidate["metrics"]["design_refold_dockq"] == 1.0
+    for source in sources:
+        assert calls[(source, "POST")] == 1
+    for candidate in runner.checkpoint.data["candidates"]:
+        assert candidate["status"] == "scored_only"
+        assert candidate["rosetta_structure"] == "generated"
+        assert candidate["metrics"]["rosetta_interface_dg"] == -12
+        assert candidate["metrics"]["design_refold_dockq"] == 1.0
     assert result["dockq_reference"] == "generated_design_pose"
     before = calls.copy()
     assert await InitialRoundRunner(config, transport=transport).run() == result

@@ -388,9 +388,7 @@ class InitialRoundRunner:
             and digest(self.files.local(candidate["refold_structure"])) != candidate["refold_sha256"]
         ):
             raise ValueError(f"refold artifact changed: {key}")
-        if metric in candidate["metrics"] and (
-            (scorer != "torchscore" and self.config.autonomous is None) or scorer + "_ptm" in candidate["metrics"]
-        ):
+        if metric in candidate["metrics"] and (scorer != "torchscore" or scorer + "_ptm" in candidate["metrics"]):
             return
         write_pdb(original, model)
         result = await self.job(
@@ -414,7 +412,7 @@ class InitialRoundRunner:
         write_json(directory / f"{scorer}-metrics.json", metrics)
         field = service.config.metric_fields.get("iptm", "iptm")
         candidate["metrics"][metric] = measured(metric_records(metrics, service.config), field, confidence=True)
-        if scorer == "torchscore" or self.config.autonomous is not None:
+        if scorer == "torchscore":
             ptm_field = service.config.metric_fields.get("ptm", "ptm")
             candidate["metrics"][scorer + "_ptm"] = measured(
                 metric_records(metrics, service.config), ptm_field, confidence=True
@@ -500,8 +498,6 @@ class InitialRoundRunner:
             self.save_candidates()
         if generator.score_only:
             return
-        if self.config.autonomous is None:
-            await self.score_interface(candidate)
         metrics = candidate["metrics"]
         candidate["status"] = (
             "accepted"
@@ -532,17 +528,9 @@ class InitialRoundRunner:
             return
         key = candidate["candidate_id"]
         directory = self.root / key
-        refolded = not score_only and autonomous is None and bool(candidate.get("refold_structure"))
-        model = directory / ("refold.pdb" if refolded else "generated-interface.pdb")
-        write_pdb(
-            self.files.local(candidate["refold_structure"] if refolded else candidate["generated_structure"]), model
-        )
-        chain_map = (
-            generator.chains.refold_map
-            if refolded
-            else {c: c for c in generator.chains.target + generator.chains.binder}
-        )
-        if any(len(c) != 1 for c in chain_map.values()):
+        model = directory / "generated-interface.pdb"
+        write_pdb(self.files.local(candidate["generated_structure"]), model)
+        if any(len(c) != 1 for c in generator.chains.target + generator.chains.binder):
             raise ValueError("Rosetta chain groups require single-character chain IDs")
         result = await self.job(
             "rosetta",
@@ -552,8 +540,8 @@ class InitialRoundRunner:
             {
                 **evaluation.rosetta_options,
                 "input_pdb": self.files.remote(model),
-                "chain_group_a": "".join(chain_map[c] for c in generator.chains.binder),
-                "chain_group_b": "".join(chain_map[c] for c in generator.chains.target),
+                "chain_group_a": "".join(generator.chains.binder),
+                "chain_group_b": "".join(generator.chains.target),
             },
         )
         field = evaluation.rosetta.metric_fields.get("interface_dg", "dG_separated")
@@ -598,7 +586,7 @@ class InitialRoundRunner:
             write_json(directory / "interface-residue-energies.json", energies)
             self.save_candidates()
             return
-        candidate["rosetta_structure"] = "refold" if refolded else "generated"
+        candidate["rosetta_structure"] = "generated"
         self.save_candidates()
 
     async def score_binder_candidates(self, candidates):
@@ -633,21 +621,12 @@ class InitialRoundRunner:
     def export(self, candidates: list[dict]) -> dict:
         for candidate in candidates:
             candidate.pop("rank", None)
-        accepted = sorted(
-            (c for c in candidates if c["status"] == "accepted"),
-            key=lambda c: (
-                -c["metrics"]["torchfold_iptm"],
-                -c["metrics"]["design_refold_dockq"],
-                c["metrics"].get("rosetta_interface_dg", 0.0),
-                c["candidate_id"],
-            ),
-        )
-        if self.config.autonomous is not None:
-            from .autonomous import quality
+        from .autonomous import quality
 
-            accepted.sort(
-                key=lambda c: tuple(-v for v in quality(c, self.config.evaluation.score_metric)) + (c["candidate_id"],)
-            )
+        accepted = sorted(
+            (c for c in candidates if c["status"] == "accepted" and not self.config.generators[c["source"]].score_only),
+            key=lambda c: tuple(-v for v in quality(c, self.config.evaluation.score_metric)) + (c["candidate_id"],),
+        )
         for rank, candidate in enumerate(accepted, 1):
             candidate["rank"] = rank
         failed = [c["candidate_id"] for c in candidates if c["status"] == "failed"]
@@ -659,8 +638,7 @@ class InitialRoundRunner:
             "failed": failed,
             "ranking": [c["candidate_id"] for c in accepted],
             "dockq_reference": "generated_design_pose",
-            "ranking_policy": "refold_iptm_desc,dockq_desc"
-            + (",interface_dg_asc" if self.config.evaluation.rosetta else ""),
+            "route": self.config.route,
         }
         scored = sorted(
             (c for c in candidates if c["status"] == "scored_only"),
@@ -681,7 +659,7 @@ class InitialRoundRunner:
                 stop_reason="binder_score_only",
                 followup_rounds=0,
             )
-        if self.config.has_design_followup and self.config.autonomous is not None:
+        if self.config.has_design_followup:
             state = self.checkpoint.data["autonomous"]
             result.update(
                 scoring_backend=self.config.evaluation.scoring_backend,
@@ -702,9 +680,7 @@ class InitialRoundRunner:
                 {
                     "candidate_id": c["candidate_id"],
                     "sequence": c["sequence"],
-                    "objective": c["metrics"][
-                        "ranking_score" if self.config.autonomous is not None else "torchfold_iptm"
-                    ],
+                    "objective": c["metrics"]["ranking_score"],
                     "metrics": {**c["metrics"], "iptm": c["metrics"]["torchfold_iptm"]},
                     "structure_path": c["refold_structure"],
                     "metadata": {
@@ -728,13 +704,14 @@ class InitialRoundRunner:
                     self.config.evaluation.score_metric,
                     *(
                         [self.config.evaluation.scoring_backend + "_ptm"]
-                        if self.config.autonomous is not None or self.config.evaluation.scoring_backend == "torchscore"
+                        if self.config.evaluation.scoring_backend == "torchscore"
                         else []
                     ),
                     "torchfold_iptm",
                     "design_refold_dockq",
                     "rosetta_interface_dg",
-                    *(["rosetta_interface_score", "ranking_score"] if self.config.autonomous is not None else []),
+                    *(["rosetta_interface_score"] if self.config.has_design_followup else []),
+                    "ranking_score",
                     "error",
                 ],
             )
@@ -775,74 +752,23 @@ class InitialRoundRunner:
                 await self.score_binder_candidates(candidates)
                 if not self.config.has_design_followup:
                     return self.export(candidates)
-                if self.config.autonomous is not None:
-                    from .autonomous import run_autonomous
+                from .autonomous import run_autonomous
 
-                    for candidate in candidates:
-                        for kind in ("generated", "refold"):
-                            if (
-                                candidate.get(f"{kind}_structure")
-                                and digest(self.files.local(candidate[f"{kind}_structure"]))
-                                != candidate[f"{kind}_sha256"]
-                            ):
-                                raise ValueError(f"{kind} artifact changed: {candidate['candidate_id']}")
-                    for candidate in candidates:
+                for candidate in candidates:
+                    for kind in ("generated", "refold"):
                         if (
-                            candidate.get("rosetta_energy_log")
-                            and digest(self.files.local(candidate["rosetta_energy_log"]))
-                            != candidate["rosetta_energy_log_sha256"]
+                            candidate.get(f"{kind}_structure")
+                            and digest(self.files.local(candidate[f"{kind}_structure"])) != candidate[f"{kind}_sha256"]
                         ):
-                            raise ValueError(f"Rosetta residue-energy log changed: {candidate['candidate_id']}")
-                    await run_autonomous(self)
-                    return self.export(candidates)
-                for c in candidates:
-                    if self.config.generators[c["source"]].score_only:
-                        continue
-                    try:
-                        c.pop("error", None)
-                        await self.score(c)
-                    except SubmissionUncertainError:
-                        raise
-                    except Exception as exc:
-                        c.update(status="failed", error=str(exc))
-                        self.save_candidates()
-                # Deduplicate within each source: preserve both generators' quotas.
-                for source, generator in self.config.generators.items():
-                    if generator.score_only:
-                        continue
-                    seen = set()
-                    selected = 0
-                    ordered = sorted(
-                        (c for c in candidates if c["source"] == source and "error" not in c),
-                        key=lambda c: (-c["metrics"][self.config.evaluation.score_metric], c["candidate_id"]),
-                    )
-                    for c in ordered:
-                        from .policy import score_passes
-
-                        if not score_passes(
-                            c["metrics"],
-                            self.config.evaluation.score_metric,
-                            self.config.evaluation.score_threshold,
-                            self.config.evaluation.min_torchscore_ptm,
-                        ):
-                            c["status"] = "filtered"
-                        elif generator.deduplicate_sequences and c["sequence"] in seen:
-                            c["status"] = "duplicate"
-                        elif (
-                            generator.per_source_refold_limit is not None
-                            and selected >= generator.per_source_refold_limit
-                        ):
-                            c["status"] = "not_selected"
-                        else:
-                            selected += 1
-                            seen.add(c["sequence"])
-                            try:
-                                await self.refold(c)
-                            except SubmissionUncertainError:
-                                raise
-                            except Exception as exc:
-                                c.update(status="failed", error=str(exc))
-                        self.save_candidates()
+                            raise ValueError(f"{kind} artifact changed: {candidate['candidate_id']}")
+                for candidate in candidates:
+                    if (
+                        candidate.get("rosetta_energy_log")
+                        and digest(self.files.local(candidate["rosetta_energy_log"]))
+                        != candidate["rosetta_energy_log_sha256"]
+                    ):
+                        raise ValueError(f"Rosetta residue-energy log changed: {candidate['candidate_id']}")
+                await run_autonomous(self)
                 return self.export(candidates)
             finally:
                 cleanup = {}

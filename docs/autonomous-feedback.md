@@ -1,8 +1,10 @@
-# Staged autonomous rounds
+# Antibody and nanobody follow-up routes
 
-Enable `autonomous` for checkpointed follow-ups after PPIFlow/TorchCraft generation.
-Autonomous runs require **TorchScore** for both complex ipTM and pTM. The separate
-single-round workflow still supports AF3Score and TorchScore.
+PPIFlow `antibody` selects the antibody route. PPIFlow `nanobody` and TorchCraft
+`vhh` select the nanobody route. Both routes require **TorchScore** for complex
+ipTM and pTM. The optional `autonomous` block configures the policy. Omitted or
+null settings use the defaults shown below. PPIFlow `binder` and TorchCraft
+`mini_binder` use the [binder scoring route](initial-round.md).
 
 ```yaml
 evaluation:

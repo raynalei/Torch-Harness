@@ -1,32 +1,14 @@
-# Automatic PPIFlow initial round and shorter Qwen responses
+# Detached initial design and shorter Qwen responses
 
-The initial-round runner now supports the requested deterministic chain:
+The detached worker selects its workflow from the generator modes. PPIFlow
+`binder` and TorchCraft `mini_binder` score the generated complex with the
+configured confidence scorer and Rosetta. TorchFold and DockQ complete the
+scoring route. Antibody and nanobody use the
+[staged follow-up policy](autonomous-feedback.md).
 
-1. Submit PPIFlow generation and poll `GET /v1/designs/{id}`.
-2. Read its returned structure manifest, score each structure with AF3Score,
-   polling `GET /v1/tasks/{id}` and reading `/metrics` only after success.
-3. Continue only candidates with **AF3Score ipTM strictly greater than**
-   `min_af3score_iptm`.
-4. Construct a TorchFold input from candidate chain sequences (or a supplied
-   prepared template), submit refolding and poll `GET /v1/folds/{id}`.
-5. Pair the chosen refold structure with its confidence output, verify chain
-   sequences, and compute DockQ against the **PPIFlow-generated design pose**.
-6. Export measurements and ranking. DockQ is design/refold consistency, not
-   accuracy against an experimentally known complex or measured affinity.
-
-The Python worker performs GET polling, exit-code checks and all transitions.
-No Qwen calls or thinking tokens are consumed between stages. `PENDING`,
-`RUNNING` and `UNKNOWN` remain waiting states; failures and nonzero exits stop
-that job's advancement. Requests/results remain checkpointed so resuming a
-submitted job uses its saved ID instead of POSTing it again. A lost submission
-response remains uncertain and requires operator reconciliation, not blind retry.
-
-TorchCraft is optional, and Rosetta runs only if `evaluation.rosetta` is present.
-VHH/minibinder generator combinations remain supported by the runner; the only bundled deployment profile is the sbatch example. Every above-threshold
-structure proceeds when `per_source_refold_limit: null` and
-`deduplicate_sequences: false`; a top-K limit and sequence deduplication are
-explicit optional policies. Below-threshold and exactly-equal candidates do not
-submit TorchFold jobs. All-filtered runs finish with `no_hits`.
+The worker polls services, checks exit codes and checkpoints submitted jobs.
+Resuming a submitted job uses its saved ID. A lost submission response requires
+reconciliation before resuming.
 
 ## Prepare once, then provide a PDB
 
@@ -38,7 +20,7 @@ A PDB alone does not determine the binder format, framework or scientific epitop
 those decisions belong in this prepared profile. The PDB must be on the mounted
 shared filesystem visible to the API and Slurm workers.
 
-With `fold_template: null`, inputs use the AlphaFold3 JSON dialect, mapped chain
+With `fold_template: null`, inputs use the TorchFold JSON dialect, mapped chain
 IDs and `fold_seeds`. By default `run_data_pipeline: false` supplies explicit empty
 MSAs/templates, an intentional single-sequence refold; it is not equivalent to
 MSA-supported prediction. With the pipeline enabled and no template, these fields
