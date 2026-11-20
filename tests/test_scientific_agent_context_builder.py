@@ -109,6 +109,20 @@ def test_rule_recommendation_is_distinct_from_real_executable_capabilities():
     assert "invented-action" not in json.dumps(context)
 
 
+def test_planner_loads_model_skills_for_executable_optimizers():
+    context = build(
+        options=[option(action="partial_flow"), option(action="proteinmpnn"), option(action="continue")],
+        planner=True,
+        max_tokens=12000,
+    )
+    guidance = context["optimization_skills"]
+    assert {action: data["skill"] for action, data in guidance.items()} == {
+        "partial_flow": "ppiflow-design",
+        "proteinmpnn": "proteinmpnn-design",
+    }
+    assert "backbone" in guidance["proteinmpnn"]["guidance"]
+
+
 def test_context_contains_history_results_constraints_and_trusted_skill_guidance():
     child = candidate("child", parent_id="parent", round_index=1, generation_request={"mode": "partial_nanobody"})
     context = build(

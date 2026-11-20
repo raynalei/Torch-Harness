@@ -12,9 +12,16 @@ from collections import Counter
 from collections.abc import Mapping
 from pathlib import Path
 
+from ..agents.skills import MODEL_SKILLS
 from ..initial_round.policy import candidate_stage, rule_actions
 
 REFERENCES = Path(__file__).resolve().parents[1] / "skills" / "protein-design" / "references"
+OPTIMIZATION_SKILL_KINDS = {
+    "partial_flow": "ppiflow",
+    "torchopt": "torchopt",
+    "rfd4_partial": "rfd4",
+    "proteinmpnn": "proteinmpnn",
+}
 GUIDES = ("binder_failure_diagnosis.md", "generation_strategy.md", "continue_or_stop.md")
 STRUCTURE_METRICS = (
     "plddt",
@@ -369,6 +376,14 @@ def build_context(
             "planner": "Choose stop (discard poor candidate), continue (TorchFold/DockQ, then completion), partial_flow, torchopt, rfd4_partial, proteinmpnn or analysis from actual capabilities. Rule recommendations are fallback advice only. Read all measured evidence and preserve task constraints. Optimization requires the mutation selector. Missing evidence is unknown. ranking_score=100*selected_ipTM-rosetta_interface_dg when dG_separated is measured; unknown dG is unranked, never zero. Use ranking as evidence, not a new routing threshold."
         }
         context["evaluation_skills"] = evaluation_skill_guidance(evaluation_stage)
+        optimization_skills = {}
+        for action in sorted({option["action"] for option in legal_options} & OPTIMIZATION_SKILL_KINDS.keys()):
+            skill = MODEL_SKILLS[OPTIMIZATION_SKILL_KINDS[action]]
+            document = (REFERENCES.parent.parent / skill / "SKILL.md").read_text(encoding="utf-8")
+            introduction = document.split("---", 2)[-1].strip().split("\n\n", 2)[1]
+            optimization_skills[action] = {"skill": skill, "guidance": introduction[:400]}
+        if optimization_skills:
+            context["optimization_skills"] = optimization_skills
         if evaluation_stage is not None:
             context["scientific_decision_stage"] = evaluation_stage
             context["scientific_decision_stages"] = 2

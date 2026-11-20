@@ -141,6 +141,9 @@ class PPIFlowRefinement(RoundModel):
     start_t: float | None = Field(default=None, ge=0, le=1)
 
 
+BINDER_SCORE_ONLY_MODES = frozenset({"binder", "mini_binder"})
+
+
 class Generator(RoundModel):
     service: Service | None = None
     request: dict[str, Any]
@@ -158,7 +161,7 @@ class Generator(RoundModel):
 
     @property
     def score_only(self) -> bool:
-        return self.request.get("mode") == "binder"
+        return self.request.get("mode") in BINDER_SCORE_ONLY_MODES
 
     @model_validator(mode="before")
     @classmethod
@@ -377,7 +380,7 @@ class InitialRoundConfig(RoundModel):
         if self.evaluation.torchfold is None:
             raise ValueError("torchfold service must be configured or uniquely registered")
         if any(generator.score_only for generator in self.generators.values()) and self.evaluation.rosetta is None:
-            raise ValueError("PPIFlow binder scoring requires the registered Rosetta interface scoring service")
+            raise ValueError("binder scoring requires the registered Rosetta interface scoring service")
         if any(g.service is None for g in self.generators.values()):
             raise ValueError("generator services must be configured or uniquely registered")
         if self.autonomous is not None:

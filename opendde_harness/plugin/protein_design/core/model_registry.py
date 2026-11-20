@@ -11,6 +11,7 @@ from uuid import uuid4
 import httpx
 from pydantic import Field, model_validator
 
+from opendde_harness.plugin.protein_design.agents.skills import MODEL_SKILLS
 from opendde_harness.plugin.protein_design.core.contracts import ContractModel
 from opendde_harness.plugin.protein_design.core.model_requests import (
     REQUEST_TYPES,
@@ -104,6 +105,7 @@ class ProteinModelRegistry:
                 {
                     "model": name,
                     "kind": model.kind,
+                    "skill": MODEL_SKILLS[model.kind],
                     "configured": True,
                     "execution": "sbatch",
                     "sbatch_configured": model.service.backend == "slurm" or bool(model.service.sbatch_script),
@@ -122,9 +124,9 @@ class ProteinModelRegistry:
                     "request_schema": self.request_schema(name),
                     "cancel_supported": model.kind == "af3score",
                     "notes": (
-                        "RFD4 accepts paths relative to RFD4_INPUTS, not absolute paths/PDB inputs; outputs are artifact paths, not confidence metrics. Independent tool only, not an autonomous generator."
+                        "RFD4 accepts native inputs relative to RFD4_INPUTS. Standalone operations include generation, inverse folding and partial trajectories. The planner supports generation from a native spec and compatible partial optimization."
                         if model.kind == "rfd4"
-                        else "ProteinMPNN returns FASTA sequences, not structures; design_chains are existing PDB chains. Fixed-position/mask requests are unsupported by this API. Independent tool only."
+                        else "ProteinMPNN designs existing PDB chains and returns FASTA. The planner validates output against mutation masks and realizes the sequence with TorchFold. The API itself accepts no residue mask."
                         if model.kind == "proteinmpnn"
                         else "Direct Slurm PyRosetta workflow evaluation: use protein_design_start/status/resume; no HTTP endpoint or API allocation."
                         if model.service.backend == "slurm"

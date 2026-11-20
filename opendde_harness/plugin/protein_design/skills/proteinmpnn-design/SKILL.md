@@ -8,6 +8,11 @@ metadata:
 
 # Independent ProteinMPNN calls
 
+ProteinMPNN proposes sequence substitutions on an existing backbone. Consider
+it when the current pose is a useful template and the goal is to improve the
+sequence. The API designs whole selected chains. For a narrow mutation mask,
+the planner checks whether returned sequences respect the fixed positions.
+
 Call `protein_model_list` for a configured proteinmpnn alias, then use
 `protein_model_proteinmpnn`. Independent calls return FASTA. The autonomous planner also offers proteinmpnn
 when compatible; it validates sequence masks on outputs and realizes an admitted

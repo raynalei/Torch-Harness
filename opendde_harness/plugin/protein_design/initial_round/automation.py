@@ -16,7 +16,7 @@ from pathlib import Path
 
 import yaml
 
-from opendde_harness.plugin.protein_design.initial_round.config import InitialRoundConfig
+from opendde_harness.plugin.protein_design.initial_round.config import BINDER_SCORE_ONLY_MODES, InitialRoundConfig
 from opendde_harness.plugin.protein_design.initial_round.policy import choose_scorer
 from opendde_harness.plugin.protein_design.initial_round.storage import (
     SharedFiles,
@@ -103,9 +103,9 @@ def prepare_run(
     selected = evaluation["scoring_backend"]
     generator_modes = {generator.get("request", {}).get("mode") for generator in value.get("generators", {}).values()}
     kinds = [selected, "torchfold"]
-    if value.get("autonomous") is not None or "binder" in generator_modes:
+    if value.get("autonomous") is not None or generator_modes & BINDER_SCORE_ONLY_MODES:
         kinds.append("rosetta")
-    if value.get("autonomous") is not None and generator_modes - {"binder"}:
+    if value.get("autonomous") is not None and generator_modes - BINDER_SCORE_ONLY_MODES:
         kinds.extend(["torchopt", "rfd4", "proteinmpnn"])
     for kind in kinds:
         model = registration(kind, evaluation.get(kind))

@@ -136,6 +136,36 @@ def test_public_lookup_only_calls_fixed_source_hosts(source, identifier, host):
         lookup_public(source, "../../secret")
 
 
+@pytest.mark.parametrize("source,identifier", [("pdb", "1abc"), ("uniprot", "P12345"), ("pubmed", "123")])
+def test_lookup_client_calls_login_node_api(source, identifier, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from opendde_harness.plugin.protein_design.scientific_agent.backends import public_lookup_api
+    from opendde_harness.plugin.protein_design.scientific_agent.backends.public_lookup import lookup_via_api
+
+    def upstream(actual_source, actual_identifier):
+        assert (actual_source, actual_identifier) == (source, identifier)
+        return {"available": True, "source": actual_source, "identifier": actual_identifier, "data": {"mock": True}}
+
+    monkeypatch.setattr(public_lookup_api, "lookup_public", upstream)
+    with TestClient(public_lookup_api.app) as api:
+        assert api.get("/health").json() == {"ok": True, "service": "public-lookup"}
+        assert api.get("/v1/lookup/other/123").status_code == 422
+        assert api.get("/v1/lookup/pubmed/invalid").status_code == 422
+
+        def respond(request):
+            assert request.url.host == "login.test" and request.url.port == 8100
+            result = api.get(request.url.path)
+            return httpx.Response(result.status_code, json=result.json())
+
+        result = lookup_via_api(
+            source, identifier, base_url="http://login.test:8100", transport=httpx.MockTransport(respond)
+        )
+        assert result["data"] == {"mock": True}
+        with pytest.raises(ValueError, match="login-node lookup API"):
+            lookup_via_api(source, identifier, base_url=None, transport=httpx.MockTransport(respond))
+
+
 def test_residue_hydropathy_preserves_pdb_numbering_and_buried_residues(complex_pdb, monkeypatch):
     import biotite.structure as struc
     import numpy as np

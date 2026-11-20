@@ -8,6 +8,11 @@ metadata:
 
 # Independent RFD4 calls
 
+RFD4 partial diffusion can adjust local backbone or interface geometry in an
+existing structure. Use a native partial-design input and validate inherited
+sequence constraints on the returned structure. Consider it when a sequence-only
+change would leave the suspected structural issue unresolved.
+
 Use this skill when the user explicitly requests RFD4/RDF4 generation, inverse
 folding or partial trajectory. Call `protein_model_list` to select a registered
 `rfd4` alias; submit with `protein_model_rfd4`. Independent submissions remain available. The autonomous workflow also supports

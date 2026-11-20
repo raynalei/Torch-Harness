@@ -370,5 +370,28 @@ API directory. The confirmed paths and server environments are in
 [cluster_deployment.yaml](examples/cluster_deployment.yaml). Copy the updated server
 files/launchers to those locations and restart Harness after updating configuration.
 Existing instances with an explicit model registry must import the new registrations
-once with models register --services-file (and deliberately replace changed aliases
-only when intended); the fallback does not silently expand explicit registries.
+once. Use the existing registration command with a services file. To import
+only these two entries, create a fragment from the supplied configurations:
+
+```bash
+jq '.plugins.config["protein-design"].model_services | {model_services: {rfd4, proteinmpnn}}' \
+  docs/examples/model_services.json > native-model-services.json
+uv run --frozen ddeharness protein-design models register --services-file native-model-services.json
+uv run --frozen ddeharness protein-design models list
+```
+
+Pass `--opendde-config /absolute/path/config.json` to both Harness commands if
+your TUI uses a separate configuration. Add `--replace-existing` when
+deliberately changing an existing alias. The model list reports each
+registration's skill and request schema.
+
+The model skills are `ppiflow-design`, `torchcraft-design`,
+`torchfold-prediction`, `af3score-scoring`, `torchscore-scoring`,
+`rosetta-analysis`, `torchoptimization-refinement`, `rfd4-design` and
+`proteinmpnn-design`. In the autonomous workflow Qwen receives optimization
+guidance for options present in its executable menu.
+
+The PDB, UniProt and PubMed skills use the
+[login-node public lookup API](../deploy/public_lookup/README.md) on port 8100.
+Configure its internal hostname for Harness when compute nodes lack external
+network access.

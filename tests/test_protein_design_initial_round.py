@@ -2162,46 +2162,57 @@ async def test_ppiflow_binder_harvests_only_complete_complexes(round_config, out
         await runner.services["ppiflow"].close()
 
 
-@pytest.mark.parametrize(("autonomous", "mixed"), [(False, False), (True, False), (False, True)])
-async def test_ppiflow_binder_stops_after_direct_scoring(round_config, fake_services, autonomous, mixed):
+@pytest.mark.parametrize("sources", [("ppiflow",), ("torchcraft",), ("ppiflow", "torchcraft")])
+@pytest.mark.parametrize("autonomous", [False, True])
+async def test_binder_modes_stop_after_direct_scoring(round_config, fake_services, autonomous, sources):
+    from opendde_harness.plugin.protein_design.initial_round.automation import prepare_run
+
     config = autonomous_config(round_config) if autonomous else round_config
     value = config.model_dump(mode="json")
-    flow = value["generators"]["ppiflow"]
-    flow["request"] = {
-        "mode": "binder",
-        "name": value["name"],
-        "input_pdb": "/shared/input.pdb",
-        "target_chain": "A",
-        "binder_chain": "B",
-        "samples_min_length": 30,
-        "samples_max_length": 60,
-        "samples_per_target": 1,
-    }
-    if mixed:
-        value["generators"]["torchcraft"]["request"].update(mode="mini_binder", design_length=40)
-    else:
-        value["generators"] = {"ppiflow": flow}
+    value["generators"] = {source: value["generators"][source] for source in sources}
+    if "ppiflow" in sources:
+        value["generators"]["ppiflow"]["request"] = {
+            "mode": "binder",
+            "name": value["name"],
+            "input_pdb": "/shared/input.pdb",
+            "target_chain": "A",
+            "binder_chain": "B",
+            "samples_min_length": 30,
+            "samples_max_length": 60,
+            "samples_per_target": 1,
+        }
+    if "torchcraft" in sources:
+        request = value["generators"]["torchcraft"]["request"]
+        request.pop("framework_cif_path")
+        request.update(mode="mini_binder", name=value["name"], design_length=40)
     if autonomous:
         value["autonomous"].update(decision_policy="planner", planner_layout="two_stage")
-    config = InitialRoundConfig.model_validate(value)
+    rosetta = value["evaluation"].pop("rosetta")
+    value["evaluation"]["rosetta"] = None
+    registrations = {"interface": {"kind": "rosetta", "service": rosetta}}
+    config = prepare_run(value, registrations=registrations)
     transport, calls = fake_services
     runner = InitialRoundRunner(config, transport=transport)
     result = await runner.run()
     assert result["status"] == "completed"
-    assert result["score_only_count"] == 1
-    assert calls[(config.evaluation.scoring_backend, "POST")] == (2 if mixed else 1)
-    assert calls[("rosetta", "POST")] == (2 if mixed else 1)
-    assert calls[("torchfold", "POST")] == 1 + int(mixed)
-    assert calls[("ppiflow", "POST")] == 1
-    assert calls[("torchopt", "POST")] == 0
-    if not mixed:
-        assert result["stop_reason"] == "binder_score_only"
-        assert result["followup_rounds"] == 0
-    candidate = next(c for c in runner.checkpoint.data["candidates"] if c["source"] == "ppiflow")
-    assert candidate["status"] == "scored_only"
-    assert candidate["rosetta_structure"] == "generated"
-    assert candidate["metrics"]["rosetta_interface_dg"] == -12
-    assert candidate["metrics"]["design_refold_dockq"] == 1.0
+    assert result["outcome"] == "scored_only"
+    assert result["accepted"] == 0
+    assert result["score_only_count"] == len(sources)
+    assert result["stop_reason"] == "binder_score_only"
+    assert result["followup_rounds"] == 0
+    assert "autonomous" not in runner.checkpoint.data
+    for service in (config.evaluation.scoring_backend, "rosetta", "torchfold"):
+        assert calls[(service, "POST")] == len(sources)
+    for source in sources:
+        assert calls[(source, "POST")] == 1
+    assert all(calls[(service, "POST")] == 0 for service in ("torchopt", "rfd4", "proteinmpnn"))
+    candidates = runner.checkpoint.data["candidates"]
+    assert set(result["score_only_ranking"]) == {candidate["candidate_id"] for candidate in candidates}
+    for candidate in candidates:
+        assert candidate["status"] == "scored_only"
+        assert candidate["rosetta_structure"] == "generated"
+        assert candidate["metrics"]["rosetta_interface_dg"] == -12
+        assert candidate["metrics"]["design_refold_dockq"] == 1.0
     assert result["dockq_reference"] == "generated_design_pose"
     before = calls.copy()
     assert await InitialRoundRunner(config, transport=transport).run() == result

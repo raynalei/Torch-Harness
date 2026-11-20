@@ -13,13 +13,14 @@ from pydantic import BaseModel, ConfigDict, Field
 from opendde_harness.agent.tools.base import Tool, ToolResult
 from opendde_harness.plugin.context import PluginContext
 
+from ..agents.skills import MODEL_SKILLS
 from ..initial_round.automation import list_rounds, prepare_run, resume_round, round_status, start_round
 from ..initial_round.config import InitialRoundConfig
 from ..initial_round.defaults import load_deployment_defaults
 from ..initial_round.task_inputs import DesignTask, prepare_design_task
 from ..scientific_agent.backends.analysis import analyze_evolution, analyze_structure, apply_mutations, rank_candidates
 from ..scientific_agent.backends.developability import assess_developability
-from ..scientific_agent.backends.public_lookup import lookup_public
+from ..scientific_agent.backends.public_lookup import lookup_via_api, public_lookup_url
 
 
 def prepare_workflow(value, *, registrations=None, pdb_path=None, name=None, plugin_config=None):
@@ -49,11 +50,11 @@ class EvidenceRequest(BaseModel):
     fixed_positions: dict[str, list[int]] = Field(default_factory=dict)
 
 
-def evidence(request: EvidenceRequest):
+def evidence(request: EvidenceRequest, *, lookup_url=None):
     if request.action == "lookup":
         if request.source is None or request.identifier is None:
             raise ValueError("source and identifier are required")
-        return lookup_public(request.source, request.identifier)
+        return lookup_via_api(request.source, request.identifier, base_url=lookup_url)
     if request.action == "rank":
         return rank_candidates(request.candidates)
     if request.action == "developability":
@@ -75,13 +76,20 @@ class AnalysisTool(Tool):
     name = "protein_design_analyze"
     description = "Run native structure/epitope/lineage/mutation evidence or developability (chemical PTM motifs, PSH/PNC/PSC descriptors and EpiMatrix availability). No OpenDDE compute service. Missing licensed immunogenicity remains uncomputed; use explicit chain IDs and PDB residue IDs for hotspots."
 
+    def __init__(self, config=None):
+        self.config = config or {}
+
     @property
     def parameters(self):
         return EvidenceRequest.model_json_schema()
 
     async def execute(self, **kwargs):
         try:
-            result = await asyncio.to_thread(evidence, EvidenceRequest.model_validate(kwargs))
+            request = EvidenceRequest.model_validate(kwargs)
+            lookup_url = (
+                public_lookup_url(load_deployment_defaults(self.config)) if request.action == "lookup" else None
+            )
+            result = await asyncio.to_thread(evidence, request, lookup_url=lookup_url)
             return ToolResult(json.dumps(result, allow_nan=False), "Native scientific evidence", retryable=False)
         except Exception as exc:
             return ToolResult(json.dumps({"error": str(exc)}), "Evidence computation failed", retryable=False)
@@ -178,6 +186,8 @@ class WorkflowTool(Tool):
                         {"alias": key, "kind": value.get("kind")}
                         for key, value in deployment.get("model_services", {}).items()
                     ],
+                    "model_skills": MODEL_SKILLS,
+                    "public_lookup_configured": public_lookup_url(deployment) is not None,
                     "workflow_config": self.config.get("workflow_config"),
                     "workflow_defaults_configured": bool(deployment.get("workflow_defaults")),
                     "design_profiles": sorted(deployment.get("design_profiles", {})),
@@ -275,7 +285,7 @@ def make_candidates_tool(ctx: PluginContext):
 
 
 def make_analysis_tool(ctx: PluginContext):
-    return AnalysisTool()
+    return AnalysisTool(ctx.config)
 
 
 def make_regions_tool(ctx: PluginContext):

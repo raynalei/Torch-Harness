@@ -52,6 +52,10 @@ their endpoints. Model environment activation belongs in each registered sbatch.
 
 ## Qwen planner and fallback
 
+PPIFlow `binder` and TorchCraft `mini_binder` use direct scoring after generation.
+The configured confidence scorer, Rosetta, TorchFold and DockQ run before the
+candidate is exported as `scored_only`. These modes skip planner decisions.
+
 New generic starts default to decision_policy=planner, planner_layout=two_stage: PPIFlow/TorchCraft/RFD4 generate initial candidates (RFD4 requires a native binder spec),
 then TorchScore measures ipTM/pTM. First evaluate only TorchScore and Rosetta, then let Qwen stop, advance or select
 one compatible optimization. Finish the batch first-stage decisions before stage two.

@@ -5,12 +5,12 @@ description: Retrieve cited PubMed records by PMID.
 
 # pubmed-lookup
 
-Use registered Torch-Harness model APIs and native evidence tools. Do not call
-an OpenDDE compute service, install its Docker image or request a compute URL.
-Call `protein_design_context` to inspect actual capabilities. Missing evidence is
-unknown; never replace a measurement with an LLM-generated score.
+Call `protein_design_analyze` through the configured login-node public lookup
+API on port 8100. Check `protein_design_context.public_lookup_configured`
+first. If the API is unavailable, report the error. Keep database requests
+on the login node.
 
-Call native action `lookup`, source `pubmed`, identifier as a numeric PMID.
+Use action `lookup`, source `pubmed`, identifier as a numeric PMID.
 Report the source and distinguish publication metadata/abstract claims from
 experimental evidence for the actual candidate. The backend retrieves metadata,
 not guaranteed full text. Do not invent titles, citations or findings.

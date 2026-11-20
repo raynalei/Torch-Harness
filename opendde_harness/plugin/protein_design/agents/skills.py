@@ -18,6 +18,19 @@ from opendde_harness.memory_engine.skill_forge.documents import (
     SkillNotFoundError as MissingBuiltinSkillError,
 )
 
+MODEL_SKILLS = {
+    "ppiflow": "ppiflow-design",
+    "torchcraft": "torchcraft-design",
+    "torchfold": "torchfold-prediction",
+    "af3score": "af3score-scoring",
+    "torchscore": "torchscore-scoring",
+    "rosetta": "rosetta-analysis",
+    "torchopt": "torchoptimization-refinement",
+    "rfd4": "rfd4-design",
+    "proteinmpnn": "proteinmpnn-design",
+}
+
+
 BUILTIN_PROTEIN_DESIGN_SKILLS = (
     "minibinder-full-redesign",
     "minibinder-point-mutation",
@@ -35,6 +48,7 @@ BUILTIN_PROTEIN_DESIGN_SKILLS = (
     "uniprot-lookup",
     "pubmed-lookup",
     "rfd4-input-conversion",
+    *MODEL_SKILLS.values(),
 )
 
 _REQUIRED_FILES: dict[str, tuple[str, ...]] = {
@@ -54,6 +68,7 @@ _REQUIRED_FILES: dict[str, tuple[str, ...]] = {
     "uniprot-lookup": ("SKILL.md",),
     "pubmed-lookup": ("SKILL.md",),
     "rfd4-input-conversion": ("SKILL.md", "scripts/convert_rfd4_inputs.py"),
+    **dict.fromkeys(MODEL_SKILLS.values(), ("SKILL.md",)),
 }
 
 

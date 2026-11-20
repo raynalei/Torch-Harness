@@ -22,8 +22,9 @@ Structure lists accept CIF/BCIF (including compressed files); PDB is unsupported
 This API runs inference in a single background worker inside its sbatch GPU
 allocation. The allocation stays active until the task is terminal and Harness
 has cached its artifact manifest. interrupted/failed is not successful completion.
-No metrics/cancel/idempotency endpoint exists. This integration is standalone and
-does not add RFD4 to the two-stage autonomous generator/optimizer menu.
+No metrics, cancellation or idempotency endpoint exists. The two-stage workflow
+can also use RFD4 for initial generation from a native binder specification and
+for partial optimization of compatible candidates.
 
 ## Convert a PDB and constraints
 

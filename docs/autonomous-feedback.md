@@ -15,6 +15,11 @@ autonomous:
   decision_timeout: 120
 ```
 
+PPIFlow `binder` and TorchCraft `mini_binder` use the same score-only route.
+The generated complex goes through the configured confidence scorer, Rosetta
+interface scoring, then TorchFold and DockQ. The candidate is exported as
+`scored_only` and skips both Qwen decision stages and follow-up optimization.
+
 ## Stage 1: TorchScore and Rosetta only
 
 PPIFlow/TorchCraft generates initial candidates. Every candidate is measured by

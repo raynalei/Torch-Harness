@@ -19,6 +19,7 @@ requesting cleanup of its private API allocation. Headers/chain separators and
 native reference records are preserved in the cached FASTA.
 
 No cancel/idempotency endpoint exists. An uncertain request is not automatically
-resubmitted. ProteinMPNN is standalone, not an optimizer option in the two-stage
-planner. Independently evaluate generated sequences when structural metrics are
-required; do not infer ipTM/pTM/interface energies from FASTA headers.
+resubmitted. ProteinMPNN also appears in the two-stage planner when its service
+and a compatible mutation selection are available. The planner validates the
+returned sequence and uses TorchFold to realize it before structure scoring.
+Standalone results contain FASTA and require separate structural evaluation.
