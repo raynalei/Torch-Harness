@@ -41,7 +41,9 @@ and no TorchCraft generator. VHH uses PPIFlow `nanobody` plus optional TorchCraf
 `vhh`. For minibinders use PPIFlow
 `binder` with `input_pdb`, `samples_min_length`, and `samples_max_length`.
 The input PDB can contain only the target. Supply the target chain ID and the
-output binder chain IDs for the design type. PPIFlow and TorchCraft VHH/minibinder
+output binder chain IDs for the design type. PPIFlow `binder` receives the original
+PDB directly, including all input chains. Harness prepares a target-only PDB for
+TorchCraft when it is also enabled. PPIFlow and TorchCraft VHH/minibinder
 workflows use the same chain roles. An omitted `refold_map` keeps those IDs. Both scoring backends read the chain IDs in the
 candidate PDB. TorchFold uses the refold mapping, DockQ uses the same mapping
 and roles, and Rosetta groups the binder chains together against the target.

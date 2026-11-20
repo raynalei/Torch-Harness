@@ -139,7 +139,7 @@ def prepare_design_task(task, settings):
     source = task.pdb_path.expanduser().resolve()
     if not source.is_file():
         raise ValueError("new target PDB must be readable on the mounted shared filesystem")
-    files.remote(source)
+    source_path = files.remote(source)
     source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
     original = structure(source)
     target = original[original.chain_id == task.target_chain]
@@ -215,14 +215,16 @@ def prepare_design_task(task, settings):
     with file_lock(inputs.parent / "target-preparation.lock", blocking=False):
         if hashlib.sha256(source.read_bytes()).hexdigest() != source_hash:
             raise ValueError("target PDB changed during preparation; retry with stable input")
-        target = target.copy()
-        target.chain_id[:] = normalized_chain
-        writer = PDBFile()
-        writer.set_structure(target)
-        buffer = io.StringIO()
-        writer.write(buffer)
-        _stable_text(inputs / "target.pdb", buffer.getvalue())
-        normalized_path = files.remote(inputs / "target.pdb")
+        normalized_path = source_path
+        if "torchcraft" in enabled or ppiflow_mode != "binder":
+            target = target.copy()
+            target.chain_id[:] = normalized_chain
+            writer = PDBFile()
+            writer.set_structure(target)
+            buffer = io.StringIO()
+            writer.write(buffer)
+            _stable_text(inputs / "target.pdb", buffer.getvalue())
+            normalized_path = files.remote(inputs / "target.pdb")
         for kind, generator in value["generators"].items():
             request = generator["request"]
             for key in TARGET_REQUEST_FIELDS:
@@ -246,7 +248,9 @@ def prepare_design_task(task, settings):
                     samples_per_target=counts[kind],
                     output_dir=files.remote(work / name / "generation" / kind),
                 )
-                request["input_pdb" if mode == "binder" else "antigen_pdb"] = normalized_path
+                request["input_pdb" if mode == "binder" else "antigen_pdb"] = (
+                    source_path if mode == "binder" else normalized_path
+                )
                 request["target_chain" if mode == "binder" else "antigen_chain"] = normalized_chain
                 if mode == "binder":
                     request["binder_chain"] = task.binder_chains[0]

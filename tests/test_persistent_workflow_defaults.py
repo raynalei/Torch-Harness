@@ -466,8 +466,10 @@ def test_torchcraft_only_profile_does_not_need_ppiflow(task, settings):
         _partial_request(InitialRoundRunner(config), {}, "refine")
 
 
-@pytest.mark.parametrize("source", ["ppiflow", "torchcraft"])
-def test_minibinder_prompt_selects_generator_and_native_mode(task, settings, source):
+@pytest.mark.parametrize("sources", [["ppiflow"], ["torchcraft"], ["ppiflow", "torchcraft"]])
+def test_minibinder_prompt_selects_generator_and_native_mode(task, settings, sources):
+    from opendde_harness.plugin.protein_design.initial_round.artifacts import chain_sequences
+
     profile = copy.deepcopy(settings["design_profiles"]["vhh"])
     profile["generators"]["ppiflow"]["request"] = {
         "mode": "binder",
@@ -478,11 +480,26 @@ def test_minibinder_prompt_selects_generator_and_native_mode(task, settings, sou
     }
     profile["generators"]["torchcraft"]["request"] = {"mode": "mini_binder", "design_length": 60}
     settings["design_profiles"]["minibinder"] = profile
-    task.update(design_type="minibinder", generators=[source])
+    task.update(design_type="minibinder", generators=sources)
     task.pop("framework_dir")
     config = prepare_design_task(task, settings)
-    assert set(config.generators) == {source}
-    assert config.generators[source].request["mode"] == ("binder" if source == "ppiflow" else "mini_binder")
+    assert set(config.generators) == set(sources)
+    files = SharedFiles(config.path_mappings)
+    source = Path(task["pdb_path"])
+    if "ppiflow" in sources:
+        request = config.generators["ppiflow"].request
+        assert request["mode"] == "binder"
+        assert request["input_pdb"] == files.remote(source)
+        assert set(chain_sequences(files.local(request["input_pdb"]))) == {"A", "B"}
+        assert request["specified_hotspots"] == "A1,A2"
+    prepared = config.work_dir / config.name / "inputs" / "target.pdb"
+    if "torchcraft" in sources:
+        request = config.generators["torchcraft"].request
+        assert request["mode"] == "mini_binder"
+        assert request["pdb_path"] == files.remote(prepared)
+        assert set(chain_sequences(prepared)) == {"A"}
+    else:
+        assert not prepared.exists()
 
 
 @pytest.mark.parametrize(
