@@ -2156,3 +2156,107 @@ def test_ppiflow_request_matches_deployed_mode_schema(mode, overrides, field):
     assert resolved["samples_per_target"] == 5
     with pytest.raises(ValueError, match=field):
         validate_request("ppiflow", {**payload, **overrides})
+
+
+@pytest.mark.parametrize("outputs", ["mixed", "single_chain_only", "manifest"])
+async def test_ppiflow_binder_harvests_only_complete_complexes(round_config, outputs):
+    from opendde_harness.plugin.protein_design.initial_round.storage import fingerprint
+
+    value = autonomous_config(round_config).model_dump(mode="json")
+    flow = value["generators"]["ppiflow"]
+    value["generators"] = {"ppiflow": flow}
+    flow["chains"] = {"target": ["C"], "binder": ["D"]}
+    flow["request"] = {
+        "mode": "binder",
+        "name": value["name"],
+        "input_pdb": "/shared/input.pdb",
+        "target_chain": "C",
+        "binder_chain": "D",
+        "samples_min_length": 30,
+        "samples_max_length": 60,
+        "samples_per_target": 1,
+    }
+    config = InitialRoundConfig.model_validate(value)
+    runner = InitialRoundRunner(config)
+    runner.root.mkdir()
+    checkpoint = runner.checkpoint = Checkpoint(runner.root, {})
+    singleton = pdb(config.work_dir / "a_binder.pdb")
+    singleton.write_text(
+        "\n".join(line for line in singleton.read_text().splitlines() if line.startswith("ATOM") and line[21] == "A")
+        + "\nEND\n"
+    )
+    paths = [runner.files.remote(singleton)]
+    if outputs == "mixed":
+        paths.append(runner.files.remote(pdb(config.work_dir / "complex.pdb", target="C", chain="D")))
+    result = {"files": paths}
+    if outputs == "manifest":
+        result["candidates"] = [{"structure_path": paths[0]}]
+
+    service = config.generators["ppiflow"].service
+    checkpoint.data["jobs"]["generate/ppiflow"] = {
+        "state": "completed",
+        "request_hash": fingerprint({"url": service.url, "route": "/v1/designs", "payload": flow["request"]}),
+        "results": result,
+    }
+
+    def unexpected_request(request):
+        pytest.fail(f"cached PPIFlow job should not use HTTP: {request.method}")
+
+    runner.services["ppiflow"] = SlurmService(service, checkpoint, transport=httpx.MockTransport(unexpected_request))
+    try:
+        if outputs == "mixed":
+            (candidate,) = await runner.generate()
+            assert set(candidate["chains"]) == {"C", "D"}
+        else:
+            error = "no target-binder complex" if outputs == "single_chain_only" else "has structure chain IDs"
+            with pytest.raises(RuntimeError, match=error):
+                await runner.generate()
+            assert "a_binder.pdb" in checkpoint.data["generation_errors"]["ppiflow"]
+    finally:
+        await runner.services["ppiflow"].close()
+
+
+@pytest.mark.parametrize(("autonomous", "mixed"), [(False, False), (True, False), (False, True)])
+async def test_ppiflow_binder_stops_after_direct_scoring(round_config, fake_services, autonomous, mixed):
+    config = autonomous_config(round_config) if autonomous else round_config
+    value = config.model_dump(mode="json")
+    flow = value["generators"]["ppiflow"]
+    flow["request"] = {
+        "mode": "binder",
+        "name": value["name"],
+        "input_pdb": "/shared/input.pdb",
+        "target_chain": "A",
+        "binder_chain": "B",
+        "samples_min_length": 30,
+        "samples_max_length": 60,
+        "samples_per_target": 1,
+    }
+    if mixed:
+        value["generators"]["torchcraft"]["request"].update(mode="mini_binder", design_length=40)
+    else:
+        value["generators"] = {"ppiflow": flow}
+    config = InitialRoundConfig.model_validate(value)
+    transport, calls = fake_services
+    runner = InitialRoundRunner(config, transport=transport)
+    result = await runner.run()
+    assert result["status"] == "completed"
+    assert result["score_only_count"] == 1
+    assert calls[(config.evaluation.scoring_backend, "POST")] == (2 if mixed else 1)
+    assert calls[("rosetta", "POST")] == (2 if mixed else 1)
+    assert calls[("torchfold", "POST")] == 1 + int(mixed)
+    assert calls[("ppiflow", "POST")] == 1
+    assert calls[("torchopt", "POST")] == 0
+    if not mixed:
+        assert result["stop_reason"] == "binder_score_only"
+        assert result["followup_rounds"] == 0
+    candidate = next(c for c in runner.checkpoint.data["candidates"] if c["source"] == "ppiflow")
+    assert candidate["status"] == "scored_only"
+    assert candidate["rosetta_structure"] == "generated"
+    assert candidate["metrics"]["rosetta_interface_dg"] == -12
+    assert candidate["metrics"]["design_refold_dockq"] == 1.0
+    assert result["dockq_reference"] == "generated_design_pose"
+    before = calls.copy()
+    assert await InitialRoundRunner(config, transport=transport).run() == result
+    assert {key: count for key, count in calls.items() if key[1] == "POST"} == {
+        key: count for key, count in before.items() if key[1] == "POST"
+    }

@@ -52,6 +52,10 @@ output binder chain IDs for the design type. PPIFlow and TorchCraft VHH/minibind
 workflows use the same chain roles. An omitted `refold_map` keeps those IDs. Both scoring backends read the chain IDs in the
 candidate PDB. TorchFold uses the refold mapping, DockQ uses the same mapping
 and roles, and Rosetta groups the binder chains together against the target.
+PPIFlow `binder` candidates finish after the configured confidence scorer,
+Rosetta interface scoring of the generated complex, and TorchFold/DockQ.
+DockQ compares the refold with the original generated pose. Candidate records
+use `scored_only` and a separate score-only ranking.
 PPIFlow Partial Flow and TorchOptimization reuse the candidate's chain roles
 when the workflow routes to them. Explicit overrides must use distinct target
 and binder IDs in the generated complex.

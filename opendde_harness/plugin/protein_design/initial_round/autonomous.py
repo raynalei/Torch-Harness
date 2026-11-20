@@ -146,7 +146,11 @@ def _partial_request(runner, candidate, name):
 def options_for(runner, candidates, index, remaining, repaired):
     config, evaluation = runner.config.autonomous, runner.config.evaluation
     usable = sorted(
-        [c for c in candidates if "diagnostics" in c and c["status"] not in {"failed", "duplicate", "terminated"}],
+        [
+            c
+            for c in candidates
+            if "diagnostics" in c and c["status"] not in {"failed", "duplicate", "terminated", "scored_only"}
+        ],
         key=lambda c: tuple(-v for v in quality(c, evaluation.score_metric)) + (c["candidate_id"],),
     )
     options, hits = [], []
@@ -245,6 +249,7 @@ def options_for(runner, candidates, index, remaining, repaired):
 
 
 async def evaluate(runner, candidates):
+    candidates = [c for c in candidates if not runner.config.generators[c["source"]].score_only]
     for candidate in candidates:
         try:
             candidate.pop("error", None)
