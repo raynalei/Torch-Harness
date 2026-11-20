@@ -29,7 +29,8 @@ def load_server(kind):
     "payload",
     [
         {"inputs": "../secret.cif"},
-        {"inputs": "/inputs/x.cif"},
+        {"inputs": "/inputs/x.pdb"},
+        {"inputs": ["/inputs/x.json"]},
         {"inputs": ["x.pdb"]},
         {"inputs": []},
         {"inputs": "x.cif", "num_replicates": True},
@@ -60,6 +61,12 @@ def test_rfd4_rejects_unsupported_native_inputs(payload):
 def test_proteinmpnn_rejects_unsupported_constraints(payload):
     with pytest.raises(ValueError):
         validate_request("proteinmpnn", payload)
+
+
+@pytest.mark.parametrize("suffix", [".cif", ".json"])
+def test_rfd4_client_accepts_absolute_input_without_a_bundled_root(suffix):
+    payload = {"inputs": f"/other/shared/folder (1)/design{suffix}"}
+    assert validate_request("rfd4", payload) == payload
 
 
 def test_native_optional_controls_stay_on_the_server():

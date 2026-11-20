@@ -104,9 +104,9 @@ def test_native_output_rejects_target_or_fixed_residue_changes(round_config, cha
         validate_sequences(parent, changed, round_config.generators["ppiflow"].chains, partition)
 
 
-@pytest.mark.parametrize("native_only", [False, True])
+@pytest.mark.parametrize(("native_only", "absolute"), [(False, False), (True, False), (True, True)])
 async def test_rfd4_initial_generation_enters_both_decisions(
-    round_config, fake_services, tmp_path, monkeypatch, native_only
+    round_config, fake_services, tmp_path, monkeypatch, native_only, absolute
 ):
     original, calls = fake_services
     config = with_native_models(round_config).model_dump(mode="json")
@@ -119,8 +119,12 @@ async def test_rfd4_initial_generation_enters_both_decisions(
     if native_only:
         config["generators"] = {"rfd4": config["generators"]["rfd4"]}
     spec = tmp_path / "rfd4-inputs" / "specs" / "new-binder.yaml"
+    if absolute:
+        spec = tmp_path / "outside" / "new-binder.json"
+        config["generators"]["rfd4"]["request"]["inputs"] = "/shared/outside/new-binder.json"
+        config["evaluation"].pop("rfd4_input_root")
     spec.parent.mkdir(parents=True)
-    spec.write_text("# Native spec fixture; inference is simulated\n")
+    spec.write_text("{}" if absolute else "# Native spec fixture; inference is simulated\n")
     from biotite.structure.io import save_structure
 
     from opendde_harness.plugin.protein_design.initial_round.artifacts import structure
@@ -157,6 +161,8 @@ async def test_rfd4_initial_generation_enters_both_decisions(
     assert result["accepted"] == total
     assert stages == [1] * total + [2] * total
     assert len(submissions) == 1
+    if absolute:
+        assert submissions[0]["inputs"] == "/shared/outside/new-binder.json"
     assert calls[("torchscore", "POST")] == total
 
 

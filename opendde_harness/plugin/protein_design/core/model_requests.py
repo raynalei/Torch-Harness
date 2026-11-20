@@ -278,6 +278,12 @@ class RFD4Request(ContractModel):
         if not names:
             raise ValueError("RFD4 inputs list must not be empty")
         for name in names:
+            path = PurePosixPath(name)
+            if path.is_absolute():
+                allowed = {".cif"} if isinstance(self.inputs, list) else {".cif", ".json"}
+                if path.suffix.lower() not in allowed or "\x00" in name:
+                    raise ValueError("RFD4 absolute inputs require .cif or .json; lists accept .cif files only")
+                continue
             if not re.fullmatch(r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*", name) or any(
                 p in {".", ".."} for p in name.split("/")
             ):
@@ -290,8 +296,6 @@ class RFD4Request(ContractModel):
                 raise ValueError(
                     "RFD4 input lists accept CIF/BCIF structures (optionally compressed), not PDB/spec files"
                 )
-            if PurePosixPath(name).is_absolute():
-                raise ValueError("RFD4 inputs must be relative")
         if self.generation == "inverse_folding" and self.partial_trajectory_fraction_steps is not None:
             raise ValueError("RFD4 partial trajectory requires inference_base")
         return self

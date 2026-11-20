@@ -8,8 +8,8 @@ PPIFlow supports configured nanobody, paired-antibody and binder initial modes.
 TorchCraft supports the registered VHH and mini-binder target-conditioned modes;
 paired VH/VL is not supported by this integration. Inputs, framework paths,
 hotspots and requested sample counts come from the authorized task configuration.
-RFD4 supports native binder-generation specs supplied by the task as rfd4_inputs,
-relative to the service RFD4_INPUTS root. Do not invent a binder spec from a target
+RFD4 supports native binder-generation inputs supplied by the task as rfd4_inputs,
+using an existing absolute .json/.cif file or a path relative to RFD4_INPUTS. Do not invent a binder spec from a target
 PDB or reuse an old target spec. Its output chain IDs must match the workflow
 roles explicitly supplied by the user.
 The output target sequence must match the current task.

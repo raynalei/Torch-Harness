@@ -28,10 +28,11 @@ API task_id or allocation ID. Do not use shell/curl to bypass these tools or
 repeat a submission with a new ID after a timeout. This API has no idempotency or
 cancel endpoint; uncertain submissions require reconciliation, not automatic POST.
 
-`request.inputs` is relative to the API's `RFD4_INPUTS` root. Never send a host
-absolute path or a container /inputs path. A scalar may identify an existing
-CIF/BCIF structure, a .yaml/.yml/.json native input specification, or a directory.
-A list must contain structure paths only (.cif/.bcif, optionally .gz/.zst).
+`request.inputs` can be an existing absolute cluster path to a `.cif` or
+`.json` file. Keep relative structure references in a JSON spec resolvable from
+the spec directory. Existing relative paths below `RFD4_INPUTS` are supported
+for CIF/BCIF, native specs, and directories. A list contains structures only,
+with absolute `.cif` files or supported relative CIF/BCIF paths.
 The API does not accept PDB files; do not relabel a PDB as CIF or invent contigs,
 lengths, hotspots or conditioning. Prepare a real supported file/specification
 from user-confirmed scientific requirements before submitting. Use

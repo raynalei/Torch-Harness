@@ -80,11 +80,14 @@ class InitialRoundRunner:
                         self.input_hashes[f"{source}/{key}/{self.files.remote(item)}"] = digest(item)
             if source == "rfd4":
                 root = self.config.evaluation.rfd4_input_root or generator.service.environment.get("RFD4_INPUTS")
-                if not root:
-                    raise ValueError("RFD4 initial generation requires its shared RFD4_INPUTS root")
                 names = generator.request["inputs"]
-                for relative in names if isinstance(names, list) else [names]:
-                    path = self.files.local(str(Path(root) / relative))
+                for name in names if isinstance(names, list) else [names]:
+                    remote = Path(name)
+                    if not remote.is_absolute():
+                        if not root:
+                            raise ValueError("relative RFD4 inputs require a shared RFD4_INPUTS root")
+                        remote = Path(root) / remote
+                    path = self.files.local(str(remote))
                     if not path.exists():
                         raise ValueError(f"RFD4 native input is not accessible: {path}")
                     inputs = sorted(p for p in path.rglob("*") if p.is_file()) if path.is_dir() else [path]

@@ -124,7 +124,7 @@ class ProteinModelRegistry:
                     "request_schema": self.request_schema(name),
                     "cancel_supported": model.kind == "af3score",
                     "notes": (
-                        "RFD4 accepts native inputs relative to RFD4_INPUTS. Standalone operations include generation, inverse folding and partial trajectories. The planner supports generation from a native spec and compatible partial optimization."
+                        "RFD4 accepts existing absolute .cif/.json files or native paths relative to RFD4_INPUTS. Standalone operations include generation, inverse folding and partial trajectories. The planner supports generation from a native spec and compatible partial optimization."
                         if model.kind == "rfd4"
                         else "ProteinMPNN designs existing PDB chains and returns FASTA. The planner validates output against mutation masks and realizes the sequence with TorchFold. The API itself accepts no residue mask."
                         if model.kind == "proteinmpnn"

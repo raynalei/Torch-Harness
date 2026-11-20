@@ -228,7 +228,7 @@ def prepare_design_task(task, settings, *, planner_layout=None):
             if kind == "rfd4":
                 if not task.rfd4_inputs:
                     raise ValueError(
-                        "RFD4 initial generation requires task.rfd4_inputs: a native binder-design spec relative to RFD4_INPUTS; target PDB alone is not a binder spec"
+                        "RFD4 initial generation requires task.rfd4_inputs: a native binder-design .json/.cif file or a native spec path relative to RFD4_INPUTS"
                     )
                 if task.fixed_positions is not None:
                     raise ValueError("encode RFD4 initial fixed residue constraints in its native spec")

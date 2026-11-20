@@ -349,8 +349,12 @@ Two independent skills/tools are available on feat/autonomous_score_routing:
 
 | Skill | Tool | Native input | Output |
 | --- | --- | --- | --- |
-| rfd4-design | protein_model_rfd4 | Relative native CIF/BCIF/spec/directory under RFD4_INPUTS | Absolute output artifact manifest |
+| rfd4-design | protein_model_rfd4 | Existing absolute `.cif`/`.json` or relative native input under `RFD4_INPUTS` | Absolute output artifact manifest |
 | proteinmpnn-design | protein_model_proteinmpnn | Absolute PDB + existing design_chains | Cached FASTA text/records and artifact paths |
+
+Absolute RFD4 inputs require an updated RFD4 API deployment. The deployed
+service validates existence on its own host and makes the input visible inside
+Apptainer. Existing relative inputs work with the preceding API version.
 
 RFD4 supports inference_base, inverse_folding and partial trajectory (fraction only
 with inference_base). ProteinMPNN's exact uploaded API supports chain-level sequence
