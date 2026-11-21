@@ -120,7 +120,7 @@ def round_config(tmp_path):
                 "af3score": service("af3score"),
                 "torchscore": service("torchscore"),
                 "torchfold": service("torchfold"),
-                "rosetta": service("rosetta"),
+    
                 "rosetta_fix": {"native_xml": str(tmp_path / "native.xml"), "python": sys.executable},
                 "dockq_python": sys.executable,
             },
@@ -453,6 +453,24 @@ def fake_services(round_config, tmp_path, monkeypatch):
         self.save_candidates()
 
     monkeypatch.setattr(InitialRoundRunner, "score_rosetta_fix", fake_rosetta_fix)
+
+    async def fake_binder_dg(self, candidate):
+        if candidate.get("rosetta_structure") == "generated" and "rosetta_interface_dg" in candidate["metrics"]:
+            return
+        candidate["metrics"]["rosetta_interface_dg"] = -12.0
+        candidate["rosetta_structure"] = "generated"
+        self.save_candidates()
+
+    # Only binder mode uses this local score_interface stub; autonomous modes
+    # retain their ResResE / RosettaFix flow through the original method.
+    original_score_interface = InitialRoundRunner.score_interface
+
+    async def mock_score_interface(self, candidate):
+        if self.config.generators[candidate["source"]].score_only:
+            return await fake_binder_dg(self, candidate)
+        return await original_score_interface(self, candidate)
+
+    monkeypatch.setattr(InitialRoundRunner, "score_interface", mock_score_interface)
 
     def handler(request):
         source = request.url.host.split(".")[0]
@@ -879,7 +897,7 @@ async def test_cold_sbatch_preflight_never_probes_http_or_slurm(round_config, fa
     _, calls = fake_services
     for name, service in [
         *((name, g.service) for name, g in round_config.generators.items()),
-        *((name, getattr(round_config.evaluation, name)) for name in ("torchscore", "torchfold", "rosetta")),
+        *((name, getattr(round_config.evaluation, name)) for name in ("torchscore", "torchfold")),
     ]:
         service.sbatch_script = tmp_path / f"{name}.sbatch"
         service.sbatch_script.write_text("#!/bin/bash\n")
@@ -2234,7 +2252,7 @@ async def test_binder_generators_stop_after_direct_scoring(round_config, fake_se
     assert result["followup_rounds"] == 0
     assert "autonomous" not in runner.checkpoint.data
     assert calls[(scorer, "POST")] == len(sources)
-    assert calls[("rosetta", "POST")] == len(sources)
+    assert calls[("rosetta", "POST")] == 0
     assert calls[("torchfold", "POST")] == len(sources)
     assert calls[("torchopt", "POST")] == 0
     for source in sources:
