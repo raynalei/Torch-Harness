@@ -1,106 +1,179 @@
-"""Run the official PPIFlow RosettaFixStep on one candidate without an HTTP API.
+"""PyRosetta implementation of PPIFlow's RosettaFix protocol, without Rosetta CLI/API.
 
-The upstream script assumes binder chains A(/B) and target C. Normalizing chain
-IDs and order happens on a dedicated copy, never on the candidate structure.
+Reuses PPIFlow native.xml: dynamic residue neighborhood, antibody MoveMap,
+FastRelax and ScoreCutoffFilter. Reports *weighted EnergyGraph* negative
+cross-chain pair scores in the original-input CB/CA contact neighborhood.
+EnergyGraph pair totals should be compared with upstream ResResE scores before
+using the same numerical threshold as a calibrated scientific cut-off.
 """
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import math
+import re
 import sys
 from pathlib import Path
 
 
-def _load(path: Path, name: str):
-    if not path.is_file():
-        raise FileNotFoundError(f"Missing upstream PPIFlow module: {path}")
-    spec = importlib.util.spec_from_file_location(name, path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"Cannot load upstream PPIFlow module: {path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
 def canonical_pdb(source: Path, output: Path, binder: list[str], target: list[str]) -> dict[str, str]:
     if len(target) != 1 or len(binder) not in (1, 2):
-        raise ValueError("Official RosettaFix requires one target chain and one or two binder chains")
+        raise ValueError("RosettaFix requires one target and one or two binder chains")
     chains = [*binder, *target]
     if len(set(chains)) != len(chains) or any(len(c) != 1 for c in chains):
         raise ValueError("All input chains must have distinct one-character IDs")
-    normalized = dict(zip(chains, ["A", "B", "C"] if len(binder) == 2 else ["A", "C"]))
-    lines = source.read_text().splitlines(keepends=True)
-    atom_lines = {key: [] for key in chains}
-    for line in lines:
-        if line.startswith(("ATOM  ", "HETATM")) and len(line) >= 27:
+    mapping = dict(zip(chains, ["A", "B", "C"] if len(binder) == 2 else ["A", "C"]))
+    records = source.read_text().splitlines(keepends=True)
+    atoms = {chain: [] for chain in chains}
+    for line in records:
+        if line.startswith(("ATOM  ", "HETATM")) and len(line) >= 54 and line[21] in mapping:
             chain = line[21]
-            if chain in normalized:
-                atom_lines[chain].append(line[:21] + normalized[chain] + line[22:])
-    if any(not atom_lines[chain] for chain in chains):
-        raise ValueError("Generated PDB does not contain every target/binder chain")
+            atoms[chain].append(line[:21] + mapping[chain] + line[22:])
+    if any(not atoms[chain] for chain in chains):
+        raise ValueError("Generated PDB is missing at least one binder/target chain")
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("w") as stream:
         for chain in chains:
-            stream.writelines(atom_lines[chain])
+            stream.writelines(atoms[chain])
             stream.write("TER\n")
         stream.write("END\n")
-    return normalized
+    return mapping
+
+
+def original_contacts(path: Path, binder: str, target: str, cutoff: float) -> set[tuple[int, int]]:
+    """Reproduce upstream PPIFlow distance gate: CB (fallback CA) from input PDB."""
+    atoms: dict[tuple[str, int, str], tuple[float, float, float]] = {}
+    for line in path.read_text().splitlines():
+        if not line.startswith("ATOM  ") or len(line) < 54 or line[21] not in (binder, target):
+            continue
+        try:
+            resno = int(line[22:26])
+            coordinate = tuple(float(line[i:i + 8]) for i in (30, 38, 46))
+        except ValueError as exc:
+            raise ValueError("Invalid coordinates in PDB for RosettaFix contacts") from exc
+        atom = line[12:16].strip()
+        if atom in {"CB", "CA"}:
+            atoms[(line[21], resno, atom)] = coordinate
+
+    def by_chain(chain: str) -> dict[int, tuple[float, float, float]]:
+        selected: dict[int, tuple[float, float, float]] = {}
+        positions = {idx for ch, idx, _ in atoms if ch == chain}
+        for idx in positions:
+            point = atoms.get((chain, idx, "CB"), atoms.get((chain, idx, "CA")))
+            if point is not None:
+                selected[idx] = point
+        return selected
+
+    left, right = by_chain(binder), by_chain(target)
+    return {
+        (i, j)
+        for i, a in left.items()
+        for j, b in right.items()
+        if math.dist(a, b) <= cutoff
+    }
+
+
+def configured_xml(path: Path, normalized: Path, antibody: bool) -> str:
+    """Replicate PPIFlow RosettaFixStep's dynamic XML modifications."""
+    text = path.read_text()
+    chains: dict[str, list[int]] = {}
+    for line in normalized.read_text().splitlines():
+        if line.startswith("ATOM  ") and len(line) >= 26:
+            chains.setdefault(line[21], []).append(int(line[22:26]))
+    if not chains:
+        raise ValueError("No residues in RosettaFix PDB")
+    ranges = ",".join(f"{min(v)}{k}-{max(v)}{k}" for k, v in chains.items())
+    text, count = re.subn(r'resnums="[^"]+"', lambda _: f'resnums="{ranges}"', text, count=1)
+    if count != 1:
+        raise ValueError("PPIFlow native.xml has no resnums selector")
+    if antibody:
+        movemap = '''<MoveMap name="backbone">
+                <Chain number="1" chi="1" bb="1"/>
+                <Chain number="2" chi="1" bb="1"/>
+                <Chain number="3" chi="1" bb="0"/>
+            </MoveMap>'''
+        text, count = re.subn(r'<MoveMap name="backbone">.*?</MoveMap>', movemap, text, count=1, flags=re.DOTALL)
+        if count != 1:
+            raise ValueError("PPIFlow native.xml lacks the antibody MoveMap")
+    return text
+
+
+def weighted_interface_energy(pose, scorefxn, contacts: set[tuple[int, int]], binder: str, target: str) -> dict[str, float]:
+    """Sum negative weighted pair terms for inter-chain contacts in the EnergyGraph."""
+    scorefxn(pose)  # Populate the EnergyGraph after relaxation.
+    graph = pose.energies().energy_graph()
+    info = pose.pdb_info()
+    lookup: dict[tuple[str, int], int] = {}
+    for index in range(1, pose.total_residue() + 1):
+        key = (info.chain(index), info.number(index))
+        if key in lookup:
+            raise ValueError(f"Ambiguous Rosetta PDB residue identifier: {key}")
+        lookup[key] = index
+    energies: dict[str, float] = {}
+    weights = scorefxn.weights()
+    for bnum, tnum in sorted(contacts):
+        bi = lookup.get((binder, bnum))
+        ti = lookup.get((target, tnum))
+        if bi is None or ti is None:
+            raise ValueError(f"Rosetta relaxation lost contact residue {binder}{bnum}/{target}{tnum}")
+        edge = graph.find_energy_edge(bi, ti)
+        if edge is None:
+            continue
+        value = float(edge.dot(weights))
+        if not math.isfinite(value):
+            raise ValueError("Nonfinite Rosetta weighted residue-pair energy")
+        if value < 0:
+            energies[str(bnum)] = energies.get(str(bnum), 0.0) + value
+    return energies
 
 
 def execute(request: dict) -> dict:
-    source_dir = Path(request["source_dir"]).resolve(strict=True)
-    binary = Path(request["rosetta_bin"]).resolve(strict=True)
-    class_module = _load(source_dir / "steps/rosetta_fix_step.py", "ppiflow_rosetta_fix_official")
-    energy_module = _load(source_dir / "steps/rosetta/1get_interface_energy.py", "ppiflow_interface_energy_official")
-    input_pdb = Path(request["input_pdb"]).resolve(strict=True)
-    output_dir = Path(request["output_dir"])
-    output_dir.mkdir(parents=True, exist_ok=True)
-    binders = request["binder_chains"]
-    targets = request["target_chains"]
-    canonical = output_dir / "input" / "candidate.pdb"
-    mapping = canonical_pdb(input_pdb, canonical, binders, targets)
-    xml = request.get("native_xml")
-    step = class_module.RosettaFixStep(
-        gentype="antibody" if len(binders) == 2 else "nanobody",
-        output_dir=str(output_dir / "official"),
-        rosetta_bin=str(binary),
-        native_xml=str(Path(xml).resolve(strict=True)) if xml else None,
-        python=sys.executable,
-        interface_dist=float(request["interface_dist"]),
-        plot_toggle=False,
-        overwrite=False,
-    )
-    # Upstream _prepare_one runs the same native.xml/FastRelax/ScoreCutoffFilter
-    # sequence as RosettaFixStep.run(), without spawning a 32-process batch for
-    # a single candidate. Use the upstream interface energy functions directly.
-    prepared = step._prepare_one(str(canonical))
-    log = Path(prepared["rosetta_out"])
-    if not log.is_file() or log.stat().st_size == 0:
-        raise RuntimeError(f"Official RosettaFix did not write ResResE output: {log}")
-    raw = energy_module.get_interchain_score(str(log))
-    if raw is None:
-        raise RuntimeError(f"Official RosettaFix returned no residue energy table: {log}")
-    energies = {}
-    for original in binders:
-        canonical_binder = mapping[original]
-        canonical_target = mapping[targets[0]]
-        pair = raw[(raw["binder_id"] == canonical_binder) & (raw["target_id"] == canonical_target)].copy()
-        interface = energy_module.get_residue_pairs_within_distance(
-            str(canonical),
-            canonical_binder,
-            canonical_target,
-            distance_threshold=float(request["interface_dist"]),
-        )
-        # Same official selection: negative inter-chain pair energies, within
-        # CB/CA distance, summed per binder residue.
-        totals = energy_module.get_interface_energy(pair, interface, canonical_binder, "", False)
-        cleaned = {str(int(pos)): float(value) for pos, value in totals.items()}
-        if any(not math.isfinite(value) for value in cleaned.values()):
-            raise ValueError("Non-finite RosettaFix interface residue energy")
-        energies[original] = cleaned
-    return {"interface_residue_energies": energies, "energy_log": str(log), "normalized_chains": mapping}
+    # Import here so pure-Python unit tests work without an installed PyRosetta wheel.
+    import pyrosetta
+    from pyrosetta.rosetta.protocols.rosetta_scripts import XmlObjects
+
+    xml_path = Path(request["native_xml"]).resolve(strict=True)
+    output = Path(request["output_dir"]).resolve()
+    source = Path(request["input_pdb"]).resolve(strict=True)
+    output.mkdir(parents=True, exist_ok=True)
+    binder = request["binder_chains"]
+    target = request["target_chains"]
+    normalized = output / "input" / "candidate.pdb"
+    mapping = canonical_pdb(source, normalized, binder, target)
+    updated_xml = output / "update.xml"
+    updated_xml.write_text(configured_xml(xml_path, normalized, antibody=len(binder) == 2))
+
+    pyrosetta.init(request.get("init_options", "-ignore_zero_occupancy false"))
+    pose = pyrosetta.pose_from_pdb(str(normalized))
+    protocol = XmlObjects.create_from_string(updated_xml.read_text()).get_mover("ParsedProtocol")
+    protocol.apply(pose)
+    relaxed = output / "relaxed.pdb"
+    pose.dump_pdb(str(relaxed))
+    scorefxn = pyrosetta.get_fa_scorefxn()
+    # Note: the XML may use another score function. The official XML currently
+    # does not specify a score function; compare numerical scores before production.
+    residue_energies = {}
+    threshold = float(request["interface_dist"])
+    for original in binder:
+        b = mapping[original]
+        t = mapping[target[0]]
+        contacts = original_contacts(normalized, b, t, threshold)
+        residue_energies[original] = weighted_interface_energy(pose, scorefxn, contacts, b, t)
+
+    # Store explicit provenance rather than masquerading as a Rosetta CLI ResResE log.
+    energy_path = output / "pair-energy.json"
+    energy_path.write_text(json.dumps({
+        "method": "pyrosetta_weighted_energy_graph",
+        "normalized_chains": mapping,
+        "interface_dist": threshold,
+        "interface_residue_energies": residue_energies,
+        "relaxed_structure": str(relaxed),
+    }, indent=2, allow_nan=False) + "\n")
+    return {
+        "interface_residue_energies": residue_energies,
+        "energy_log": str(energy_path),
+        "normalized_chains": mapping,
+    }
 
 
 def main():
@@ -110,7 +183,7 @@ def main():
     result = execute(request)
     result_path = Path(request["result_path"])
     temporary = result_path.with_suffix(".tmp")
-    temporary.write_text(json.dumps(result, allow_nan=False, indent=2) + "\n")
+    temporary.write_text(json.dumps(result, indent=2, allow_nan=False) + "\n")
     temporary.replace(result_path)
 
 
