@@ -398,17 +398,22 @@ PyRosetta and its Rosetta database must be installed/accessible from the
 configured Python interpreter. The **rosetta_scripts executable is not
 needed** for autonomous antibody/nanobody RosettaFix. The original input
 structure is not modified. The generated local `update.xml`,
-`relaxed.pdb`, and `pair-energy.json` provide provenance.
+`relaxed.pdb`, and **`residue-pair-energies.out`** provide provenance.
 
-**Scientific caveat:** this adapter computes negative weighted interchain
-EnergyGraph pair energies on the relaxed pose for pairs contacting in the
-original input PDB (CB/CA cutoff). The official PPIFlow script parses
-`ResResE` stdout. EnergyGraph totals are not guaranteed identical to
-`ResResE` (e.g. long-range contributions and scoring weights). Validate
-the numeric scale and the fixed-residue threshold on representative complexes
-before scientific production. EnergyGraph is not an experimentally calibrated
-binding energy.
+The PyRosetta adapter now calls
+`ScoreCutoffFilter.output_residue_pair_energies(ostringstream, pose)` to
+export the native **`ResResE`** table, then parses its pair energies, keeps
+negative binder–target interactions within the original-input CB/CA 12 Å
+contact cutoff, and sums them by binder residue. No EnergyGraph approximation
+or reconstructed energy table is used. The official XML scoring setup is
+retained, but numerical parity with a separate RosettaScripts binary remains
+dependent on Rosetta version/database and must be tested on real complexes.
+The `-5` fixed-residue threshold remains a configurable heuristic, not
+an experimentally calibrated binding energy.
 
-Binder score-only routes still use the Rosetta interface HTTP API.
-All routes rank candidates by the selected scorer's raw iPTM (0–1), and
-Rosetta energy is not part of the ranking score.
+Binder score-only routes still use the Rosetta InterfaceAnalyzer HTTP API.
+**`dG_separated`** is present per binder candidate in
+`summary.json -> score_only_results[].dG_separated`, and also in
+`ranking.csv` (alongside `rosetta_interface_dg`). Candidate metrics
+retain the key `rosetta_interface_dg`. The rank score for **all routes**
+remains raw scorer iPTM (0–1); Rosetta energy does not enter the ranking.
