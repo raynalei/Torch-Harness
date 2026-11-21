@@ -10,10 +10,10 @@ metadata:
 
 ## Start and recover
 
-Rosetta defaults to direct Slurm execution: Harness writes the immutable worker/input
+Rosetta requires direct Slurm PyRosetta execution: Harness writes the immutable worker/input
 snapshot, invokes sbatch and reads JSON, interface.sc and ResResE logs after confirmed
 Slurm completion with ExitCode=0:0. Do not start rosetta-api/uvicorn or use port 8050.
-Use protein_design_start for this native workflow, not the legacy HTTP Rosetta tool.
+Use protein_design_start for this native workflow; the legacy Rosetta HTTP API and protein_model_rosetta are retired.
 PyRosetta runs under evaluation.rosetta.python, separately from Harness's Python.
 Uncertain submissions, running jobs and accounting lag retain their IDs for recovery.
 

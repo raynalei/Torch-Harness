@@ -109,6 +109,8 @@ def prepare_run(
         kinds.extend(["torchopt", "rfd4", "proteinmpnn"])
     for kind in kinds:
         model = registration(kind, evaluation.get(kind))
+        if kind == "rosetta" and model and model["service"].get("backend", "api") != "slurm":
+            raise ValueError("Rosetta HTTP registration is retired; configure direct Slurm PyRosetta")
         if model:
             if evaluation.get(kind) is None:
                 script = model["service"].get("sbatch_script")

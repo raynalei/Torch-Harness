@@ -23,6 +23,25 @@ including an already configured Qwen provider. They do not add AF3Score to the
 LLM/chat model selector or replace Qwen authentication. No changes to the generic
 Agent loop, provider adapter or TUI are needed.
 
+## PyRosetta-only migration
+
+Rosetta HTTP is no longer a supported runtime or standalone model tool on this
+branch. The direct workflow calls `rosetta_slurm.py` and
+`rosetta_worker.py` on Slurm and records the Rosetta result in the
+workflow checkpoint. No Uvicorn server, port 8030/8050 or HTTP route is used
+for Rosetta.
+
+If an older TUI config contains a `rosetta` entry with `service.url`
+and `sbatch_script`, replace that entry with the `backend: slurm`
+configuration from `docs/examples/cluster_deployment.yaml`. Old
+registrations are rejected rather than silently invoking an API.
+
+PyRosetta must actually import under the configured `service.python`
+on the selected CPU/Slurm node. InterfaceAnalyzerMover currently supplies
+`dG_separated`, `total_score`, and residue-pair energy data.
+Relax/score/ddG operations from the old HTTP server have **not**
+been ported to direct Slurm PyRosetta and are not advertised.
+
 ## Register services
 
 Merge the `model_services` block from [this configuration fragment](examples/model_services.json)
@@ -30,7 +49,7 @@ into `plugins.config.protein-design` in the active Harness configuration, usuall
 `~/.opendde_harness/config.json`. Preserve existing provider, memory, workspace,
 compute and other plugin settings. Restart Harness after editing.
 
-Alternatively, register the seven port templates without manually editing JSON.
+Alternatively, register API port templates (excluding Rosetta) without manually editing JSON.
 These templates are not runnable deployments: every service needs its existing
 absolute sbatch_script path before submission. Hosts resolve through Slurm:
 
@@ -46,7 +65,7 @@ fragment instead. This preserves provider settings, backs up an existing config,
 and never submits a job. Restart Harness after registration. A tool function can
 be installed while its service registry is still empty; these are different states.
 
-Each alias is an operator-chosen name with:
+Each alias is an operator-chosen name. For PyRosetta specify `kind: rosetta`, `service.backend: slurm`, `service.python` as an absolute PyRosetta interpreter, plus partition/CPU/memory/time. No URL or sbatch API server is needed. Other API-backed aliases use:
 
 - `kind`: `ppiflow`, `torchcraft`, `af3score`, `torchscore`, `torchopt`, `torchfold` or `rosetta`.
 - `service.url`: the actual API endpoint reachable from Harness, not a model name.

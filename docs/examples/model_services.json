@@ -32,9 +32,18 @@
           "rosetta": {
             "kind": "rosetta",
             "service": {
-              "url": "http://slurm-api.invalid:8030",
-              "sbatch_script": "/lustre/project/apis/rosetta/rosetta-api.sbatch",
-              "sbatch_resolve_host": true
+              "backend": "slurm",
+              "python": "/lustre/grp/cmclab/leiy/conda_envs/ppi_env/bin/python",
+              "partition": "sugon",
+              "cpus": 4,
+              "memory": "16G",
+              "walltime": "04:00:00",
+              "metric_fields": {
+                "interface_dg": "dG_separated"
+              },
+              "environment": {
+                "OMP_NUM_THREADS": "4"
+              }
             },
             "max_samples": 5,
             "allowed_input_roots": [

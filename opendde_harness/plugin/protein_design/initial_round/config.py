@@ -379,8 +379,10 @@ class InitialRoundConfig(RoundModel):
     def check_workflow(self):
         if self.evaluation.torchfold is None:
             raise ValueError("torchfold service must be configured or uniquely registered")
+        if self.evaluation.rosetta is not None and self.evaluation.rosetta.backend != "slurm":
+            raise ValueError("Rosetta HTTP API is retired; evaluation.rosetta requires backend=slurm PyRosetta")
         if any(generator.score_only for generator in self.generators.values()) and self.evaluation.rosetta is None:
-            raise ValueError("binder scoring requires the registered Rosetta interface scoring service")
+            raise ValueError("binder scoring requires a configured direct Slurm PyRosetta service")
         if any(g.service is None for g in self.generators.values()):
             raise ValueError("generator services must be configured or uniquely registered")
         if self.autonomous is not None:
@@ -389,7 +391,7 @@ class InitialRoundConfig(RoundModel):
                 and (self.autonomous.decision_policy != "planner" or self.autonomous.planner_layout == "two_stage")
                 and self.evaluation.rosetta is None
             ):
-                raise ValueError("autonomous decisions require the registered Rosetta interface scoring service")
+                raise ValueError("autonomous decisions require a configured direct Slurm PyRosetta service")
             if self.evaluation.scoring_backend != "torchscore":
                 raise ValueError("autonomous rounds require scoring_backend=torchscore")
             for source, generator in self.generators.items():

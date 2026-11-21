@@ -175,7 +175,9 @@ class InitialRoundRunner:
             }
         result = {}
         for name, config in configs.items():
-            if name == "rosetta" and config.backend == "slurm":
+            if name == "rosetta":
+                if config.backend != "slurm":
+                    raise ValueError("Rosetta HTTP API is retired; use backend=slurm for PyRosetta")
                 from .rosetta_slurm import RosettaSlurmService
 
                 service = RosettaSlurmService(config, self.checkpoint, self.files)
@@ -204,7 +206,7 @@ class InitialRoundRunner:
             payload,
             attach_id=self.attach_jobs.get(key),
             status_base="/v1/tasks"
-            if service in {"rosetta", "rfd4", "proteinmpnn"} and self.services[service].config.backend == "api"
+            if service in {"rfd4", "proteinmpnn"} and self.services[service].config.backend == "api"
             else None,
         )
 
@@ -608,8 +610,8 @@ class InitialRoundRunner:
         result = await self.job(
             "rosetta",
             f"interface/{key}" if not score_only else f"binder-interface/{key}",
-            "interface_analyze" if evaluation.rosetta.backend == "slurm" else "/v1/tools/interface_analyze",
-            "slurm_job_id" if evaluation.rosetta.backend == "slurm" else "task_id",
+            "interface_analyze",
+            "slurm_job_id",
             {
                 **evaluation.rosetta_options,
                 "input_pdb": self.files.remote(model),

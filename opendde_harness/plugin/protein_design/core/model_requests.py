@@ -333,14 +333,7 @@ REQUEST_TYPES = {
     "rfd4": RFD4Request,
     "proteinmpnn": ProteinMPNNRequest,
 }
-ROSETTA_OPERATIONS = (
-    "structure_relax",
-    "constrained_relax",
-    "interface_analyze",
-    "structure_score",
-    "interface_local_relax",
-    "mutation_binding_ddg",
-)
+ROSETTA_OPERATIONS = ("interface_analyze",)  # Direct PyRosetta evaluator; no standalone Rosetta API.
 
 
 def validate_request(kind: str, request: dict, operation: str | None = None, *, omit_defaults=False) -> dict:
@@ -348,11 +341,8 @@ def validate_request(kind: str, request: dict, operation: str | None = None, *, 
     if kind == "rosetta":
         if operation not in ROSETTA_OPERATIONS:
             raise ValueError(f"Rosetta operation must be one of {ROSETTA_OPERATIONS}")
-        if operation in {"interface_analyze", "interface_local_relax", "mutation_binding_ddg"}:
-            if not value.chain_group_a or not value.chain_group_b:
-                raise ValueError("Rosetta interface tools require both chain groups")
-        if operation == "mutation_binding_ddg" and not value.mutation:
-            raise ValueError("mutation_binding_ddg requires mutation")
+        if not value.chain_group_a or not value.chain_group_b:
+            raise ValueError("PyRosetta interface_analyze requires both chain groups")
     elif operation is not None:
         raise ValueError("operation is only used for Rosetta")
     return value.model_dump(exclude_none=True, exclude_unset=omit_defaults or kind in {"rfd4", "proteinmpnn"})

@@ -49,7 +49,6 @@ def local_defaults():
     ports = {
         "ppiflow": 8010,
         "torchcraft": 8020,
-        "rosetta": 8030,
         "af3score": 8040,
         "torchfold": 8050,
         "torchscore": 8070,

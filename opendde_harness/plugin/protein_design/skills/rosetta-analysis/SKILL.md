@@ -1,23 +1,24 @@
 ---
 name: rosetta-analysis
-description: Measure PyRosetta interface energies and use registered Rosetta scoring, relaxation and ddG operations when available.
+description: Evaluate protein interfaces with checkpointed direct Slurm PyRosetta; never use the retired Rosetta HTTP API.
 ---
 
-# Measure PyRosetta interface energies and use registered Rosetta scoring, relaxation and ddG operations when available
+# PyRosetta interface analysis (direct Slurm)
 
-Direct Slurm PyRosetta supports interface analysis through the workflow.
-Use the generated complex and its explicit chain groups for interface energy.
-Keep `dG_separated` separate from ResResE residue energy evidence.
+The autonomous workflow uses the bundled `rosetta_slurm.py` and `rosetta_worker.py`.
+They launch a Slurm job via `sbatch`, importing PyRosetta under the configured
+absolute interpreter. No Rosetta API server, HTTP URL, port, or model allocation
+is required.
 
-If a Rosetta HTTP service is registered, inspect its advertised operations
-before using the standalone tool. The client supports `interface_analyze`,
-`structure_score`, `structure_relax`, `constrained_relax`,
-`interface_local_relax` and `mutation_binding_ddg`. Interface analysis,
-interface-local relaxation and mutation ddG require both chain groups.
-Mutation ddG also requires the actual mutation.
+The supported operation is `interface_analyze`: generate measured
+`dG_separated` and a residue-pair energy log from an actual PDB complex.
+Supply distinct target/binder chain groups and the input PDB; retain PDB
+numbering and validate output hashes and Slurm ExitCode=0:0.
 
-Use `protein_model_list` to inspect registered `rosetta` aliases and request fields.
-Use `protein_design_start` and `protein_design_status` for direct Slurm workflow
-evaluation. For a registered HTTP service, submit with `protein_model_rosetta`
-and use its local `request_id` with `protein_model_status` and
-`protein_model_results`. Reuse the ID when recovering an uncertain submission.
+Use `protein_design_start`, `protein_design_status`,
+`protein_design_resume` and `protein_design_candidates`.
+The standalone `protein_model_rosetta` submit tool and all six former HTTP
+operations have been retired. The current direct worker does not implement
+`structure_relax`, `constrained_relax`, `interface_local_relax`,
+`structure_score`, or `mutation_binding_ddg`; do not claim those are
+PyRosetta-capable until native workers are added and tested.

@@ -15,7 +15,6 @@ from opendde_harness.plugin.protein_design.agents.skills import MODEL_SKILLS
 from opendde_harness.plugin.protein_design.core.contracts import ContractModel
 from opendde_harness.plugin.protein_design.core.model_requests import (
     REQUEST_TYPES,
-    ROSETTA_OPERATIONS,
     AF3ScoreRequest,
     ppiflow_defaults_for_mode,
     validate_request,
@@ -40,8 +39,10 @@ class ModelRegistration(ContractModel):
 
     @model_validator(mode="after")
     def defaults_contract(self):
+        if self.kind == "rosetta" and self.service.backend != "slurm":
+            raise ValueError("Rosetta HTTP API has been retired; configure direct Slurm PyRosetta (backend=slurm)")
         if self.service.backend == "slurm" and self.kind != "rosetta":
-            raise ValueError("direct Slurm model registrations currently support Rosetta only")
+            raise ValueError("direct Slurm model registrations currently support PyRosetta only")
         validate_request_defaults(self.kind, self.request_defaults)
         return self
 
@@ -117,7 +118,7 @@ class ProteinModelRegistry:
                     "environment_keys": sorted(model.service.environment),
                     "request_defaults": model.request_defaults,
                     "operations": (
-                        ["interface_analyze"] if model.service.backend == "slurm" else list(ROSETTA_OPERATIONS)
+                        ["interface_analyze"]
                     )
                     if model.kind == "rosetta"
                     else [],
@@ -262,7 +263,7 @@ class ProteinModelRegistry:
         if kind == "torchfold":
             return "/v1/folds", "/v1/folds", "fold_id"
         if kind == "rosetta":
-            return f"/v1/tools/{operation}", "/v1/tasks", "task_id"
+            raise ValueError("Rosetta has no HTTP route; use direct Slurm PyRosetta through protein_design_start")
         if kind == "torchopt":
             return "/v1/optimizations", "/v1/optimizations", "optimization_id"
         return "/v1/tasks", "/v1/tasks", "task_id"
@@ -323,8 +324,10 @@ class ProteinModelRegistry:
 
     async def submit(self, name: str, request_id: str, request: dict, operation: str | None = None):
         model = self.model(name)
+        if model.kind == "rosetta":
+            raise ValueError("Standalone Rosetta API calls are retired; use protein_design_start with direct PyRosetta")
         if model.service.backend == "slurm":
-            raise ValueError("use protein_design_start for checkpointed direct PyRosetta Slurm evaluation")
+            raise ValueError("direct Slurm model submission must use its checkpointed workflow")
         request_defaults = model.request_defaults
         if model.kind == "ppiflow":
             request_defaults = ppiflow_defaults_for_mode(

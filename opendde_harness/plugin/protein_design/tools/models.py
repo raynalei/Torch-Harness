@@ -211,13 +211,7 @@ class ProteinModelSubmitTool(ProteinModelTool):
         schema["$defs"] = request_schema.pop("$defs", {})
         schema["properties"]["request"] = request_schema
         aliases = [name for name, model in self.registry.models.items() if model.kind == self.kind]
-        if self.kind == "rosetta":
-            from opendde_harness.plugin.protein_design.core.model_requests import ROSETTA_OPERATIONS
-
-            schema["properties"]["operation"]["enum"] = list(ROSETTA_OPERATIONS)
-            schema["required"].append("operation")
-        else:
-            schema["properties"].pop("operation", None)
+        schema["properties"].pop("operation", None)
         if aliases:
             schema["properties"]["model"]["enum"] = sorted(aliases)
         if len(aliases) <= 1:
@@ -275,10 +269,6 @@ def make_torchfold_tool(ctx: PluginContext):
 
 def make_af3score_tool(ctx: PluginContext):
     return _submit_tool(ctx, "af3score")
-
-
-def make_rosetta_tool(ctx: PluginContext):
-    return _submit_tool(ctx, "rosetta")
 
 
 def make_torchscore_tool(ctx: PluginContext):
