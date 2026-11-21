@@ -162,6 +162,14 @@ interfaces, excluding intrabinder interfaces, using the generated pose as the
 reference; the minimum scored target/binder interface DockQ is retained. This is
 **design/refold consistency**, not agreement with an experimental structure.
 Rosetta `dG_separated` is an energy score, not measured affinity.
+Every ranked candidate now requires a measured Rosetta interface result, including
+high-confidence candidates routed directly to TorchFold. The ranking objective is
+`ranking_score = 100 * selected_scorer_iptm - rosetta_interface_dg`, where
+`rosetta_interface_dg` is InterfaceAnalyzer's `dG_separated`. No missing energy
+is replaced with zero. The per-residue `rosetta_interface_score` used for repair
+planning is a different measurement and is not used in this formula.
+This uncalibrated composite combines confidence and Rosetta energy scales; do not
+interpret it as a physical binding affinity or compare against older saved rankings.
 
 For binder, successfully scored complexes enter `score_only_ranking`. For antibody
 and nanobody, candidate acceptance and ranking follow the

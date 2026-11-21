@@ -68,7 +68,9 @@ def quality(candidate, score_metric):
 
 
 def rank_score(candidate, score_metric):
-    return 100 * candidate["metrics"][score_metric]
+    """Use the measured Rosetta InterfaceAnalyzer separation energy for ranking."""
+    metrics = candidate["metrics"]
+    return 100 * metrics[score_metric] - metrics["rosetta_interface_dg"]
 
 
 def _partial_request(runner, candidate, name):
@@ -292,6 +294,9 @@ async def evaluate(runner, candidates):
                 )
             else:
                 candidate["status"] = "terminated" if actions == ["terminate"] else "rejected"
+            # Ranking requires a real Rosetta interface measurement, including
+            # routes that otherwise proceed directly from confidence to refold.
+            await runner.score_interface(candidate)
             candidate["metrics"]["ranking_score"] = rank_score(candidate, runner.config.evaluation.score_metric)
         except SubmissionUncertainError:
             raise
