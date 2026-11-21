@@ -54,4 +54,4 @@ def test_iptm_rank_is_independent_of_rosetta_energy():
 
 def test_native_rosetta_fix_requires_absolute_paths():
     with pytest.raises(ValueError, match="absolute"):
-        RosettaFixConfig(source_dir=Path("relative"), rosetta_bin=Path("/bin/true"))
+        RosettaFixConfig(native_xml=Path("relative"))
