@@ -199,7 +199,7 @@ class Evaluation(RoundModel):
     af3score_options: dict[str, Any] = Field(default_factory=dict)
     torchscore_options: dict[str, Any] = Field(default_factory=dict)
     torchfold_options: dict[str, Any] = Field(default_factory=lambda: {"run_data_pipeline": False})
-    rosetta_options: dict[str, Any] = Field(default_factory=lambda: {"pack_input": False, "pack_separated": True})
+    rosetta_options: dict[str, Any] = Field(default_factory=lambda: {"pack_separated": True})
     # Legacy one-pass thresholds retained for existing serialized configurations.
     min_af3score_iptm: float = Field(default=0.5, ge=0, le=1)
     min_torchscore_iptm: float = Field(default=0.5, ge=0, le=1)
