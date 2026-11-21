@@ -346,10 +346,8 @@ class InitialRoundConfig(RoundModel):
     def check_workflow(self):
         if self.evaluation.torchfold is None:
             raise ValueError("torchfold service must be configured or uniquely registered")
-        if self.route == "binder" and self.evaluation.rosetta is None:
-            raise ValueError("binder route requires the registered Rosetta interface scoring service")
-        if self.has_design_followup and self.evaluation.rosetta_fix is None:
-            raise ValueError("antibody and nanobody routes require evaluation.rosetta_fix (local PyRosetta RosettaFix)")
+        if self.evaluation.rosetta_fix is None:
+            raise ValueError("all protein design routes require evaluation.rosetta_fix (PyRosetta interpreter; native_xml for antibody/nanobody)")
         if any(g.service is None for g in self.generators.values()):
             raise ValueError("generator services must be configured or uniquely registered")
         if self.has_design_followup:
