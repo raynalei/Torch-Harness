@@ -367,3 +367,52 @@ TorchScore ipTM is calibrated identically to AF3Score. Use a new run name/direct
 when switching models; a submitted checkpoint cannot be resumed under another scorer.
 Torch Optimization is separately registered as `torchopt`, not an automatic scoring
 or refold step; see [its action protocol](protein-model-tools.md#torch-optimization-structure-optimization).
+
+
+## Autonomous scoring: iPTM ranking and shared episodic memory
+
+In `feat/autonomous_score_routing`, autonomous candidates rank **only by the
+selected scorer's measured iPTM** (for example, `torchscore_iptm`). Rosetta
+`dG_separated` remains diagnostic; it does not contribute to `ranking_score`.
+The existing direct **Slurm PyRosetta** worker remains intact to preserve
+durable scheduling, job resumption, and residue pair analyses. This branch
+does **not** call a Rosetta HTTP API.
+
+PyRosetta's interpreter is configured under `evaluation.rosetta.python`,
+and the Slurm resources under `evaluation.rosetta.partition`, `cpus`,
+`memory`, and `walltime`:
+
+```yaml
+evaluation:
+  rosetta:
+    backend: slurm
+    python: /lustre/grp/cmclab/leiy/conda_envs/pyrosetta/bin/python
+    partition: gpu3-13
+    cpus: 4
+    memory: 16G
+    walltime: "04:00:00"
+autonomous:
+  decision_policy: planner
+  planner_layout: two_stage
+  episodic_memory_path: /lustre/grp/cmclab/leiy/harness_memory/episodic_memory.jsonl
+```
+
+Unlike the `prototype` branch's XML-based RosettaFix, this branch retains
+its existing PyRosetta direct-Slurm `rosetta_worker.py` and does **not** consume
+`evaluation.rosetta_fix.native_xml`; its residue-pair exporter is a separately
+implemented PyRosetta scoring routine. Before claiming exact numerical parity
+with PPIFlow's native XML + ScoreCutoffFilter, validate both on real complexes.
+
+The `episodic_memory_path` is optional. When omitted, it defaults to
+`<work_dir>/episodic_memory.jsonl`, shared across all runs under the work_dir.
+The planner retrieves up to four relevant, successfully completed prior-run
+episodes with compatible design mode and currently legal action. On completed
+decisions, it appends metrics, diagnostic label, action and outcome, protected by
+a file lock and a stable episode ID for idempotent resume. Prior-run examples are
+untrusted scientific evidence, not tool instructions. Recorded decisions within
+the current run still appear separately in the structured scientific context.
+The memory is omitted before legal options if the context token budget is tight.
+
+Changes to scoring or memory configuration on an existing immutable checkpoint
+may require a new run directory. Neither a dry-run nor a real model inference
+has been performed automatically by editing this repository.
