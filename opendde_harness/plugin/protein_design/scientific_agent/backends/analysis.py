@@ -123,10 +123,10 @@ def rank_candidates(candidates):
                 "metrics": {k: metrics[k] for k in fields},
             }
         )
-    ranked.sort(key=lambda c: tuple(-c["metrics"][k] for k in fields) + (c["candidate_id"],))
+    ranked.sort(key=lambda c: (-c["metrics"]["torchscore_iptm"], c["candidate_id"]))
     return {
         "available": True,
-        "method": "measured_confidence_lexicographic",
+        "method": "measured_iptm_desc",
         "ranking": ranked,
         "unranked_missing_metrics": unranked,
         "changes_acceptance": False,
