@@ -591,7 +591,7 @@ class InitialRoundRunner:
         self.save_candidates()
 
     async def score_rosetta_fix(self, candidate):
-        """Run upstream PPIFlow RosettaFixStep locally, without the Rosetta HTTP API."""
+        """Run PPIFlow's native.xml using local PyRosetta without the Rosetta HTTP API."""
         import asyncio
 
         from .storage import write_json
@@ -605,9 +605,8 @@ class InitialRoundRunner:
         result_path = directory / "rosetta-fix-result.json"
         log_path = directory / "rosetta-fix.log"
         write_json(request_path, {
-            "source_dir": str(cfg.source_dir),
-            "rosetta_bin": str(cfg.rosetta_bin),
-            "native_xml": str(cfg.native_xml) if cfg.native_xml else None,
+            "native_xml": str(cfg.native_xml),
+            "init_options": cfg.init_options,
             "input_pdb": str(self.files.local(candidate["generated_structure"])),
             "output_dir": str(directory / "rosetta-fix"),
             "binder_chains": generator.chains.binder,
@@ -633,7 +632,7 @@ class InitialRoundRunner:
         if process.returncode:
             raise RuntimeError(f"PPIFlow RosettaFix failed (exit {process.returncode}); see {log_path}")
         result = json.loads(result_path.read_text())
-        snapshot = directory / "rosetta-residue-energy.out"
+        snapshot = directory / "rosetta-residue-energy.json"
         source = Path(result["energy_log"])
         if snapshot.exists() and digest(snapshot) != digest(source):
             raise ValueError("RosettaFix residue-energy output changed while resuming")
