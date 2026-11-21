@@ -255,7 +255,7 @@ def compress(context, records, options, *, max_tokens):
         },
     }
     # Optional detail is removed before dropping candidate/option identities.
-    for field in ("history", "guidance"):
+    for field in ("episodic_memory", "history", "guidance"):
         if token_cost(base) > max_tokens:
             base[field] = {} if field == "guidance" else []
             if field == "history":
@@ -321,6 +321,7 @@ def build_context(
     thresholds=None,
     constraints=None,
     history=(),
+    episodic_memory=(),
     unavailable=None,
     max_tokens=4096,
     planner=False,
@@ -365,6 +366,7 @@ def build_context(
         "constraints": _small(constraints or {}),
         "history": recent,
         "history_total": len(history),
+        "episodic_memory": list(episodic_memory)[:4],
         "history_summary": dict(Counter(row.get("action", "unknown") for row in history)),
         "guidance": decision_guidance({o["action"] for o in legal_options}),
         "unavailable": _small(unavailable or {}),
@@ -373,7 +375,7 @@ def build_context(
         context["decision_mode"] = "qwen_planner"
         context["thresholds_are_advisory"] = True
         context["guidance"] = {
-            "planner": "Choose stop (discard poor candidate), continue (TorchFold/DockQ, then completion), partial_flow, torchopt, rfd4_partial, proteinmpnn or analysis from actual capabilities. Rule recommendations are fallback advice only. Read all measured evidence and preserve task constraints. Optimization requires the mutation selector. Missing evidence is unknown. ranking_score=100*selected_ipTM-rosetta_interface_dg when dG_separated is measured; unknown dG is unranked, never zero. Use ranking as evidence, not a new routing threshold."
+            "planner": "Choose stop (discard poor candidate), continue (TorchFold/DockQ, then completion), partial_flow, torchopt, rfd4_partial, proteinmpnn or analysis from actual capabilities. Rule recommendations are fallback advice only. Read all measured evidence and preserve task constraints. Optimization requires the mutation selector. Missing evidence is unknown. ranking_score=selected scorer ipTM. dG_separated is diagnostic evidence, not part of ranking. Use ranking as evidence, not a new routing threshold."
         }
         context["evaluation_skills"] = evaluation_skill_guidance(evaluation_stage)
         optimization_skills = {}
@@ -427,7 +429,7 @@ def build_context(
                     if k.startswith("rosetta_") or k == "ranking_score"
                 }
             context["guidance"] = {
-                "planner": "First of two scientific decisions. Evaluation evidence is exclusively TorchScore and Rosetta. Choose stop, advance to stage-two analysis (continue/analysis), or one compatible optimization. Native developability/contact/lineage assessments are not performed until stage two. Rule recommendations are advisory. ranking_score=100*selected_ipTM-rosetta_interface_dg uses measured dG_separated; missing dG is unknown, never zero."
+                "planner": "First of two scientific decisions. Evaluation evidence is exclusively TorchScore and Rosetta. Choose stop, advance to stage-two analysis (continue/analysis), or one compatible optimization. Native developability/contact/lineage assessments are not performed until stage two. Rule recommendations are advisory. ranking_score=selected scorer ipTM; dG_separated remains diagnostic and is never imputed."
             }
         elif evaluation_stage == 2:
             context["guidance"] = {
@@ -560,6 +562,10 @@ def context_for_runner(runner, options, index, *, evaluation_stage=None):
         },
         constraints=constraints,
         history=runner.checkpoint.data["autonomous"]["decisions"],
+        episodic_memory=__import__(
+            "opendde_harness.plugin.protein_design.scientific_agent.episodic_memory",
+            fromlist=["retrieve"],
+        ).retrieve(runner, options),
         unavailable={} if config.evaluation.torchopt else {"torchopt": "no registered optimization service"},
         max_tokens=config.autonomous.decision_context_tokens,
         planner=config.autonomous.decision_policy == "planner",
