@@ -1152,7 +1152,7 @@ async def test_agent_decision_reuses_configured_provider_and_json_contract(monke
 def owned_api_config(round_config, tmp_path, monkeypatch):
     names, cancelled = {}, []
     services = [g.service for g in round_config.generators.values()]
-    services += [round_config.evaluation.af3score, round_config.evaluation.torchfold, round_config.evaluation.rosetta]
+    services += [round_config.evaluation.af3score, round_config.evaluation.torchfold]
     for index, service in enumerate(services):
         script = tmp_path / f"api-{index}.sbatch"
         script.write_text("#!/bin/bash\nsleep infinity\n")
@@ -1433,7 +1433,7 @@ def test_scorer_choice_uses_explicit_configuration_then_registered_kind(round_co
         prepare_run(value, registrations=registrations)
 
 
-@pytest.mark.parametrize("failed_source", ["ppiflow", "torchcraft", "af3score", "torchscore", "torchfold", "rosetta"])
+@pytest.mark.parametrize("failed_source", ["ppiflow", "torchcraft", "af3score", "torchscore", "torchfold"])
 async def test_resume_retries_only_failed_model_and_reuses_upstream_results(round_config, fake_services, failed_source):
     scorer = "af3score" if failed_source == "af3score" else "torchscore"
     config = binder_config(round_config, ("ppiflow", "torchcraft"), scorer=scorer)
