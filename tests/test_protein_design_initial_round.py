@@ -121,6 +121,7 @@ def round_config(tmp_path):
                 "torchscore": service("torchscore"),
                 "torchfold": service("torchfold"),
                 "rosetta": service("rosetta"),
+                "rosetta_fix": {"source_dir": str(tmp_path), "rosetta_bin": str(tmp_path / "rosetta_scripts")},
                 "dockq_python": sys.executable,
             },
         }
@@ -434,6 +435,25 @@ def fake_services(round_config, tmp_path, monkeypatch):
         "opendde_harness.plugin.protein_design.initial_round.runner.asyncio.create_subprocess_exec", fake_process
     )
 
+    async def fake_rosetta_fix(self, candidate):
+        if "interface_fixed_positions" in candidate:
+            return
+        generator = self.config.generators[candidate["source"]]
+        energies = {chain: {"1": -6.0} for chain in generator.chains.binder}
+        candidate["interface_residue_energies"] = energies
+        candidate["interface_fixed_positions"] = {chain: [1] for chain in generator.chains.binder}
+        candidate["metrics"]["rosetta_interface_score"] = -6.0 * len(generator.chains.binder)
+        candidate["rosetta_structure"] = "generated"
+        snapshot = self.root / candidate["candidate_id"] / "rosetta-residue-energy.out"
+        snapshot.parent.mkdir(parents=True, exist_ok=True)
+        snapshot.write_text("test native RosettaFix output")
+        from opendde_harness.plugin.protein_design.initial_round.runner import digest
+        candidate["rosetta_energy_log"] = self.files.remote(snapshot)
+        candidate["rosetta_energy_log_sha256"] = digest(snapshot)
+        self.save_candidates()
+
+    monkeypatch.setattr(InitialRoundRunner, "score_rosetta_fix", fake_rosetta_fix)
+
     def handler(request):
         source = request.url.host.split(".")[0]
         calls[(source, request.method)] += 1
@@ -702,7 +722,7 @@ async def test_ppiflow_nanobody_runs_without_torchcraft_or_template(round_config
     assert result["route"] == "nanobody"
     assert calls[("ppiflow", "POST")] == calls[("torchscore", "POST")] == calls[("torchfold", "POST")] == 1
     assert calls[("torchcraft", "GET")] == 0
-    assert calls[("rosetta", "POST")] == 1
+    assert calls[("rosetta", "POST")] == 0
 
 
 def test_generated_fold_input_supports_query_only_or_pipeline_search(round_config, tmp_path):
@@ -941,11 +961,12 @@ async def test_autonomous_round_preserves_best_budget_and_resume(round_config, f
     assert result["used_samples"] == result["accepted"] == 2
     root = config.work_dir / config.name
     records = json.loads((root / "candidates.json").read_text())
-    assert all(c["metrics"]["ranking_score"] == 102 for c in records)
+    assert all(c["metrics"]["ranking_score"] == 0.9 for c in records)
     assert all(c["diagnostics"]["epitope_hit"] is True for c in records)
     assert all("generated.pdb" in c["generated_structure"] for c in records)
-    assert all(c["metrics"]["rosetta_interface_dg"] == -12 for c in records)
-    assert calls[("rosetta", "POST")] == 2
+    assert all("rosetta_interface_dg" not in c["metrics"] for c in records)
+    assert all(c["metrics"]["rosetta_interface_score"] == -6 for c in records)
+    assert calls[("rosetta", "POST")] == 0
     decisions = json.loads((root / "decisions.json").read_text())["decisions"]
     assert [d["action"] for d in decisions] == ["stop"]
     before = {key: count for key, count in calls.items() if key[1] == "POST"}
@@ -972,7 +993,7 @@ async def test_autonomous_low_iptm_terminates_without_regeneration_or_refold(rou
     assert all(c["diagnostics"]["diagnosis"] == "low_iptm" and c["status"] == "terminated" for c in records)
     assert all("design_refold_dockq" not in c["metrics"] for c in records)
     assert fake_services[1][("torchfold", "POST")] == 0
-    assert fake_services[1][("rosetta", "POST")] == 2
+    assert fake_services[1][("rosetta", "POST")] == 0
     assert fake_services[1][("ppiflow", "POST")] == fake_services[1][("torchcraft", "POST")] == 1
 
 
@@ -1072,7 +1093,7 @@ async def test_partial_flow_executes_once_then_rescores_child(round_config, fake
     assert result["accepted"] == 1 and result["used_samples"] == 2
     assert calls[("torchscore", "POST")] == 2
     assert calls[("torchfold", "POST")] == 1
-    assert calls[("rosetta", "POST")] == 2
+    assert calls[("rosetta", "POST")] == 0
     parent, child = runner.checkpoint.data["candidates"]
     assert child["parent_id"] == parent["candidate_id"]
     assert digest(runner.files.local(parent["generated_structure"])) == parent["generated_sha256"]
@@ -1248,10 +1269,10 @@ async def test_low_confidence_candidate_is_optimized_and_fully_reevaluated(
     assert initial["rosetta_structure"] == "generated"
     assert child["rosetta_structure"] == "generated"
     assert child["optimized_by"] == "torchopt" and child["parent_id"] == parent["candidate_id"]
-    assert child["metrics"]["torchscore_iptm"] == 0.9 and child["metrics"]["ranking_score"] == 102
+    assert child["metrics"]["torchscore_iptm"] == 0.9 and child["metrics"]["ranking_score"] == 0.9
     assert calls[("torchscore", "POST")] == 3
     assert calls[("torchfold", "POST")] == int(final_ptm > 0.8)
-    assert calls[("rosetta", "POST")] == 3
+    assert calls[("rosetta", "POST")] == 0
     assert sum(request.method == "POST" for request in optimization_calls) == (2 if fail_optimization else 1)
     before = dict(calls)
     assert await InitialRoundRunner(config, transport=httpx.MockTransport(handler)).run() == result
@@ -1321,7 +1342,7 @@ async def test_torchscore_feedback_uses_registered_scorer_for_ranking_and_resume
     for candidate in runner.checkpoint.data["candidates"]:
         assert candidate["scoring_backend"] == "torchscore"
         assert candidate["metrics"]["torchscore_iptm"] == 0.9
-        assert candidate["metrics"]["ranking_score"] == 102
+        assert candidate["metrics"]["ranking_score"] == 0.9
         assert "af3score_iptm" not in candidate["metrics"]
     csv_header = (runner.root / "ranking.csv").read_text().splitlines()[0]
     assert "torchscore_iptm" in csv_header and "af3score_iptm" not in csv_header
@@ -1362,8 +1383,8 @@ def test_feedback_diagnosis_and_ranking_never_mix_scorers():
         "rosetta_interface_dg": -12,
     }
     assert classify(metrics, {"epitope_hit": True}, AutonomousRound(), "torchscore_iptm") == "low_iptm"
-    assert rank_score({"metrics": metrics}, "torchscore_iptm") == 52
-    assert rank_score({"metrics": metrics}, "af3score_iptm") == 111
+    assert rank_score({"metrics": metrics}, "torchscore_iptm") == 0.4
+    assert rank_score({"metrics": metrics}, "af3score_iptm") == 0.99
 
 
 def test_scorer_choice_uses_explicit_configuration_then_registered_kind(round_config):
@@ -1684,7 +1705,7 @@ async def test_qwen_can_stop_only_when_all_four_pass_and_without_extra_submissio
     async def choose(context):
         seen.append(context)
         option = next(item for item in context["options"] if item["action"] == "stop")
-        assert all("rosetta_interface_dg" in c["metrics"] for c in context["candidates"])
+        assert all("rosetta_interface_dg" not in c["metrics"] for c in context["candidates"])
         return Choice(option_id=option["option_id"], reason="all four criteria pass; keep the current candidates")
 
     monkeypatch.setattr("opendde_harness.plugin.protein_design.initial_round.autonomous.agent_choice", choose)
@@ -1695,7 +1716,7 @@ async def test_qwen_can_stop_only_when_all_four_pass_and_without_extra_submissio
     assert result["accepted"] == 2
     assert len(seen) == 1
     assert fake_services[1][("ppiflow", "POST")] == 1
-    assert fake_services[1][("rosetta", "POST")] == 2
+    assert fake_services[1][("rosetta", "POST")] == 0
 
 
 def test_python_partial_masks_cover_both_antibody_chains_without_manual_regions(tmp_path):
@@ -1755,7 +1776,7 @@ async def test_hotspot_miss_does_not_override_the_confidence_route(round_config,
     assert result["used_samples"] == 1
     assert fake_services[1][("torchfold", "POST")] == 1
     assert fake_services[1][("ppiflow", "POST")] == 1
-    assert fake_services[1][("rosetta", "POST")] == 2
+    assert fake_services[1][("rosetta", "POST")] == 0
 
 
 async def test_energy_fixed_points_remove_the_need_for_a_cdr_question(round_config, fake_services):
@@ -1774,23 +1795,22 @@ async def test_energy_fixed_points_remove_the_need_for_a_cdr_question(round_conf
     assert result["used_samples"] == 2
     assert "pending_regions" not in runner.checkpoint.data
     assert calls[("ppiflow", "POST")] == calls[("torchscore", "POST")] == 2
-    assert calls[("rosetta", "POST")] == 2
+    assert calls[("rosetta", "POST")] == 0
     assert calls[("torchfold", "POST")] == 0
     decision = runner.checkpoint.data["autonomous"]["decisions"][0]
     assert decision["region_method"] == "rosetta_interface_residue_energy"
     assert decision["request"]["fixed_positions"] == "B1"
 
 
-def test_ranking_requires_rosetta_interface_measurement():
+def test_ranking_uses_only_selected_iptm():
     from opendde_harness.plugin.protein_design.initial_round.autonomous import quality, rank_score
     from opendde_harness.plugin.protein_design.initial_round.policy import rule_actions
 
     first = {"metrics": {"torchscore_iptm": 0.9, "torchscore_ptm": 0.9, "design_refold_dockq": 0.8}}
     second = {"metrics": {**first["metrics"], "rosetta_interface_dg": -20}}
-    with pytest.raises(KeyError, match="rosetta_interface_dg"):
-        rank_score(first, "torchscore_iptm")
-    assert rank_score(second, "torchscore_iptm") == 110
-    assert quality(second, "torchscore_iptm")[0] == 110
+    assert rank_score(first, "torchscore_iptm") == 0.9
+    assert rank_score(second, "torchscore_iptm") == 0.9
+    assert quality(first, "torchscore_iptm") == quality(second, "torchscore_iptm")
     assert rule_actions(first["metrics"]) == rule_actions(second["metrics"]) == ["stop"]
 
 
@@ -1817,7 +1837,7 @@ async def test_rosetta_failure_pauses_autonomy_and_retries_only_energy_step(roun
     assert calls[("ppiflow", "POST")] == calls[("torchcraft", "POST")] == 1
     assert calls[("torchscore", "POST")] == 2
     assert calls[("torchfold", "POST")] == 0
-    assert calls[("rosetta", "POST")] == 3
+    assert calls[("rosetta", "POST")] == 0
 
 
 async def test_completed_refold_is_harvested_after_worker_crash_and_status_profile_fix(round_config, fake_services):
