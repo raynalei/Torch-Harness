@@ -2245,6 +2245,21 @@ async def test_binder_generators_stop_after_direct_scoring(round_config, fake_se
         assert candidate["metrics"]["rosetta_interface_dg"] == -12
         assert candidate["metrics"]["design_refold_dockq"] == 1.0
     assert result["dockq_reference"] == "generated_design_pose"
+    assert len(result["score_only_results"]) == len(sources)
+    assert [item["candidate_id"] for item in result["score_only_results"]] == result["score_only_ranking"]
+    assert all(item["dG_separated"] == -12 for item in result["score_only_results"])
+    assert all(item["ranking_score"] == 0.2 for item in result["score_only_results"])
+    # Final JSON and CSV both expose the human-readable Rosetta field name;
+    # this remains diagnostic and never changes iPTM ranking.
+    summary = json.loads((runner.root / "summary.json").read_text())
+    assert summary["score_only_results"] == result["score_only_results"]
+    import csv
+
+    with (runner.root / "ranking.csv").open(newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert len(rows) == len(sources)
+    assert all(float(row["dG_separated"]) == -12.0 for row in rows)
+    assert all(float(row["ranking_score"]) == 0.2 for row in rows)
     before = calls.copy()
     assert await InitialRoundRunner(config, transport=transport).run() == result
     assert {key: count for key, count in calls.items() if key[1] == "POST"} == {
