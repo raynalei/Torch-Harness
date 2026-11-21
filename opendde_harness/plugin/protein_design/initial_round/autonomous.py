@@ -416,5 +416,8 @@ async def run_autonomous(runner):
         state["progress"] = current
         decision.update(state="completed", progress=current)
         runner.save_candidates()
+        from ..scientific_agent.episodic_memory import record_decision
+
+        record_decision(runner, decision)
     write_json(runner.root / "decisions.json", state)
     runner.save_candidates()
