@@ -169,12 +169,31 @@ class Generator(RoundModel):
         return {**constraints, **generation_request}
 
 
+class RosettaFixConfig(RoundModel):
+    """Official PPIFlow RosettaFixStep, run on the worker without Rosetta HTTP."""
+
+    source_dir: Path
+    rosetta_bin: Path
+    native_xml: Path | None = None
+    python: Path = Path(sys.executable)
+    interface_dist: float = Field(default=12.0, gt=0)
+    timeout: float = Field(default=7200, gt=0)
+
+    @model_validator(mode="after")
+    def absolute_paths(self):
+        paths = (self.source_dir, self.rosetta_bin, self.native_xml, self.python)
+        if any(path is not None and not path.is_absolute() for path in paths):
+            raise ValueError("RosettaFix paths must be absolute paths on the Harness worker host")
+        return self
+
+
 class Evaluation(RoundModel):
     scoring_backend: Literal["af3score", "torchscore"] = "af3score"
     af3score: Service | None = None
     torchscore: Service | None = None
     torchfold: Service | None = None
     rosetta: Service | None = None
+    rosetta_fix: RosettaFixConfig | None = Field(default=None, exclude_if=lambda value: value is None)
     torchopt: Service | None = None
     torchopt_options: dict[str, Any] = Field(default_factory=dict)
     af3score_options: dict[str, Any] = Field(default_factory=dict)
@@ -328,10 +347,10 @@ class InitialRoundConfig(RoundModel):
     def check_workflow(self):
         if self.evaluation.torchfold is None:
             raise ValueError("torchfold service must be configured or uniquely registered")
-        if self.evaluation.rosetta is None:
-            raise ValueError(
-                "binder, antibody and nanobody routes require the registered Rosetta interface scoring service"
-            )
+        if self.route == "binder" and self.evaluation.rosetta is None:
+            raise ValueError("binder route requires the registered Rosetta interface scoring service")
+        if self.has_design_followup and self.evaluation.rosetta_fix is None:
+            raise ValueError("antibody and nanobody routes require evaluation.rosetta_fix (official local RosettaFixStep)")
         if any(g.service is None for g in self.generators.values()):
             raise ValueError("generator services must be configured or uniquely registered")
         if self.has_design_followup:
