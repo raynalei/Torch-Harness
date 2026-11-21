@@ -965,7 +965,7 @@ async def test_autonomous_round_preserves_best_budget_and_resume(round_config, f
     assert all(c["diagnostics"]["epitope_hit"] is True for c in records)
     assert all("generated.pdb" in c["generated_structure"] for c in records)
     assert all("rosetta_interface_dg" not in c["metrics"] for c in records)
-    assert all(c["metrics"]["rosetta_interface_score"] == -6 for c in records)
+    assert all("rosetta_interface_score" not in c["metrics"] for c in records)
     assert calls[("rosetta", "POST")] == 0
     decisions = json.loads((root / "decisions.json").read_text())["decisions"]
     assert [d["action"] for d in decisions] == ["stop"]
@@ -1052,7 +1052,9 @@ def test_nanobody_defaults_to_iterative_routing(round_config, settings):
     assert config.autonomous.decision_policy == "agent"
     assert config.evaluation.scoring_backend == "torchscore"
     value["evaluation"]["rosetta"] = None
-    with pytest.raises(ValueError, match="require.*Rosetta"):
+    assert InitialRoundConfig.model_validate(value).route == "nanobody"
+    value["evaluation"]["rosetta_fix"] = None
+    with pytest.raises(ValueError, match="rosetta_fix"):
         InitialRoundConfig.model_validate(value)
 
 
@@ -1814,31 +1816,36 @@ def test_ranking_uses_only_selected_iptm():
     assert rule_actions(first["metrics"]) == rule_actions(second["metrics"]) == ["stop"]
 
 
-async def test_rosetta_failure_pauses_autonomy_and_retries_only_energy_step(round_config, fake_services):
+async def test_rosetta_failure_pauses_autonomy_and_retries_only_energy_step(round_config, fake_services, monkeypatch):
     config = autonomous_config(round_config, max_samples=2)
-    base, calls = fake_services
-    failed = set()
+    transport, calls = fake_services
+    original = InitialRoundRunner.score_rosetta_fix
+    attempts = 0
+
+    async def intermittent_native(self, candidate):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("local RosettaFix failure")
+        return await original(self, candidate)
+
+    monkeypatch.setattr(InitialRoundRunner, "score_rosetta_fix", intermittent_native)
 
     def handler(request):
-        response = base.handler(request)
+        response = transport.handler(request)
         if request.url.host == "torchscore.test" and request.url.path.endswith("/metrics"):
             return httpx.Response(200, json={"metrics": [{"iptm": 0.9, "ptm": 0.7}]})
-        if request.url.host == "rosetta.test" and request.method == "POST" and not failed:
-            failed.add(response.json()["task_id"])
-        if request.method == "GET" and request.url.path.rsplit("/", 1)[-1] in failed:
-            return httpx.Response(200, json={"status": "FAILED", "exit_code": "1:0"})
         return response
 
-    transport = httpx.MockTransport(handler)
+    client = httpx.MockTransport(handler)
     with pytest.raises(RuntimeError, match="resume this run_dir"):
-        await InitialRoundRunner(config, transport=transport).run()
-    result = await InitialRoundRunner(config, transport=transport, retry_failed=True).run()
+        await InitialRoundRunner(config, transport=client).run()
+    result = await InitialRoundRunner(config, transport=client, retry_failed=True).run()
     assert result["used_samples"] == 2
+    assert attempts >= 2
     assert calls[("ppiflow", "POST")] == calls[("torchcraft", "POST")] == 1
     assert calls[("torchscore", "POST")] == 2
-    assert calls[("torchfold", "POST")] == 0
     assert calls[("rosetta", "POST")] == 0
-
 
 async def test_completed_refold_is_harvested_after_worker_crash_and_status_profile_fix(round_config, fake_services):
     class WorkerInterruptedError(BaseException):
