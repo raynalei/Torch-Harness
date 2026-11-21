@@ -323,7 +323,8 @@ def test_registered_autonomous_example_resolves_for_yaml_and_run_config(tmp_path
     assert config.evaluation.scoring_backend == "torchscore"
     assert config.evaluation.af3score is None
     assert config.evaluation.torchopt.url.endswith(":8060")
-    assert config.evaluation.rosetta.sbatch_script == Path("/lustre/project/apis/rosetta/rosetta-api.sbatch")
+    assert config.evaluation.rosetta_fix.source_dir == Path("/lustre/project/PPIFlow")
+    assert config.evaluation.rosetta is None
     assert config.generators["torchcraft"].service == config.generators["torchcraft"].service.model_validate(
         registrations["torchcraft"]["service"]
     )
