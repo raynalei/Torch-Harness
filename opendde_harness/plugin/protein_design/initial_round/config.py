@@ -172,7 +172,7 @@ class Generator(RoundModel):
 class RosettaFixConfig(RoundModel):
     """PPIFlow native.xml protocol through local PyRosetta, without HTTP."""
 
-    native_xml: Path
+    native_xml: Path | None = None
     python: Path = Path(sys.executable)
     init_options: str = "-ignore_zero_occupancy false"
     interface_dist: float = Field(default=12.0, gt=0)
@@ -347,7 +347,9 @@ class InitialRoundConfig(RoundModel):
         if self.evaluation.torchfold is None:
             raise ValueError("torchfold service must be configured or uniquely registered")
         if self.evaluation.rosetta_fix is None:
-            raise ValueError("all protein design routes require evaluation.rosetta_fix (PyRosetta interpreter; native_xml for antibody/nanobody)")
+            raise ValueError("all protein design routes require evaluation.rosetta_fix (PyRosetta interpreter)")
+        if self.has_design_followup and self.evaluation.rosetta_fix.native_xml is None:
+            raise ValueError("antibody/nanobody RosettaFix additionally requires evaluation.rosetta_fix.native_xml")
         if any(g.service is None for g in self.generators.values()):
             raise ValueError("generator services must be configured or uniquely registered")
         if self.has_design_followup:
