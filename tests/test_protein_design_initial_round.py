@@ -1078,13 +1078,13 @@ async def test_partial_flow_executes_once_then_rescores_child(round_config, fake
     parent, child = runner.checkpoint.data["candidates"]
     assert child["parent_id"] == parent["candidate_id"]
     assert parent["metrics"]["rosetta_interface_dg"] == -12.0
-    assert parent["metrics"]["ranking_score"] == 82.0
+    assert parent["metrics"]["ranking_score"] == 0.70
     # Upgrade old residue-energy-only checkpoints from the completed API result.
     parent["metrics"].pop("rosetta_interface_dg")
     parent["metrics"].pop("ranking_score")
     await runner.score_interface(parent)
     assert parent["metrics"]["rosetta_interface_dg"] == -12.0
-    assert parent["metrics"]["ranking_score"] == 82.0
+    assert parent["metrics"]["ranking_score"] == 0.70
     assert calls[("rosetta", "POST")] == 1
     assert "ranking_score" not in child["metrics"]
     assert digest(runner.files.local(parent["generated_structure"])) == parent["generated_sha256"]
