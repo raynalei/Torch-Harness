@@ -939,7 +939,7 @@ async def test_autonomous_round_preserves_best_budget_and_resume(round_config, f
     result = await InitialRoundRunner(config, transport=transport).run()
     assert (
         result["ranking_policy"]
-        == "100*torchscore_iptm-rosetta_interface_dg_desc,unmeasured_last,iptm_desc,ptm_desc,dockq_desc"
+        == "torchscore_iptm_desc"
     )
     assert result["stop_reason"] == "rules_stop"
     assert result["used_samples"] == result["accepted"] == 2
@@ -1325,7 +1325,7 @@ async def test_torchscore_feedback_uses_registered_scorer_for_ranking_and_resume
     assert result["scoring_backend"] == "torchscore"
     assert (
         result["ranking_policy"]
-        == "100*torchscore_iptm-rosetta_interface_dg_desc,unmeasured_last,iptm_desc,ptm_desc,dockq_desc"
+        == "torchscore_iptm_desc"
     )
     assert result["accepted"] == 2
     assert calls[("af3score", "POST")] == 0
