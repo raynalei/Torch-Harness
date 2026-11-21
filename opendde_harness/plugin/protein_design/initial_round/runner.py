@@ -584,10 +584,7 @@ class InitialRoundRunner:
                 if digest(self.files.local(candidate["rosetta_energy_log"])) != candidate["rosetta_energy_log_sha256"]:
                     raise ValueError("Rosetta residue-energy log changed while resuming")
                 if "rosetta_interface_dg" in candidate["metrics"]:
-                    candidate["metrics"]["ranking_score"] = (
-                        100 * candidate["metrics"][evaluation.score_metric]
-                        - candidate["metrics"]["rosetta_interface_dg"]
-                    )
+                    candidate["metrics"]["ranking_score"] = candidate["metrics"][evaluation.score_metric]
                     return
         elif "rosetta_interface_dg" in candidate["metrics"] and (
             not score_only or candidate.get("rosetta_structure") == "generated"
@@ -661,9 +658,7 @@ class InitialRoundRunner:
             records = [row for path in scores for row in table_records(path)]
         candidate["metrics"]["rosetta_interface_dg"] = measured(records, field)
         if autonomous is not None:
-            candidate["metrics"]["ranking_score"] = (
-                100 * candidate["metrics"][evaluation.score_metric] - candidate["metrics"]["rosetta_interface_dg"]
-            )
+            candidate["metrics"]["ranking_score"] = candidate["metrics"][evaluation.score_metric]
         candidate["rosetta_structure"] = "refold" if refolded else "generated"
         self.save_candidates()
 
@@ -709,12 +704,7 @@ class InitialRoundRunner:
                     candidate["metrics"]["ranking_score"] = ranking
         accepted = sorted(
             (c for c in candidates if c["status"] == "accepted"),
-            key=lambda c: (
-                -c["metrics"]["torchfold_iptm"],
-                -c["metrics"]["design_refold_dockq"],
-                c["metrics"].get("rosetta_interface_dg", 1e300),
-                c["candidate_id"],
-            ),
+            key=lambda c: (-c["metrics"][self.config.evaluation.score_metric], c["candidate_id"]),
         )
         if self.config.autonomous is not None:
             from .autonomous import quality
@@ -733,8 +723,7 @@ class InitialRoundRunner:
             "failed": failed,
             "ranking": [c["candidate_id"] for c in accepted],
             "dockq_reference": "generated_design_pose",
-            "ranking_policy": "refold_iptm_desc,dockq_desc"
-            + (",interface_dg_asc" if self.config.evaluation.rosetta else ""),
+            "ranking_policy": f"{self.config.evaluation.score_metric}_desc",
         }
         scored = sorted(
             (c for c in candidates if c["status"] == "scored_only"),
@@ -748,10 +737,20 @@ class InitialRoundRunner:
         if scored or not self.config.has_design_followup:
             result.update(score_only_count=len(scored), score_only_ranking=[c["candidate_id"] for c in scored])
         if not self.config.has_design_followup:
+            result["score_only_results"] = [
+                {
+                    "candidate_id": c["candidate_id"],
+                    "source": c["source"],
+                    "ranking_score": c["metrics"].get("ranking_score"),
+                    "dG_separated": c["metrics"].get("rosetta_interface_dg"),
+                    "design_refold_dockq": c["metrics"].get("design_refold_dockq"),
+                }
+                for c in scored
+            ]
             result.update(
                 outcome="incomplete" if failed else "scored_only",
                 scoring_backend=self.config.evaluation.scoring_backend,
-                ranking_policy="ranking_score_desc,scorer_iptm_desc,dockq_desc",
+                ranking_policy=f"{self.config.evaluation.score_metric}_desc",
                 stop_reason="binder_score_only",
                 followup_rounds=0,
             )
@@ -759,7 +758,7 @@ class InitialRoundRunner:
             state = self.checkpoint.data["autonomous"]
             result.update(
                 scoring_backend=self.config.evaluation.scoring_backend,
-                ranking_policy=f"100*{self.config.evaluation.score_metric}-rosetta_interface_dg_desc,unmeasured_last,iptm_desc,ptm_desc,dockq_desc",
+                ranking_policy=f"{self.config.evaluation.score_metric}_desc",
                 stop_reason=state.get("stop_reason"),
                 used_samples=state["used_samples"],
                 followup_rounds=len(state["decisions"]),
@@ -821,13 +820,16 @@ class InitialRoundRunner:
                     "torchfold_iptm",
                     "design_refold_dockq",
                     "rosetta_interface_dg",
+                    "dG_separated",
                     *(["rosetta_interface_score", "ranking_score"] if self.config.autonomous is not None else []),
                     "error",
                 ],
             )
             writer.writeheader()
             for c in sorted(candidates, key=lambda c: (c.get("rank", float("inf")), c["candidate_id"])):
-                writer.writerow({k: c.get(k, c["metrics"].get(k)) for k in writer.fieldnames})
+                row = {k: c.get(k, c["metrics"].get(k)) for k in writer.fieldnames}
+                row["dG_separated"] = c["metrics"].get("rosetta_interface_dg")
+                writer.writerow(row)
         self.save_candidates()
         self._summary = result
         return result
