@@ -54,7 +54,7 @@ def test_interface_analyzer_uses_requested_packing_and_returns_dg(monkeypatch, t
     monkeypatch.setitem(sys.modules, "pyrosetta.rosetta.protocols", types.ModuleType("pyrosetta.rosetta.protocols"))
     monkeypatch.setitem(sys.modules, "pyrosetta.rosetta.protocols.analysis", analysis)
     file = tmp_path / "complex.pdb"
-    file.write_text("END\\n")
+    file.write_text("END\n")
     result = evaluate({
         "input_pdb": str(file), "binder_chains": ["B"], "target_chains": ["A"],
         "init_options": "-ignore_zero_occupancy false",
@@ -66,11 +66,3 @@ def test_interface_analyzer_uses_requested_packing_and_returns_dg(monkeypatch, t
     assert calls["pose"] is pose and calls["scorefxn"] is scorefxn
 
 
-def test_reject_nonfinite_interface_energy(monkeypatch, tmp_path):
-    import opendde_harness.plugin.protein_design.initial_round.pyrosetta_interface as module
-
-    def fail(*args, **kwargs):
-        raise ValueError("non-finite")
-
-    with pytest.raises(ValueError, match="non-finite"):
-        raise ValueError("non-finite")
