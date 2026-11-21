@@ -42,6 +42,10 @@ evaluation:
   torchopt_options:
     method: mcmc-ddg
 autonomous:
+  decision_policy: planner
+  planner_layout: two_stage
+  # Shared memory across runs on Lustre, not home/flash.
+  episodic_memory_path: /lustre/project/runs/episodic_memory.jsonl
   min_score: 0.5
   min_refold_score: 0.8
   interface_energy_threshold: -5.0
