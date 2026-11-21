@@ -63,3 +63,14 @@ def test_episode_defaults_to_shared_work_dir(tmp_path):
     runner = _runner(tmp_path / "run_a", tmp_path / "custom.jsonl")
     runner.config.autonomous.episodic_memory_path = None
     assert store_path(runner) == tmp_path / "episodic_memory.jsonl"
+
+
+def test_i_ptm_ranking_is_independent_of_interface_dg():
+    from opendde_harness.plugin.protein_design.initial_round.autonomous import rank_score
+
+    candidate = {"metrics": {"torchscore_iptm": 0.71, "rosetta_interface_dg": -200.0}}
+    assert rank_score(candidate, "torchscore_iptm") == 0.71
+    candidate["metrics"]["rosetta_interface_dg"] = 100.0
+    assert rank_score(candidate, "torchscore_iptm") == 0.71
+    candidate["metrics"].pop("rosetta_interface_dg")
+    assert rank_score(candidate, "torchscore_iptm") == 0.71
