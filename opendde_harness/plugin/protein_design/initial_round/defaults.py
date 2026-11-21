@@ -10,7 +10,7 @@ import yaml
 from ..core.model_requests import TASK_DESIGN_FIELDS, ppiflow_defaults_for_mode, validate_request_defaults
 from .config import InitialRoundConfig
 
-SETTINGS_KEYS = ("workflow_defaults", "design_profiles", "target_adapters", "deployment_config", "public_lookup_url")
+SETTINGS_KEYS = ("workflow_defaults", "design_profiles", "target_adapters", "deployment_config")
 DESIGN_MODES = {"nanobody": "vhh", "antibody": "antibody", "binder": "minibinder"}
 BUILTIN_NATIVE_MODELS = frozenset({"rfd4", "proteinmpnn"})
 
@@ -72,10 +72,6 @@ def workflow_values(value, settings):
 def validate_settings(settings):
     if settings.get("deployment_config") and not Path(settings["deployment_config"]).is_absolute():
         raise ValueError("deployment_config must be an absolute YAML path")
-    if settings.get("public_lookup_url") is not None:
-        from ..scientific_agent.backends.public_lookup import validate_lookup_url
-
-        validate_lookup_url(settings["public_lookup_url"])
     allowed = set(InitialRoundConfig.model_fields) | {"model_aliases"}
     for profile in [settings.get("workflow_defaults", {}), *settings.get("design_profiles", {}).values()]:
         if not isinstance(profile, dict) or set(profile) - allowed:

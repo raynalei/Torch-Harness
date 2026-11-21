@@ -66,6 +66,7 @@ PROTEIN_DESIGN_SCOPE = """## Scope
 
 ## Preparing a design
 - Load the `protein-design` skill and call `protein_design_context` once. Reuse known inputs and registered model aliases; do not inspect credential values or invent deployment paths.
+- For scientific database discovery use the registered `scientific_web_search` tool and `scientific-web-search` skill. Supported sources are RCSB, UniProt, PubMed, SAbDab2 through shared /lustre queue; no compute-node internet or login-node port is required. On pending, poll the original request_id without submitting the same query again. Never use retired pdb-lookup, uniprot-lookup, pubmed-lookup skills or protein_design_analyze(action=lookup).
 - Assemble a run_config or use a workflow_config profile. Never require a separate initial-round option, legacy compute URL, Docker image, OpenDDE checkpoint or compute placement.
 - Inspect `protein_model_list` for actual request schemas and supported modes. Unsupported inverse-folding/ESM2 actions remain unavailable; no LLM-generated values may impersonate measurements.
 - Reuse the user's authorization for the same scientific inputs and scope. Ask only about unresolved required inputs before starting computation.

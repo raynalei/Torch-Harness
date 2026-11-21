@@ -20,7 +20,7 @@ from ..initial_round.defaults import load_deployment_defaults
 from ..initial_round.task_inputs import DesignTask, prepare_design_task
 from ..scientific_agent.backends.analysis import analyze_evolution, analyze_structure, apply_mutations, rank_candidates
 from ..scientific_agent.backends.developability import assess_developability
-from ..scientific_agent.backends.public_lookup import lookup_via_api, public_lookup_url
+from ..scientific_agent.backends.web_search_queue import queue_root
 
 
 def prepare_workflow(value, *, registrations=None, pdb_path=None, name=None, plugin_config=None):
@@ -37,9 +37,7 @@ def prepare_workflow(value, *, registrations=None, pdb_path=None, name=None, plu
 
 class EvidenceRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
-    action: Literal["developability", "structure", "epitope", "evolution", "mutations", "rank", "lookup"]
-    source: Literal["pdb", "uniprot", "pubmed"] | None = None
-    identifier: str | None = None
+    action: Literal["developability", "structure", "epitope", "evolution", "mutations", "rank"]
     sequences: dict[str, str] = Field(default_factory=dict)
     structure_path: Path | None = None
     binder_chains: list[str] = Field(default_factory=list)
@@ -50,11 +48,7 @@ class EvidenceRequest(BaseModel):
     fixed_positions: dict[str, list[int]] = Field(default_factory=dict)
 
 
-def evidence(request: EvidenceRequest, *, lookup_url=None):
-    if request.action == "lookup":
-        if request.source is None or request.identifier is None:
-            raise ValueError("source and identifier are required")
-        return lookup_via_api(request.source, request.identifier, base_url=lookup_url)
+def evidence(request: EvidenceRequest):
     if request.action == "rank":
         return rank_candidates(request.candidates)
     if request.action == "developability":
@@ -86,10 +80,7 @@ class AnalysisTool(Tool):
     async def execute(self, **kwargs):
         try:
             request = EvidenceRequest.model_validate(kwargs)
-            lookup_url = (
-                public_lookup_url(load_deployment_defaults(self.config)) if request.action == "lookup" else None
-            )
-            result = await asyncio.to_thread(evidence, request, lookup_url=lookup_url)
+            result = await asyncio.to_thread(evidence, request)
             return ToolResult(json.dumps(result, allow_nan=False), "Native scientific evidence", retryable=False)
         except Exception as exc:
             return ToolResult(json.dumps({"error": str(exc)}), "Evidence computation failed", retryable=False)
@@ -187,7 +178,8 @@ class WorkflowTool(Tool):
                         for key, value in deployment.get("model_services", {}).items()
                     ],
                     "model_skills": MODEL_SKILLS,
-                    "public_lookup_configured": public_lookup_url(deployment) is not None,
+                    "web_search_queue_root": str(queue_root()),
+                    "web_search_tool": "scientific_web_search",
                     "workflow_config": self.config.get("workflow_config"),
                     "workflow_defaults_configured": bool(deployment.get("workflow_defaults")),
                     "design_profiles": sorted(deployment.get("design_profiles", {})),
@@ -206,7 +198,6 @@ class WorkflowTool(Tool):
                         "evolution",
                         "mutations",
                         "rank",
-                        "lookup",
                     ],
                     "unavailable": {
                         "EpiMatrix": "licensed adapter not configured",

@@ -87,6 +87,10 @@ name = "protein_design_list"
 factory = "opendde_harness.plugin.protein_design.tools.workflow:make_list_tool"
 
 [[plugin.contributes.tools]]
+name = "scientific_web_search"
+factory = "opendde_harness.plugin.protein_design.tools.web_search:make_web_search_tool"
+
+[[plugin.contributes.tools]]
 name = "protein_design_analyze"
 factory = "opendde_harness.plugin.protein_design.tools.workflow:make_analysis_tool"
 

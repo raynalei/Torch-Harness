@@ -108,7 +108,10 @@ Use `protein_design_analyze` with one of these actions:
 - `evolution`: recorded parent/child lineage; no invented ancestry.
 - `mutations`: apply validated one-based substitutions while preserving fixed points.
 - `rank`: list complete measured confidence tuples without changing acceptance.
-- `lookup`: read public PDB/UniProt/PubMed metadata by validated identifier.
+For RCSB, UniProt, PubMed or SAbDab2 searches use the registered
+`scientific_web_search` tool. It exchanges JSON through `/lustre` with a
+separate internet-enabled worker; it does not call port 8100 or the internet
+from compute nodes. Read `scientific-web-search` for submission/recovery.
 
 These are backed by scientific_agent/backends, not a remote OpenDDE compute API.
 Missing evidence stays unavailable, never fabricated by the LLM. EpiMatrix is a

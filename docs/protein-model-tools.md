@@ -407,7 +407,9 @@ The model skills are `ppiflow-design`, `torchcraft-design`,
 `proteinmpnn-design`. In the autonomous workflow Qwen receives optimization
 guidance for options present in its executable menu.
 
-The PDB, UniProt and PubMed skills use the
-[login-node public lookup API](../deploy/public_lookup/README.md) on port 8100.
-Configure its internal hostname for Harness when compute nodes lack external
-network access.
+Scientific literature and protein database discovery now uses
+`scientific_web_search` and the `scientific-web-search` skill, backed by a
+shared `/lustre` request/results queue for RCSB, UniProt, PubMed, SAbDab2.
+See [queue deployment](../deploy/scientific_web_search/README.md). The old
+`pdb-lookup`, `uniprot-lookup`, `pubmed-lookup` skills and `lookup` evidence
+action are no longer registered; port 8100 is not required.

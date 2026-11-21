@@ -54,19 +54,9 @@ async def test_context_reports_capabilities_without_leaking_credentials():
     assert "old.invalid" not in result.model_text
 
 
-async def test_analysis_lookup_uses_configured_login_node(monkeypatch):
-    monkeypatch.delenv("TORCH_HARNESS_PUBLIC_LOOKUP_URL", raising=False)
-    lookup = "http://login.test:8100"
-
-    def invoke(source, identifier, *, base_url):
-        assert (source, identifier, base_url) == ("pubmed", "123", lookup)
-        return {"available": True, "data": {"id": identifier}}
-
-    monkeypatch.setattr("opendde_harness.plugin.protein_design.tools.workflow.lookup_via_api", invoke)
-    result = await AnalysisTool({"public_lookup_url": lookup}).execute(
-        action="lookup", source="pubmed", identifier="123"
-    )
-    assert json.loads(result.model_text)["data"] == {"id": "123"}
+async def test_retired_lookup_is_no_longer_in_analysis_tool():
+    schema = AnalysisTool().parameters
+    assert "lookup" not in schema["properties"]["action"]["enum"]
 
 
 async def test_analysis_never_substitutes_unknown_immunogenicity():

@@ -44,9 +44,7 @@ BUILTIN_PROTEIN_DESIGN_SKILLS = (
     "structure-analysis",
     "developability-filter",
     "post-filter",
-    "pdb-lookup",
-    "uniprot-lookup",
-    "pubmed-lookup",
+    "scientific-web-search",
     "rfd4-input-conversion",
     *MODEL_SKILLS.values(),
 )
@@ -64,9 +62,7 @@ _REQUIRED_FILES: dict[str, tuple[str, ...]] = {
     "structure-analysis": ("SKILL.md",),
     "developability-filter": ("SKILL.md",),
     "post-filter": ("SKILL.md",),
-    "pdb-lookup": ("SKILL.md",),
-    "uniprot-lookup": ("SKILL.md",),
-    "pubmed-lookup": ("SKILL.md",),
+    "scientific-web-search": ("SKILL.md",),
     "rfd4-input-conversion": ("SKILL.md", "scripts/convert_rfd4_inputs.py"),
     **dict.fromkeys(MODEL_SKILLS.values(), ("SKILL.md",)),
 }
