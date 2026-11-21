@@ -138,9 +138,8 @@ class InitialRoundRunner:
         configs.update(
             {
                 name: getattr(self.config.evaluation, name)
-                for name in (self.config.evaluation.scoring_backend, "torchfold", "rosetta", "torchopt")
+                for name in (self.config.evaluation.scoring_backend, "torchfold", "torchopt")
                 if getattr(self.config.evaluation, name) is not None
-                and (name != "rosetta" or not self.config.has_design_followup)
             }
         )
         if not self.config.has_design_followup:
@@ -148,7 +147,7 @@ class InitialRoundRunner:
                 name: config
                 for name, config in configs.items()
                 if name in self.config.generators
-                or name in {self.config.evaluation.scoring_backend, "rosetta", "torchfold"}
+                or name in {self.config.evaluation.scoring_backend, "torchfold"}
             }
         result = {}
         for name, config in configs.items():
@@ -511,82 +510,70 @@ class InitialRoundRunner:
         self.save_candidates()
 
     async def score_interface(self, candidate):
-        evaluation = self.config.evaluation
-        generator = self.config.generators[candidate["source"]]
-        score_only = generator.score_only
-        autonomous = self.config.autonomous if not score_only else None
-        if autonomous is not None:
+        """Use local PyRosetta InterfaceAnalyzer for binder dG_separated.
+
+        Autonomous antibody/nanobody designs instead use ResResE RosettaFix for
+        Partial Flow. Neither metric participates in iPTM ranking.
+        """
+        if not self.config.generators[candidate["source"]].score_only:
             if "interface_fixed_positions" in candidate:
-                if digest(self.files.local(candidate["rosetta_energy_log"])) != candidate["rosetta_energy_log_sha256"]:
-                    raise ValueError("Rosetta residue-energy log changed while resuming")
+                snapshot = self.files.local(candidate["rosetta_energy_log"])
+                if digest(snapshot) != candidate["rosetta_energy_log_sha256"]:
+                    raise ValueError("RosettaFix residue-energy log changed while resuming")
                 if "rosetta_interface_score" in candidate["metrics"]:
                     return
             await self.score_rosetta_fix(candidate)
             return
-        if evaluation.rosetta is None:
+
+        if candidate.get("rosetta_structure") == "generated" and "rosetta_interface_dg" in candidate["metrics"]:
             return
-        if "rosetta_interface_dg" in candidate["metrics"] and candidate.get("rosetta_structure") == "generated":
-            return
-        key = candidate["candidate_id"]
-        directory = self.root / key
+
+        cfg = self.config.evaluation.rosetta_fix
+        if cfg is None:
+            raise ValueError("evaluation.rosetta_fix must specify the PyRosetta environment")
+        generator = self.config.generators[candidate["source"]]
+        if any(len(c) != 1 for c in generator.chains.target + generator.chains.binder):
+            raise ValueError("PyRosetta InterfaceAnalyzer requires single-character chain IDs")
+        directory = self.root / candidate["candidate_id"]
         model = directory / "generated-interface.pdb"
         write_pdb(self.files.local(candidate["generated_structure"]), model)
-        if any(len(c) != 1 for c in generator.chains.target + generator.chains.binder):
-            raise ValueError("Rosetta chain groups require single-character chain IDs")
-        result = await self.job(
-            "rosetta",
-            f"interface/{key}" if not score_only else f"binder-interface/{key}",
-            "/v1/tools/interface_analyze",
-            "task_id",
-            {
-                **evaluation.rosetta_options,
-                "input_pdb": self.files.remote(model),
-                "chain_group_a": "".join(generator.chains.binder),
-                "chain_group_b": "".join(generator.chains.target),
-            },
+        request_path = directory / "pyrosetta-interface-request.json"
+        result_path = directory / "pyrosetta-interface-result.json"
+        log_path = directory / "pyrosetta-interface.log"
+        options = self.config.evaluation.rosetta_options
+        write_json(request_path, {
+            "input_pdb": str(model),
+            "binder_chains": generator.chains.binder,
+            "target_chains": generator.chains.target,
+            "init_options": cfg.init_options,
+            "pack_input": options.get("pack_input", False),
+            "pack_separated": options.get("pack_separated", True),
+            "result_path": str(result_path),
+        })
+        process = await asyncio.create_subprocess_exec(
+            str(cfg.python),
+            str(Path(__file__).with_name("pyrosetta_interface.py")),
+            str(request_path),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
         )
-        field = evaluation.rosetta.metric_fields.get("interface_dg", "dG_separated")
-        records = metric_records(result, evaluation.rosetta)
-        if not any(select(row, field) is not None for row in records):
-            scores = [
-                p
-                for p in output_files(result, evaluation.rosetta, self.files)
-                if p.match(evaluation.rosetta_scores_glob)
-            ]
-            records = [row for path in scores for row in table_records(path)]
-        candidate["metrics"]["rosetta_interface_dg"] = measured(records, field)
-        if autonomous is not None:
-            from .interface_energy import interface_energies
-
-            logs = [
-                p
-                for p in output_files(result, evaluation.rosetta, self.files)
-                if p.match(evaluation.rosetta_residue_glob)
-            ]
-            if len(logs) != 1:
-                raise ValueError("Rosetta must return exactly one ResResE log matching evaluation.rosetta_residue_glob")
-            energies = interface_energies(logs[0], model, generator.chains, autonomous.interface_distance)
-            candidate["rosetta_structure"] = "generated"
-            snapshot = directory / "rosetta-residue-energy.out"
-            if snapshot.exists() and digest(snapshot) != digest(logs[0]):
-                raise ValueError("Rosetta residue-energy output changed while resuming")
-            if not snapshot.exists():
-                shutil.copy2(logs[0], snapshot)
-            candidate["rosetta_energy_log"] = self.files.remote(snapshot)
-            candidate["rosetta_energy_log_sha256"] = digest(snapshot)
-            candidate["interface_residue_energies"] = energies
-            candidate["interface_fixed_positions"] = {
-                chain: sorted(
-                    int(residue) for residue, energy in scores.items() if energy < autonomous.interface_energy_threshold
-                )
-                for chain, scores in energies.items()
-            }
-            candidate["metrics"]["rosetta_interface_score"] = sum(
-                energy for scores in energies.values() for energy in scores.values()
+        try:
+            stdout, _ = await asyncio.wait_for(process.communicate(), cfg.timeout)
+        except BaseException:
+            if process.returncode is None:
+                process.kill()
+            await process.wait()
+            raise
+        log_path.write_bytes(stdout)
+        if process.returncode:
+            raise RuntimeError(
+                f"PyRosetta InterfaceAnalyzer failed (exit {process.returncode}); see {log_path}"
             )
-            write_json(directory / "interface-residue-energies.json", energies)
-            self.save_candidates()
-            return
+        result = json.loads(result_path.read_text())
+        dg = result["dG_separated"]
+        if type(dg) not in (int, float) or not __import__("math").isfinite(dg):
+            raise ValueError("PyRosetta returned non-finite dG_separated")
+        candidate["metrics"]["rosetta_interface_dg"] = float(dg)
         candidate["rosetta_structure"] = "generated"
         self.save_candidates()
 
