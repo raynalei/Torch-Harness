@@ -1,10 +1,7 @@
-"""PyRosetta implementation of PPIFlow's RosettaFix protocol, without Rosetta CLI/API.
+"""Run PPIFlow's RosettaFix XML with PyRosetta and parse Rosetta's own ResResE.
 
-Reuses PPIFlow native.xml: dynamic residue neighborhood, antibody MoveMap,
-FastRelax and ScoreCutoffFilter. Reports *weighted EnergyGraph* negative
-cross-chain pair scores in the original-input CB/CA contact neighborhood.
-EnergyGraph pair totals should be compared with upstream ResResE scores before
-using the same numerical threshold as a calibrated scientific cut-off.
+Use ScoreCutoffFilter.output_residue_pair_energies to capture the native energy
+table without launching the RosettaScripts CLI or rebuilding EnergyGraph scores.
 """
 
 from __future__ import annotations
@@ -98,33 +95,79 @@ def configured_xml(path: Path, normalized: Path, antibody: bool) -> str:
     return text
 
 
-def weighted_interface_energy(pose, scorefxn, contacts: set[tuple[int, int]], binder: str, target: str) -> dict[str, float]:
-    """Sum negative weighted pair terms for inter-chain contacts in the EnergyGraph."""
-    scorefxn(pose)  # Populate the EnergyGraph after relaxation.
-    graph = pose.energies().energy_graph()
-    info = pose.pdb_info()
-    lookup: dict[tuple[str, int], int] = {}
-    for index in range(1, pose.total_residue() + 1):
-        key = (info.chain(index), info.number(index))
-        if key in lookup:
-            raise ValueError(f"Ambiguous Rosetta PDB residue identifier: {key}")
-        lookup[key] = index
-    energies: dict[str, float] = {}
-    weights = scorefxn.weights()
-    for bnum, tnum in sorted(contacts):
-        bi = lookup.get((binder, bnum))
-        ti = lookup.get((target, tnum))
-        if bi is None or ti is None:
-            raise ValueError(f"Rosetta relaxation lost contact residue {binder}{bnum}/{target}{tnum}")
-        edge = graph.find_energy_edge(bi, ti)
-        if edge is None:
+def parse_resres_e(log: Path) -> dict[tuple[tuple[str, int], tuple[str, int]], float]:
+    """Parse official ScoreCutoffFilter ResResE rows; reject missing/malformed data.
+
+    Residue IDs use the same ASCII chain-prefix encoding as upstream PPIFlow:
+    e.g. ALA_651 for chain A residue 1. Sum only negative interchain energies.
+    """
+    rows: dict[tuple[tuple[str, int], tuple[str, int]], float] = {}
+    header = None
+    for line in log.read_text().splitlines():
+        if not line.startswith("ResResE"):
             continue
-        value = float(edge.dot(weights))
-        if not math.isfinite(value):
-            raise ValueError("Nonfinite Rosetta weighted residue-pair energy")
-        if value < 0:
-            energies[str(bnum)] = energies.get(str(bnum), 0.0) + value
-    return energies
+        parts = line.split()
+        if {"Res1", "Res2", "total"} <= set(parts):
+            if header is not None and parts != header:
+                raise ValueError("Inconsistent ResResE column headers")
+            header = parts
+            continue
+        if header is None:
+            raise ValueError("ResResE data before header")
+        if all(set(token) <= {"-", "="} for token in parts[1:]):
+            continue
+        if len(parts) != len(header):
+            raise ValueError("Malformed ResResE row")
+        fields = dict(zip(header, parts))
+        def residue(value: str) -> tuple[str, int]:
+            match = re.fullmatch(r"[^_]+_([0-9]{2})(-?[0-9]+)", value)
+            if match is None or not 65 <= int(match[1]) <= 90:
+                raise ValueError(f"Unsupported Rosetta ResResE residue: {value}")
+            return chr(int(match[1])), int(match[2])
+        first, second = residue(fields["Res1"]), residue(fields["Res2"])
+        energy = float(fields["total"])
+        if not math.isfinite(energy):
+            raise ValueError("Nonfinite ResResE energy")
+        key = tuple(sorted((first, second)))
+        if key in rows and rows[key] != energy:
+            raise ValueError("Conflicting duplicate ResResE energies")
+        rows[key] = energy
+    if header is None or not rows:
+        raise ValueError(f"RosettaFix produced no ResResE table: {log}")
+    return rows
+
+
+def interface_energies_from_resres_e(
+    rows: dict[tuple[tuple[str, int], tuple[str, int]], float],
+    contacts: set[tuple[int, int]],
+    binder: str,
+    target: str,
+) -> dict[str, float]:
+    """Match PPIFlow: sum favorable binder/target ResResE contacts at CB/CA cutoff."""
+    result: dict[str, float] = {}
+    for bnum, tnum in sorted(contacts):
+        key = tuple(sorted(((binder, bnum), (target, tnum))))
+        energy = rows.get(key)
+        if energy is not None and energy < 0:
+            result[str(bnum)] = result.get(str(bnum), 0.0) + energy
+    return result
+
+
+def capture_resres_e(xml_objects, pose, destination: Path, stream_factory):
+    """Invoke the original XML ScoreCutoffFilter exporter into a C++ ostringstream."""
+    score_filter = xml_objects.get_filter("scofilter")
+    if not hasattr(score_filter, "output_residue_pair_energies"):
+        raise TypeError(
+            "PyRosetta binding did not expose ScoreCutoffFilter.output_residue_pair_energies; "
+            "check the installed PyRosetta version"
+        )
+    stream = stream_factory()
+    score_filter.output_residue_pair_energies(stream, pose)
+    result = stream.str()
+    if not any(line.startswith("ResResE") for line in result.splitlines()):
+        raise ValueError("ScoreCutoffFilter emitted no ResResE rows")
+    destination.write_text(result)
+    return destination
 
 
 def execute(request: dict) -> dict:
@@ -145,34 +188,32 @@ def execute(request: dict) -> dict:
 
     pyrosetta.init(request.get("init_options", "-ignore_zero_occupancy false"))
     pose = pyrosetta.pose_from_pdb(str(normalized))
-    protocol = XmlObjects.create_from_string(updated_xml.read_text()).get_mover("ParsedProtocol")
+    xml_objects = XmlObjects.create_from_string(updated_xml.read_text())
+    protocol = xml_objects.get_mover("ParsedProtocol")
     protocol.apply(pose)
     relaxed = output / "relaxed.pdb"
     pose.dump_pdb(str(relaxed))
-    scorefxn = pyrosetta.get_fa_scorefxn()
-    # Note: the XML may use another score function. The official XML currently
-    # does not specify a score function; compare numerical scores before production.
+    # Use the exact ScoreCutoffFilter from the upstream XML to report ResResE;
+    # do not synthesize its score via a separate scoring function.
+    resres_e = capture_resres_e(
+        xml_objects, pose, output / "residue-pair-energies.out",
+        pyrosetta.rosetta.std.ostringstream,
+    )
+    rows = parse_resres_e(resres_e)
     residue_energies = {}
     threshold = float(request["interface_dist"])
     for original in binder:
         b = mapping[original]
         t = mapping[target[0]]
         contacts = original_contacts(normalized, b, t, threshold)
-        residue_energies[original] = weighted_interface_energy(pose, scorefxn, contacts, b, t)
+        residue_energies[original] = interface_energies_from_resres_e(rows, contacts, b, t)
 
-    # Store explicit provenance rather than masquerading as a Rosetta CLI ResResE log.
-    energy_path = output / "pair-energy.json"
-    energy_path.write_text(json.dumps({
-        "method": "pyrosetta_weighted_energy_graph",
-        "normalized_chains": mapping,
-        "interface_dist": threshold,
-        "interface_residue_energies": residue_energies,
-        "relaxed_structure": str(relaxed),
-    }, indent=2, allow_nan=False) + "\n")
     return {
         "interface_residue_energies": residue_energies,
-        "energy_log": str(energy_path),
+        "energy_log": str(resres_e),
+        "energy_method": "pyrosetta_scorecutoff_resres_e",
         "normalized_chains": mapping,
+        "relaxed_structure": str(relaxed),
     }
 
 
