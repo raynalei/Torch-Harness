@@ -374,31 +374,41 @@ Torch Optimization is separately registered as `torchopt`, not an automatic scor
 or refold step; see [its action protocol](protein-model-tools.md#torch-optimization-structure-optimization).
 
 
-### Local PPIFlow RosettaFix for antibody and nanobody (prototype)
+### PyRosetta-backed RosettaFix for antibody and nanobody (prototype)
 
-Antibody/nanobody follow-up routes do **not** call the Rosetta HTTP API.
-They use upstream PPIFlow's `steps/rosetta_fix_step.py` and `native.xml` on
-the worker host to perform local FastRelax and compute `ResResE` interface
-residue energies, followed by the existing Python fixed-position selection.
-Configure absolute paths in the task YAML:
+Antibody/nanobody repair routes do **not** call the Rosetta HTTP API.
+The detached worker launches `rosetta_fix_native.py` in the configured
+PyRosetta Python environment. It loads the **official PPIFlow native.xml**,
+replaces the per-complex residue selector and antibody MoveMap, and runs
+FastRelax / ScoreCutoffFilter through PyRosetta's RosettaScripts XML parser.
+Heavy and Light are scored against the target separately. Fixed positions
+are passed to PPIFlow `partial_antibody` / `partial_nanobody`.
 
 ```yaml
 evaluation:
   rosetta_fix:
-    source_dir: /lustre/grp/cmclab/leiy/PPIFlow
-    rosetta_bin: /path/to/rosetta_scripts.default.linuxgccrelease
     native_xml: /lustre/grp/cmclab/leiy/PPIFlow/steps/rosetta/native.xml
-    python: /lustre/grp/cmclab/leiy/conda_envs/ppi_env/bin/python
+    python: /lustre/grp/cmclab/leiy/conda_envs/pyrosetta/bin/python
+    init_options: "-ignore_zero_occupancy false"
     interface_dist: 12.0
     timeout: 7200
 ```
 
-Replace the example paths with actual cluster paths. Native RosettaFix runs
-on the detached worker's host and consumes CPU; launch workers on an authorized
-compute allocation, not a shared login node. The upstream Rosetta executable
-and XML are required. This is not an HTTP service.
+PyRosetta and its Rosetta database must be installed/accessible from the
+configured Python interpreter. The **rosetta_scripts executable is not
+needed** for autonomous antibody/nanobody RosettaFix. The original input
+structure is not modified. The generated local `update.xml`,
+`relaxed.pdb`, and `pair-energy.json` provide provenance.
 
-Binder score-only routes retain their existing Rosetta interface HTTP API.
-All routes now rank candidates by the selected scorer's **raw iPTM** (0–1);
-Rosetta energy no longer contributes to `ranking_score`. For autonomous
-routes, RosettaFix runs only if the staged decision requests interface repair.
+**Scientific caveat:** this adapter computes negative weighted interchain
+EnergyGraph pair energies on the relaxed pose for pairs contacting in the
+original input PDB (CB/CA cutoff). The official PPIFlow script parses
+`ResResE` stdout. EnergyGraph totals are not guaranteed identical to
+`ResResE` (e.g. long-range contributions and scoring weights). Validate
+the numeric scale and the fixed-residue threshold on representative complexes
+before scientific production. EnergyGraph is not an experimentally calibrated
+binding energy.
+
+Binder score-only routes still use the Rosetta interface HTTP API.
+All routes rank candidates by the selected scorer's raw iPTM (0–1), and
+Rosetta energy is not part of the ranking score.
