@@ -215,4 +215,7 @@ async def run_two_stage(runner):
         decision.pop("execution_error", None)
         decision["state"] = "completed"
         runner.save_candidates()
+        from .episodic_memory import record_decision
+
+        record_decision(runner, decision)
     write_json(runner.root / "decisions.json", state)
