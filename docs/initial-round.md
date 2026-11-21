@@ -109,8 +109,8 @@ Each service can configure dotted `status_field`, `exit_code_field`,
 `files_field`, `metrics_field` and `metric_fields` paths. For example,
 `status_field: slurm.state` and `metrics_field: rows`.
 
-- Submission IDs: PPIFlow/TorchCraft `design_id`, AF3Score/Rosetta `task_id`,
-  TorchFold `fold_id`. Rosetta POSTs to `/v1/tools/interface_analyze` but polls
+- Submission IDs: PPIFlow/TorchCraft `design_id`, AF3Score/binder-Rosetta `task_id`,
+  TorchFold `fold_id`. Binder-only Rosetta POSTs to `/v1/tools/interface_analyze` but polls
   `/v1/tasks/{id}`; the other status URLs follow their submission collections.
 - Default status: `{"status":"COMPLETED","exit_code":"0:0"}`. `UNKNOWN`, queue
   and running states continue polling. Failed Slurm states and nonzero exit codes
@@ -161,15 +161,12 @@ checked before comparing structures. DockQ evaluates only target/binder
 interfaces, excluding intrabinder interfaces, using the generated pose as the
 reference; the minimum scored target/binder interface DockQ is retained. This is
 **design/refold consistency**, not agreement with an experimental structure.
-Rosetta `dG_separated` is an energy score, not measured affinity.
-Every ranked candidate now requires a measured Rosetta interface result, including
-high-confidence candidates routed directly to TorchFold. The ranking objective is
-`ranking_score = 100 * selected_scorer_iptm - rosetta_interface_dg`, where
-`rosetta_interface_dg` is InterfaceAnalyzer's `dG_separated`. No missing energy
-is replaced with zero. The per-residue `rosetta_interface_score` used for repair
-planning is a different measurement and is not used in this formula.
-This uncalibrated composite combines confidence and Rosetta energy scales; do not
-interpret it as a physical binding affinity or compare against older saved rankings.
+Rosetta `dG_separated` is an energy score, not measured affinity. Binder
+score-only candidates still call the existing Rosetta interface HTTP API to
+record this metric, but final ranking is strictly the selected scorer's
+**raw iPTM** (0–1). Antibody/nanobody candidates use the official local
+PPIFlow RosettaFix for *repair planning* when the staged policy requests
+interface residue analysis; the energy does not enter ranking.
 
 For binder, successfully scored complexes enter `score_only_ranking`. For antibody
 and nanobody, candidate acceptance and ranking follow the
@@ -264,7 +261,7 @@ generators:
 ```
 
 Configure the equivalent block under `evaluation.af3score`, `evaluation.torchfold`
-and optional `evaluation.rosetta`, or `generators.torchcraft`. The supported initial-round deployment example uses `sbatch_script` for every API.
+and optional binder-only `evaluation.rosetta`, or `generators.torchcraft`. The supported initial-round deployment example uses `sbatch_script` for every API.
 Registry services without an existing sbatch script fail before any HTTP request.
 Scripts and state files are absolute paths on the Harness host, not paths
 translated by `path_mappings`. Scripts must exist; their log directories, Conda
@@ -363,7 +360,7 @@ evaluation:
     num_workers: 4
     seed: 10
     write_fold_input_json_file: false
-  # Retain your configured torchfold, rosetta and dockq_python fields.
+  # Retain torchfold and dockq_python; autonomous routes use evaluation.rosetta_fix.
 ```
 
 This is a fragment to merge with an existing valid workflow. The selected scorer's
