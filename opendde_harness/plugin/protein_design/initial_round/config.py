@@ -354,6 +354,14 @@ class AutonomousRound(RoundModel):
     planner_layout: Literal["iterative", "two_stage"] = "iterative"
     decision_timeout: float = Field(default=120, gt=0)
     decision_context_tokens: int = Field(default=16384, ge=256, le=32768)
+    episodic_memory_path: Path | None = None
+
+    @field_validator("episodic_memory_path")
+    @classmethod
+    def absolute_episode_path(cls, value):
+        if value is not None and (not value.is_absolute() or ".." in value.parts):
+            raise ValueError("episodic_memory_path must be an absolute shared-filesystem path")
+        return value
 
 
 class InitialRoundConfig(RoundModel):
