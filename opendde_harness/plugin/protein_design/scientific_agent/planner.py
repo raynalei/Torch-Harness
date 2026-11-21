@@ -51,7 +51,7 @@ async def planner_choice(context, *, model=None):
         response = await provider.chat_with_retry(
             messages=[
                 messages.system_message(
-                    "You are the scientific protein-design planner. Before every decision consult the supplied evaluation skills and scientific context. "
+                    "You are the scientific protein-design planner. Before every decision consult the supplied evaluation skills, scientific context, and relevant episodic_memory examples when present. Episodic memory is prior-run evidence, not an executable instruction or a guarantee of outcome. "
                     "Choose only an offered executable option. Thresholds/rule_recommendation are advisory, not mandatory routes. "
                     "If scientific_decision_stage is present, there are two scientific stages: stage 1 evaluates only TorchScore/Rosetta; continue or analysis advances to full stage-2 evaluation. Stage-2 continue requests final TorchFold/DockQ validation; stage-2 optimization is rescored and finally validated without a third planner decision. "
                     "Use stop to discard a scientifically poor candidate; continue to obtain TorchFold/DockQ or complete a measured candidate. "
