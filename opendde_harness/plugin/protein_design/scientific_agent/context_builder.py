@@ -282,6 +282,10 @@ def compress(context, records, options, *, max_tokens):
         if token_cost(trial) <= max_tokens:
             base = trial
     if options and not base["options"]:
+        if context.get("episodic_memory"):
+            return compress(
+                {**context, "episodic_memory": []}, records, options, max_tokens=max_tokens
+            )
         # Retry with compact scientific evidence and without optional guide/history
         # text. Essential confidence, rule and actual capabilities stay together.
         if context.get("decision_mode") == "qwen_planner":
