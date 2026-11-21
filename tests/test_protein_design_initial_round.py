@@ -121,7 +121,7 @@ def round_config(tmp_path):
                 "torchscore": service("torchscore"),
                 "torchfold": service("torchfold"),
                 "rosetta": service("rosetta"),
-                "rosetta_fix": {"source_dir": str(tmp_path), "rosetta_bin": str(tmp_path / "rosetta_scripts")},
+                "rosetta_fix": {"native_xml": str(tmp_path / "native.xml"), "python": sys.executable},
                 "dockq_python": sys.executable,
             },
         }
