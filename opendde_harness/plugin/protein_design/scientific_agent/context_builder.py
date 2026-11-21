@@ -14,6 +14,7 @@ from pathlib import Path
 
 from ..agents.skills import MODEL_SKILLS
 from ..initial_round.policy import candidate_stage, rule_actions
+from .episodic_memory import retrieve as retrieve_episodes
 
 REFERENCES = Path(__file__).resolve().parents[1] / "skills" / "protein-design" / "references"
 OPTIMIZATION_SKILL_KINDS = {
@@ -566,10 +567,7 @@ def context_for_runner(runner, options, index, *, evaluation_stage=None):
         },
         constraints=constraints,
         history=runner.checkpoint.data["autonomous"]["decisions"],
-        episodic_memory=__import__(
-            "opendde_harness.plugin.protein_design.scientific_agent.episodic_memory",
-            fromlist=["retrieve"],
-        ).retrieve(runner, options),
+        episodic_memory=retrieve_episodes(runner, options),
         unavailable={} if config.evaluation.torchopt else {"torchopt": "no registered optimization service"},
         max_tokens=config.autonomous.decision_context_tokens,
         planner=config.autonomous.decision_policy == "planner",
