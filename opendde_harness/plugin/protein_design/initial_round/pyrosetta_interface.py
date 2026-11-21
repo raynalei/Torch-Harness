@@ -21,15 +21,46 @@ def interface_spec(binder_chains: list[str], target_chains: list[str]) -> str:
     return "".join(binder_chains) + "_" + "".join(target_chains)
 
 
-def evaluate(request: dict) -> dict:
-    import pyrosetta
+
+def make_interface_analyzer(pyrosetta, spec: str):
+    """Create InterfaceAnalyzerMover across PyRosetta 4 binding versions.
+
+    Older bindings reject string constructors and string set_interface.
+    Use core.pose.DockingPartners explicitly when available; never substitute
+    a default jump number, which may score the wrong interface.
+    """
     from pyrosetta.rosetta.protocols.analysis import InterfaceAnalyzerMover
 
+    partners_type = getattr(pyrosetta.rosetta.core.pose, "DockingPartners", None)
+    errors = []
+    iam = InterfaceAnalyzerMover()
+    if partners_type is not None:
+        try:
+            partners = partners_type.docking_partners_from_string(spec)
+            iam.set_interface(partners)
+            return iam
+        except (TypeError, AttributeError, ValueError) as exc:
+            errors.append(f"DockingPartners: {exc}")
+    # Recent PyRosetta builds offer a convenience string setter, but PyRosetta
+    # 4 (2026.29) may expose only the DockingPartners overload.
+    try:
+        iam.set_interface(spec)
+        return iam
+    except (TypeError, AttributeError, ValueError) as exc:
+        errors.append(f"string setter: {exc}")
+    raise RuntimeError(
+        f"PyRosetta InterfaceAnalyzer cannot configure interface {spec!r}; "
+        + "; ".join(errors)
+    )
+
+
+def evaluate(request: dict) -> dict:
+    import pyrosetta
     source = Path(request["input_pdb"]).resolve(strict=True)
     pyrosetta.init(request.get("init_options", "-ignore_zero_occupancy false"))
     pose = pyrosetta.pose_from_pdb(str(source))
     spec = interface_spec(request["binder_chains"], request["target_chains"])
-    iam = InterfaceAnalyzerMover(spec)
+    iam = make_interface_analyzer(pyrosetta, spec)
     iam.set_scorefunction(pyrosetta.get_fa_scorefxn())
     iam.set_pack_input(bool(request.get("pack_input", False)))
     iam.set_pack_separated(bool(request.get("pack_separated", True)))
