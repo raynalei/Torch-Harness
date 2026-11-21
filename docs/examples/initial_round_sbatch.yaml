@@ -62,10 +62,9 @@ evaluation:
     startup_timeout: 1800
     startup_poll_interval: 5
   rosetta_fix:
-    source_dir: /shared/project/PPIFlow
-    rosetta_bin: /shared/project/rosetta/rosetta_scripts.default.linuxgccrelease
     native_xml: /shared/project/PPIFlow/steps/rosetta/native.xml
-    python: /shared/project/envs/ppiflow/bin/python
+    python: /shared/project/envs/pyrosetta/bin/python
+    init_options: "-ignore_zero_occupancy false"
     interface_dist: 12.0
     timeout: 7200
   torchfold_options:
