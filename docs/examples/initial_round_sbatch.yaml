@@ -79,15 +79,12 @@ evaluation:
     startup_timeout: 1800
     startup_poll_interval: 5
   rosetta:
-    url: http://slurm-api.invalid:8050
-    metrics_field: metrics
-    metric_fields:
-      interface_dg: dG_separated
-    sbatch_script: /lustre/grp/cmclab/leiy/rosetta_biotools_api/rosetta-api.sbatch
-    sbatch_state_file: /lustre/grp/cmclab/leiy/rosetta_api/api-state/rosetta.json
-    sbatch_resolve_host: true
-    startup_timeout: 1800
-    startup_poll_interval: 5
+    backend: slurm
+    python: /lustre/grp/cmclab/leiy/conda_envs/pyrosetta/bin/python
+    partition: gpu3-13
+    cpus: 4
+    memory: 16G
+    walltime: "04:00:00"
   torchfold_options:
     run_data_pipeline: false
     num_diffusion_samples: 2
