@@ -109,8 +109,8 @@ Each service can configure dotted `status_field`, `exit_code_field`,
 `files_field`, `metrics_field` and `metric_fields` paths. For example,
 `status_field: slurm.state` and `metrics_field: rows`.
 
-- Submission IDs: PPIFlow/TorchCraft `design_id`, AF3Score/binder-Rosetta `task_id`,
-  TorchFold `fold_id`. Binder-only Rosetta POSTs to `/v1/tools/interface_analyze` but polls
+- Submission IDs: PPIFlow/TorchCraft `design_id`, AF3Score `task_id`,
+  TorchFold `fold_id`. Binder dG scoring runs locally through PyRosetta; no Rosetta HTTP submission or polling is needed. The model services still poll
   `/v1/tasks/{id}`; the other status URLs follow their submission collections.
 - Default status: `{"status":"COMPLETED","exit_code":"0:0"}`. `UNKNOWN`, queue
   and running states continue polling. Failed Slurm states and nonzero exit codes
@@ -162,7 +162,7 @@ interfaces, excluding intrabinder interfaces, using the generated pose as the
 reference; the minimum scored target/binder interface DockQ is retained. This is
 **design/refold consistency**, not agreement with an experimental structure.
 Rosetta `dG_separated` is an energy score, not measured affinity. Binder
-score-only candidates still call the existing Rosetta interface HTTP API to
+score-only candidates now run local PyRosetta `InterfaceAnalyzerMover` to
 record this metric, but final ranking is strictly the selected scorer's
 **raw iPTM** (0–1). Antibody/nanobody candidates use the official local
 PPIFlow RosettaFix for *repair planning* when the staged policy requests
@@ -261,7 +261,7 @@ generators:
 ```
 
 Configure the equivalent block under `evaluation.af3score`, `evaluation.torchfold`
-and optional binder-only `evaluation.rosetta`, or `generators.torchcraft`. The supported initial-round deployment example uses `sbatch_script` for every API.
+or `generators.torchcraft`. Local PyRosetta is configured via `evaluation.rosetta_fix`. The supported initial-round deployment example uses `sbatch_script` for every API.
 Registry services without an existing sbatch script fail before any HTTP request.
 Scripts and state files are absolute paths on the Harness host, not paths
 translated by `path_mappings`. Scripts must exist; their log directories, Conda
@@ -374,9 +374,11 @@ Torch Optimization is separately registered as `torchopt`, not an automatic scor
 or refold step; see [its action protocol](protein-model-tools.md#torch-optimization-structure-optimization).
 
 
-### PyRosetta-backed RosettaFix for antibody and nanobody (prototype)
+### Unified local PyRosetta configuration (binder, antibody, nanobody)
 
-Antibody/nanobody repair routes do **not** call the Rosetta HTTP API.
+All routes run PyRosetta locally. Binder uses `InterfaceAnalyzerMover` for
+`dG_separated`, and antibody/nanobody repair routes use `ResResE` without
+the Rosetta HTTP API.
 The detached worker launches `rosetta_fix_native.py` in the configured
 PyRosetta Python environment. It loads the **official PPIFlow native.xml**,
 replaces the per-complex residue selector and antibody MoveMap, and runs
@@ -411,9 +413,38 @@ dependent on Rosetta version/database and must be tested on real complexes.
 The `-5` fixed-residue threshold remains a configurable heuristic, not
 an experimentally calibrated binding energy.
 
-Binder score-only routes still use the Rosetta InterfaceAnalyzer HTTP API.
+Binder score-only routes now run PyRosetta `InterfaceAnalyzerMover` locally using
+the same `evaluation.rosetta_fix.python` interpreter. For binder mode,
+`native_xml` is optional and ignored. `evaluation.rosetta_options`
+controls `pack_input` (default false) and `pack_separated` (default true).
+There is no dependency on a Rosetta HTTP service. 
 **`dG_separated`** is present per binder candidate in
 `summary.json -> score_only_results[].dG_separated`, and also in
 `ranking.csv` (alongside `rosetta_interface_dg`). Candidate metrics
 retain the key `rosetta_interface_dg`. The rank score for **all routes**
 remains raw scorer iPTM (0–1); Rosetta energy does not enter the ranking.
+
+
+### Binder-only PyRosetta configuration
+
+For binder and mini-binder, set only the PyRosetta interpreter; the RosettaFix
+`native.xml` is **not** used. This belongs under the task YAML's `evaluation`
+section:
+
+```yaml
+evaluation:
+  rosetta_fix:
+    python: /lustre/grp/cmclab/leiy/conda_envs/pyrosetta/bin/python
+    init_options: "-ignore_zero_occupancy false"
+    timeout: 7200
+  rosetta_options:
+    pack_input: false
+    pack_separated: true
+```
+
+For antibody/nanobody, add `native_xml:
+  /lustre/grp/cmclab/leiy/PPIFlow/steps/rosetta/native.xml` under
+`evaluation.rosetta_fix`. All example paths must exist on the detached
+worker host and the PyRosetta interpreter must have valid licenses/database.
+The generated binder `pyrosetta-interface.log` and
+`pyrosetta-interface-result.json` provide diagnostic provenance.
