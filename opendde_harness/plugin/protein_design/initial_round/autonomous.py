@@ -398,6 +398,9 @@ async def run_autonomous(runner):
             decision["state"] = "completed"
             state["stop_reason"] = "agent_stop" if config.decision_policy == "agent" else "rules_stop"
             runner.save_candidates()
+            from ..scientific_agent.episodic_memory import record_decision
+
+            record_decision(runner, decision)
             break
         decision["state"] = "planned"
         if not decision.get("sample_recorded", decision.get("budget_reserved", False)):
