@@ -632,7 +632,7 @@ class InitialRoundRunner:
         if process.returncode:
             raise RuntimeError(f"PPIFlow RosettaFix failed (exit {process.returncode}); see {log_path}")
         result = json.loads(result_path.read_text())
-        snapshot = directory / "rosetta-residue-energy.json"
+        snapshot = directory / "rosetta-residue-energy.out"
         source = Path(result["energy_log"])
         if snapshot.exists() and digest(snapshot) != digest(source):
             raise ValueError("RosettaFix residue-energy output changed while resuming")
@@ -716,6 +716,19 @@ class InitialRoundRunner:
         if scored or not self.config.has_design_followup:
             result.update(score_only_count=len(scored), score_only_ranking=[c["candidate_id"] for c in scored])
         if not self.config.has_design_followup:
+            # Expose binder dG_separated in the final summary, not only in
+            # candidates.json / ranking.csv. It is never part of rank_score.
+            result["score_only_results"] = [
+                {
+                    "candidate_id": c["candidate_id"],
+                    "source": c["source"],
+                    "ranking_score": c["metrics"]["ranking_score"],
+                    "dG_separated": c["metrics"]["rosetta_interface_dg"],
+                    "design_refold_dockq": c["metrics"]["design_refold_dockq"],
+                }
+                for c in scored
+            ]
+        if not self.config.has_design_followup:
             result.update(
                 outcome="incomplete" if failed else "scored_only",
                 scoring_backend=self.config.evaluation.scoring_backend,
@@ -774,6 +787,7 @@ class InitialRoundRunner:
                     "torchfold_iptm",
                     "design_refold_dockq",
                     "rosetta_interface_dg",
+                    "dG_separated",
                     *(["rosetta_interface_score"] if self.config.has_design_followup else []),
                     "ranking_score",
                     "error",
@@ -781,7 +795,9 @@ class InitialRoundRunner:
             )
             writer.writeheader()
             for c in sorted(candidates, key=lambda c: (c.get("rank", float("inf")), c["candidate_id"])):
-                writer.writerow({k: c.get(k, c["metrics"].get(k)) for k in writer.fieldnames})
+                row = {k: c.get(k, c["metrics"].get(k)) for k in writer.fieldnames}
+                row["dG_separated"] = c["metrics"].get("rosetta_interface_dg")
+                writer.writerow(row)
         self.save_candidates()
         self._summary = result
         return result
