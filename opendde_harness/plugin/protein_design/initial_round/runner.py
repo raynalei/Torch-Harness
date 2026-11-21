@@ -140,6 +140,7 @@ class InitialRoundRunner:
                 name: getattr(self.config.evaluation, name)
                 for name in (self.config.evaluation.scoring_backend, "torchfold", "rosetta", "torchopt")
                 if getattr(self.config.evaluation, name) is not None
+                and (name != "rosetta" or not self.config.has_design_followup)
             }
         )
         if not self.config.has_design_followup:
@@ -511,8 +512,6 @@ class InitialRoundRunner:
 
     async def score_interface(self, candidate):
         evaluation = self.config.evaluation
-        if evaluation.rosetta is None:
-            return
         generator = self.config.generators[candidate["source"]]
         score_only = generator.score_only
         autonomous = self.config.autonomous if not score_only else None
@@ -520,11 +519,13 @@ class InitialRoundRunner:
             if "interface_fixed_positions" in candidate:
                 if digest(self.files.local(candidate["rosetta_energy_log"])) != candidate["rosetta_energy_log_sha256"]:
                     raise ValueError("Rosetta residue-energy log changed while resuming")
-                if "rosetta_interface_dg" in candidate["metrics"]:
+                if "rosetta_interface_score" in candidate["metrics"]:
                     return
-        elif "rosetta_interface_dg" in candidate["metrics"] and (
-            not score_only or candidate.get("rosetta_structure") == "generated"
-        ):
+            await self.score_rosetta_fix(candidate)
+            return
+        if evaluation.rosetta is None:
+            return
+        if "rosetta_interface_dg" in candidate["metrics"] and candidate.get("rosetta_structure") == "generated":
             return
         key = candidate["candidate_id"]
         directory = self.root / key
@@ -587,6 +588,70 @@ class InitialRoundRunner:
             self.save_candidates()
             return
         candidate["rosetta_structure"] = "generated"
+        self.save_candidates()
+
+    async def score_rosetta_fix(self, candidate):
+        """Run upstream PPIFlow RosettaFixStep locally, without the Rosetta HTTP API."""
+        import asyncio
+
+        from .storage import write_json
+
+        cfg = self.config.evaluation.rosetta_fix
+        if cfg is None:
+            raise ValueError("evaluation.rosetta_fix must be configured for autonomous routes")
+        generator = self.config.generators[candidate["source"]]
+        directory = self.root / candidate["candidate_id"]
+        request_path = directory / "rosetta-fix-request.json"
+        result_path = directory / "rosetta-fix-result.json"
+        log_path = directory / "rosetta-fix.log"
+        write_json(request_path, {
+            "source_dir": str(cfg.source_dir),
+            "rosetta_bin": str(cfg.rosetta_bin),
+            "native_xml": str(cfg.native_xml) if cfg.native_xml else None,
+            "input_pdb": str(self.files.local(candidate["generated_structure"])),
+            "output_dir": str(directory / "rosetta-fix"),
+            "binder_chains": generator.chains.binder,
+            "target_chains": generator.chains.target,
+            "interface_dist": cfg.interface_dist,
+            "result_path": str(result_path),
+        })
+        process = await asyncio.create_subprocess_exec(
+            str(cfg.python),
+            str(Path(__file__).with_name("rosetta_fix_native.py")),
+            str(request_path),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        try:
+            stdout, _ = await asyncio.wait_for(process.communicate(), cfg.timeout)
+        except BaseException:
+            if process.returncode is None:
+                process.kill()
+            await process.wait()
+            raise
+        log_path.write_bytes(stdout)
+        if process.returncode:
+            raise RuntimeError(f"PPIFlow RosettaFix failed (exit {process.returncode}); see {log_path}")
+        result = json.loads(result_path.read_text())
+        snapshot = directory / "rosetta-residue-energy.out"
+        source = Path(result["energy_log"])
+        if snapshot.exists() and digest(snapshot) != digest(source):
+            raise ValueError("RosettaFix residue-energy output changed while resuming")
+        if not snapshot.exists():
+            shutil.copy2(source, snapshot)
+        candidate["rosetta_energy_log"] = self.files.remote(snapshot)
+        candidate["rosetta_energy_log_sha256"] = digest(snapshot)
+        candidate["rosetta_structure"] = "generated"
+        candidate["interface_residue_energies"] = result["interface_residue_energies"]
+        candidate["interface_fixed_positions"] = {
+            chain: sorted(int(residue) for residue, energy in energies.items()
+                          if energy < self.config.autonomous.interface_energy_threshold)
+            for chain, energies in result["interface_residue_energies"].items()
+        }
+        candidate["metrics"]["rosetta_interface_score"] = sum(
+            energy for energies in result["interface_residue_energies"].values()
+            for energy in energies.values()
+        )
         self.save_candidates()
 
     async def score_binder_candidates(self, candidates):
@@ -655,7 +720,7 @@ class InitialRoundRunner:
             result.update(
                 outcome="incomplete" if failed else "scored_only",
                 scoring_backend=self.config.evaluation.scoring_backend,
-                ranking_policy="ranking_score_desc,scorer_iptm_desc,dockq_desc",
+                ranking_policy="scorer_iptm_desc,dockq_desc",
                 stop_reason="binder_score_only",
                 followup_rounds=0,
             )
