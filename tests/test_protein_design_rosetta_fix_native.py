@@ -10,7 +10,9 @@ from opendde_harness.plugin.protein_design.initial_round.rosetta_fix_native impo
     canonical_pdb,
     configured_xml,
     original_contacts,
-    weighted_interface_energy,
+    capture_resres_e,
+    interface_energies_from_resres_e,
+    parse_resres_e,
 )
 
 
@@ -88,46 +90,56 @@ def test_original_contacts_consider_only_cross_chain_cb_or_ca(tmp_path):
     assert original_contacts(canonical, "A", "C", 0.9) == set()
 
 
-def test_energy_graph_only_counts_favorable_pairs():
-    class Edge:
-        def __init__(self, value):
-            self.value = value
 
-        def dot(self, weights):
-            assert weights == "weights"
-            return self.value
+def test_resres_e_parses_official_ascii_chain_ids_and_favorable_pairs(tmp_path):
+    path = tmp_path / "rosetta.out"
+    path.write_text(
+        "ResResE Res1 Res2 total\\n"
+        "ResResE ---- ---- -----\\n"
+        "ResResE ALA_651 GLY_673 -6.25\\n"  # chain A:1, C:3
+        "ResResE ALA_662 GLY_674 -8.00\\n"  # chain B:2, C:4
+        "ResResE ALA_651 GLY_674 2.0\\n"
+    )
+    pairs = parse_resres_e(path)
+    assert interface_energies_from_resres_e(pairs, {(1, 3), (1, 4)}, "A", "C") == {"1": -6.25}
+    assert interface_energies_from_resres_e(pairs, {(2, 4)}, "B", "C") == {"2": -8.0}
+    assert interface_energies_from_resres_e(pairs, {(2, 3)}, "B", "C") == {}
 
-    class Graph:
-        def find_energy_edge(self, left, right):
-            return {(1, 2): Edge(-4.5), (1, 3): Edge(2.0)}.get((left, right))
 
-    class Energies:
-        def energy_graph(self):
-            return Graph()
+def test_resres_e_rejects_missing_or_nonfinite_rows(tmp_path):
+    path = tmp_path / "bad.out"
+    path.write_text("not Rosetta data\\n")
+    with pytest.raises(ValueError, match="no ResResE"):
+        parse_resres_e(path)
+    path.write_text("ResResE Res1 Res2 total\\nResResE ALA_651 GLY_673 nan\\n")
+    with pytest.raises(ValueError, match="Nonfinite"):
+        parse_resres_e(path)
 
-    class PdbInfo:
-        def chain(self, index):
-            return {1: "A", 2: "C", 3: "C"}[index]
 
-        def number(self, index):
-            return {1: 5, 2: 6, 3: 7}[index]
+def test_pyrosetta_scorecutoff_outputs_actual_resres_e(tmp_path):
+    class FakeStream:
+        def str(self):
+            return "ResResE Res1 Res2 total\\nResResE ALA_651 GLY_673 -6.25\\n"
 
-    class Pose:
-        def energies(self):
-            return Energies()
+    class FakeFilter:
+        def output_residue_pair_energies(self, stream, pose):
+            assert pose is sentinel
 
-        def pdb_info(self):
-            return PdbInfo()
+    class FakeXml:
+        def get_filter(self, name):
+            assert name == "scofilter"
+            return FakeFilter()
 
-        def total_residue(self):
-            return 3
+    sentinel = object()
+    out = tmp_path / "real-resres.out"
+    capture_resres_e(FakeXml(), sentinel, out, FakeStream)
+    assert parse_resres_e(out)
 
-    class Score:
-        def __call__(self, pose):
-            assert isinstance(pose, Pose)
 
-        def weights(self):
-            return "weights"
+def test_scorecutoff_requires_export_binding(tmp_path):
+    class OldXml:
+        def get_filter(self, name):
+            return object()
 
-    energies = weighted_interface_energy(Pose(), Score(), {(5, 6), (5, 7)}, "A", "C")
-    assert energies == {"5": -4.5}
+    with pytest.raises(TypeError, match="output_residue_pair_energies"):
+        capture_resres_e(OldXml(), object(), tmp_path / "log.out", lambda: object())
