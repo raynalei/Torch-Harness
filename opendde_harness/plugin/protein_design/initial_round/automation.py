@@ -98,7 +98,9 @@ def prepare_run(
         configured,
         registered,
     )
-    kinds = [evaluation["scoring_backend"], "torchfold", "rosetta"]
+    kinds = [evaluation["scoring_backend"], "torchfold"]
+    if not has_design_followup:
+        kinds.append("rosetta")
     if has_design_followup:
         kinds.append("torchopt")
     for kind in kinds:
