@@ -170,18 +170,17 @@ class Generator(RoundModel):
 
 
 class RosettaFixConfig(RoundModel):
-    """Official PPIFlow RosettaFixStep, run on the worker without Rosetta HTTP."""
+    """PPIFlow native.xml protocol through local PyRosetta, without HTTP."""
 
-    source_dir: Path
-    rosetta_bin: Path
-    native_xml: Path | None = None
+    native_xml: Path
     python: Path = Path(sys.executable)
+    init_options: str = "-ignore_zero_occupancy false"
     interface_dist: float = Field(default=12.0, gt=0)
     timeout: float = Field(default=7200, gt=0)
 
     @model_validator(mode="after")
     def absolute_paths(self):
-        paths = (self.source_dir, self.rosetta_bin, self.native_xml, self.python)
+        paths = (self.native_xml, self.python)
         if any(path is not None and not path.is_absolute() for path in paths):
             raise ValueError("RosettaFix paths must be absolute paths on the Harness worker host")
         return self
@@ -350,7 +349,7 @@ class InitialRoundConfig(RoundModel):
         if self.route == "binder" and self.evaluation.rosetta is None:
             raise ValueError("binder route requires the registered Rosetta interface scoring service")
         if self.has_design_followup and self.evaluation.rosetta_fix is None:
-            raise ValueError("antibody and nanobody routes require evaluation.rosetta_fix (official local RosettaFixStep)")
+            raise ValueError("antibody and nanobody routes require evaluation.rosetta_fix (local PyRosetta RosettaFix)")
         if any(g.service is None for g in self.generators.values()):
             raise ValueError("generator services must be configured or uniquely registered")
         if self.has_design_followup:
