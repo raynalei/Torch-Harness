@@ -71,10 +71,13 @@ def quality(candidate, score_metric):
 
 
 def rank_score(candidate, score_metric):
-    dg = candidate["metrics"].get("rosetta_interface_dg")
-    if dg is None:
+    """Rank by measured scorer iPTM only; Rosetta dG is diagnostic."""
+    value = candidate["metrics"].get(score_metric)
+    if type(value) not in (int, float):
         return None
-    return 100 * candidate["metrics"][score_metric] - dg
+    import math
+
+    return float(value) if math.isfinite(value) else None
 
 
 def _partial_request(runner, candidate, name, regions=None):
