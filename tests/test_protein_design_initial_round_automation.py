@@ -43,7 +43,7 @@ def profile(tmp_path, request):
     # These control tests mock the detached worker rather than submit Slurm jobs.
     for service in [
         generator["service"],
-        *(value["evaluation"][name] for name in ("torchscore", "torchfold", "rosetta")),
+        *(value["evaluation"][name] for name in ("torchscore", "torchfold")),
     ]:
         service.pop("sbatch_script", None)
         service.pop("sbatch_state_file", None)
@@ -323,7 +323,7 @@ def test_registered_autonomous_example_resolves_for_yaml_and_run_config(tmp_path
     assert config.evaluation.scoring_backend == "torchscore"
     assert config.evaluation.af3score is None
     assert config.evaluation.torchopt.url.endswith(":8060")
-    assert config.evaluation.rosetta_fix.source_dir == Path("/lustre/project/PPIFlow")
+    assert config.evaluation.rosetta_fix.native_xml == Path("/lustre/project/PPIFlow/steps/rosetta/native.xml")
     assert config.evaluation.rosetta is None
     assert config.generators["torchcraft"].service == config.generators["torchcraft"].service.model_validate(
         registrations["torchcraft"]["service"]
