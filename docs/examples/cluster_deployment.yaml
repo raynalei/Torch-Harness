@@ -103,7 +103,15 @@ workflow_defaults:
   evaluation:
     scoring_backend: torchscore
     dockq_python: /lustre/grp/cmclab/leiy/conda_envs/ppi_env/bin/python
+
+    rosetta_fix:
+      python: /lustre/grp/cmclab/leiy/conda_envs/ppi_env/bin/python
+      native_xml: /lustre/grp/cmclab/leiy/native.xml
+      init_options: "-ignore_zero_occupancy false"
+      timeout: 7200
+
     rosetta_residue_glob: '*.out'
+    dockq_python: /lustre/grp/cmclab/leiy/conda_envs/ppi_env/bin/python
   autonomous:
     decision_policy: agent
     # No extra limits are imposed here; prototype's existing defaults still apply.

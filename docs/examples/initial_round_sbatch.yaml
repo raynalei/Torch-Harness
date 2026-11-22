@@ -63,7 +63,7 @@ evaluation:
     startup_poll_interval: 5
   rosetta_fix:
     native_xml: /shared/project/PPIFlow/steps/rosetta/native.xml
-    python: /shared/project/envs/pyrosetta/bin/python
+    python: /shared/project/conda_envs/ppi_env/bin/python
     init_options: "-ignore_zero_occupancy false"
     interface_dist: 12.0
     timeout: 7200
