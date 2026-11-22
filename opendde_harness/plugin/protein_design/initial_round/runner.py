@@ -546,7 +546,7 @@ class InitialRoundRunner:
             "binder_chains": generator.chains.binder,
             "target_chains": generator.chains.target,
             "init_options": cfg.init_options,
-            "pack_input": options.get("pack_input", False),
+            "pack_input": True,  # Always repack bound-state side chains for Binder scoring.
             "pack_separated": options.get("pack_separated", True),
             "result_path": str(result_path),
         })
