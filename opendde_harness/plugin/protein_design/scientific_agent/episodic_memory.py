@@ -7,10 +7,13 @@ from earlier runs inform the next decision but never authorize model actions.
 from __future__ import annotations
 
 import json
+import logging
 import math
 from pathlib import Path
 
 from opendde_harness.utils.portable_lock import file_lock
+
+logger = logging.getLogger(__name__)
 
 
 def store_path(runner) -> Path:
@@ -68,19 +71,24 @@ def record_decision(runner, decision) -> None:
     if entry is None:
         return
     path = store_path(runner)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with file_lock(path.with_suffix(path.suffix + ".lock")):
-        existing = set()
-        if path.exists():
-            for line in path.read_text().splitlines():
-                try:
-                    existing.add(json.loads(line)["episode_id"])
-                except (ValueError, KeyError, TypeError):
-                    continue
-        if entry["episode_id"] in existing:
-            return
-        with path.open("a", encoding="utf-8") as stream:
-            stream.write(json.dumps(entry, ensure_ascii=False, allow_nan=False) + "\n")
+    # Memory is advisory. Failed storage must never turn a successful scientific
+    # action into a failed/retried job; keep the checkpoint as source of truth.
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with file_lock(path.with_suffix(path.suffix + ".lock")):
+            existing = set()
+            if path.exists():
+                for line in path.read_text(encoding="utf-8").splitlines():
+                    try:
+                        existing.add(json.loads(line)["episode_id"])
+                    except (ValueError, KeyError, TypeError):
+                        continue
+            if entry["episode_id"] in existing:
+                return
+            with path.open("a", encoding="utf-8") as stream:
+                stream.write(json.dumps(entry, ensure_ascii=False, allow_nan=False) + "\n")
+    except (OSError, ValueError) as exc:
+        logger.warning("episodic memory write unavailable (continuing workflow): %s", exc)
 
 
 def retrieve(runner, legal_options, *, limit=4):
@@ -99,7 +107,12 @@ def retrieve(runner, legal_options, *, limit=4):
     }
     legal = {o["action"] for o in legal_options}
     rows = []
-    for line in path.read_text(encoding="utf-8").splitlines()[-5000:]:
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()[-5000:]
+    except (OSError, UnicodeError) as exc:
+        logger.warning("episodic memory read unavailable (continuing workflow): %s", exc)
+        return []
+    for line in lines:
         try:
             entry = json.loads(line)
         except (ValueError, TypeError):
@@ -108,7 +121,8 @@ def retrieve(runner, legal_options, *, limit=4):
                 or entry.get("run") == str(runner.root.resolve())
                 or entry.get("action") not in legal
                 or entry.get("mode") not in modes
-                or entry.get("outcome", {}).get("state") != "completed"):
+                or not isinstance(entry.get("outcome"), dict)
+                or entry["outcome"].get("state") != "completed"):
             continue
         rows.append(entry)
     rows.sort(key=lambda e: (
