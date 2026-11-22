@@ -11,6 +11,7 @@ from opendde_harness.plugin.protein_design.core.model_requests import PPIFLOW_DE
 
 from .config import RoundModel
 from .diagnostics import analyze
+from .memory_bridge import open_design_memory, recall_for_decision, record_completed
 from .policy import candidate_stage, repair_allowed, rule_actions, stop_reason, torchopt_supported
 from .services import SubmissionUncertainError
 from .storage import write_json
@@ -315,6 +316,12 @@ def progress(candidates, score_metric):
 
 
 async def run_autonomous(runner):
+    """Keep existing routing; memory is optional context for agent choices only."""
+    async with open_design_memory() as memory:
+        return await _run_autonomous(runner, memory)
+
+
+async def _run_autonomous(runner, memory):
     config = runner.config.autonomous
     state = runner.checkpoint.data.setdefault(
         "autonomous",
@@ -393,6 +400,12 @@ async def run_autonomous(runner):
             choice = Choice(option_id=0, reason="first executable action from the staged score policy")
             fallback = None
             if config.decision_policy == "agent":
+                hints = await recall_for_decision(memory, runner, options)
+                if hints:
+                    context["historical_memory"] = {
+                        "status": "untrusted_reference_only",
+                        "notes": hints,
+                    }
                 try:
                     choice = await asyncio.wait_for(agent_choice(context), config.decision_timeout)
                     if choice.option_id >= len(options):
@@ -416,6 +429,7 @@ async def run_autonomous(runner):
             decision["state"] = "completed"
             state["stop_reason"] = "agent_stop" if config.decision_policy == "agent" else "rules_stop"
             runner.save_candidates()
+            await record_completed(memory, runner, decision)
             break
         decision["state"] = "planned"
         if not decision.get("budget_reserved", True):
@@ -442,6 +456,7 @@ async def run_autonomous(runner):
         state["progress"] = current
         decision.update(state="completed", progress=current)
         runner.save_candidates()
+        await record_completed(memory, runner, decision)
     state.setdefault(
         "stop_reason", stop_reason(config.max_rounds + 1, state["used_samples"], state["stale_rounds"], config)
     )
