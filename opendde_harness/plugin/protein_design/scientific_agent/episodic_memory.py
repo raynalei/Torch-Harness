@@ -54,7 +54,7 @@ def _episode(runner, decision):
         "policy": decision.get("policy"),
         "fallback": bool(decision.get("fallback")),
         "parent_metrics": _numbers(parent.get("metrics")),
-        "parent_diagnosis": parent.get("diagnostics", {}).get("diagnosis"),
+        "parent_diagnosis": (parent.get("diagnostics") or {}).get("diagnosis"),
         "outcome": {
             "state": decision.get("state"),
             "children": len(children),
@@ -67,10 +67,14 @@ def _episode(runner, decision):
 def record_decision(runner, decision) -> None:
     if decision.get("state") != "completed" or runner.config.autonomous is None:
         return
-    entry = _episode(runner, decision)
-    if entry is None:
+    try:
+        entry = _episode(runner, decision)
+        if entry is None:
+            return
+        path = store_path(runner)
+    except (KeyError, TypeError, ValueError, AttributeError) as exc:
+        logger.warning("episodic memory episode unavailable (continuing workflow): %s", exc)
         return
-    path = store_path(runner)
     # Memory is advisory. Failed storage must never turn a successful scientific
     # action into a failed/retried job; keep the checkpoint as source of truth.
     try:
