@@ -1,7 +1,8 @@
-"""Run PPIFlow's RosettaFix XML with PyRosetta and parse Rosetta's own ResResE.
+"""Extract PPIFlow-compatible interface residue energies without relaxing the input.
 
-Use ScoreCutoffFilter.output_residue_pair_energies to capture the native energy
-table without launching the RosettaScripts CLI or rebuilding EnergyGraph scores.
+The native ScoreCutoffFilter exporter supplies ResResE on the original candidate
+pose. The XML is parsed for its filter, but ParsedProtocol / FastRelax is never
+applied: the generated backbone and coordinates are preserved for Partial Flow.
 """
 
 from __future__ import annotations
@@ -189,12 +190,11 @@ def execute(request: dict) -> dict:
     pyrosetta.init(request.get("init_options", "-ignore_zero_occupancy false"))
     pose = pyrosetta.pose_from_pdb(str(normalized))
     xml_objects = XmlObjects.create_from_string(updated_xml.read_text())
-    protocol = xml_objects.get_mover("ParsedProtocol")
-    protocol.apply(pose)
-    relaxed = output / "relaxed.pdb"
-    pose.dump_pdb(str(relaxed))
-    # Use the exact ScoreCutoffFilter from the upstream XML to report ResResE;
-    # do not synthesize its score via a separate scoring function.
+    # IMPORTANT: the XML defines a FastRelax mover, but do NOT execute it.
+    # We need the input-pose interface energies to choose fixed positions for
+    # subsequent PPIFlow partial flow, not a relaxed/repacked structure.
+    # Use the exact ScoreCutoffFilter exporter rather than an approximation
+    # derived from separately summed EnergyGraph terms.
     resres_e = capture_resres_e(
         xml_objects, pose, output / "residue-pair-energies.out",
         pyrosetta.rosetta.std.ostringstream,
@@ -211,9 +211,10 @@ def execute(request: dict) -> dict:
     return {
         "interface_residue_energies": residue_energies,
         "energy_log": str(resres_e),
-        "energy_method": "pyrosetta_scorecutoff_resres_e",
+        "energy_method": "pyrosetta_scorecutoff_resres_e_unrelaxed",
+        "relax_applied": False,
+        "scored_structure": str(normalized),
         "normalized_chains": mapping,
-        "relaxed_structure": str(relaxed),
     }
 
 
