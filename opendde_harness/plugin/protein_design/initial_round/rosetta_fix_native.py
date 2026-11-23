@@ -197,16 +197,33 @@ def execute(request: dict) -> dict:
 
     pyrosetta.init(request.get("init_options", "-ignore_zero_occupancy false"))
     pose = pyrosetta.pose_from_pdb(str(normalized))
-    xml_objects = XmlObjects.create_from_string(updated_xml.read_text())
-    # IMPORTANT: the XML defines a FastRelax mover, but do NOT execute it.
-    # We need the input-pose interface energies to choose fixed positions for
-    # subsequent PPIFlow partial flow, not a relaxed/repacked structure.
-    # Use the exact ScoreCutoffFilter exporter rather than an approximation
-    # derived from separately summed EnergyGraph terms.
+
+    xml_objects = XmlObjects.create_from_string(
+        updated_xml.read_text()
+    )
+
+    # Populate Rosetta's energy graph before exporting
+    # residue-pair energies. This does NOT relax the pose.
+    scorefxn = pyrosetta.create_score_function("ref2015")
+    total_score = scorefxn(pose)
+
+    print(
+        f"[RosettaFix] ref2015 score = {total_score:.4f}",
+        flush=True,
+    )
+    print(
+        f"[RosettaFix] energies updated = "
+        f"{pose.energies().energies_updated()}",
+        flush=True,
+    )
+
     resres_e = capture_resres_e(
-        xml_objects, pose, output / "residue-pair-energies.out",
+        xml_objects,
+        pose,
+        output / "residue-pair-energies.out",
         pyrosetta.rosetta.std.ostringstream,
     )
+
     rows = parse_resres_e(resres_e)
     residue_energies = {}
     threshold = float(request["interface_dist"])

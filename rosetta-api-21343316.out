@@ -1,0 +1,5 @@
+{"backend": "pyrosetta", "ok": true, "python": "/lustre/grp/cmclab/leiy/conda_envs/ppi_env/bin/python", "supported_tools": ["interface_analyze", "structure_score"], "error": null}
+srun: error: CPU binding outside of job step allocation, allocated CPUs are: 0x0000000000001E00.
+srun: error: Task launch for StepId=21343316.0 failed on node c05b01n13: Unable to satisfy cpu bind request
+srun: error: Application launch failed: Unable to satisfy cpu bind request
+srun: Job step aborted
