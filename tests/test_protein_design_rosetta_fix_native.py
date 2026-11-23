@@ -1,6 +1,8 @@
 """Unit checks for the official RosettaFix local adapter; no Rosetta install needed."""
 
 from pathlib import Path
+import sys
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -13,6 +15,7 @@ from opendde_harness.plugin.protein_design.initial_round.rosetta_fix_native impo
     capture_resres_e,
     interface_energies_from_resres_e,
     parse_resres_e,
+    execute,
 )
 
 
@@ -143,3 +146,61 @@ def test_scorecutoff_requires_export_binding(tmp_path):
 
     with pytest.raises(TypeError, match="output_residue_pair_energies"):
         capture_resres_e(OldXml(), object(), tmp_path / "log.out", lambda: object())
+
+
+def test_execute_uses_original_pose_without_relax(tmp_path, monkeypatch):
+    source = _pdb(tmp_path / "source.pdb")
+    xml = tmp_path / "native.xml"
+    xml.write_text('<ROSETTASCRIPTS><RESIDUE_SELECTORS><Index resnums="1X-1X"/></RESIDUE_SELECTORS></ROSETTASCRIPTS>')
+
+    class FakePose:
+        def dump_pdb(self, _path):
+            raise AssertionError("no relaxed PDB should be written")
+
+    class FakeStream:
+        def str(self):
+            return "ResResE Res1 Res2 total\\nResResE ALA_652 ALA_671 -2.0\\n"
+
+    class FakeFilter:
+        def output_residue_pair_energies(self, stream, pose):
+            assert isinstance(pose, FakePose)
+
+    class FakeXml:
+        def get_mover(self, name):
+            raise AssertionError(f"mover {name} should never execute")
+        def get_filter(self, name):
+            assert name == "scofilter"
+            return FakeFilter()
+
+    class FakeXmlObjects:
+        @staticmethod
+        def create_from_string(_xml):
+            return FakeXml()
+
+    fake_pyrosetta = ModuleType("pyrosetta")
+    fake_pyrosetta.init = lambda _: None
+    fake_pyrosetta.pose_from_pdb = lambda _: FakePose()
+    fake_pyrosetta.rosetta = SimpleNamespace(std=SimpleNamespace(ostringstream=FakeStream))
+    protocols = ModuleType("pyrosetta.rosetta.protocols")
+    xml_mod = ModuleType("pyrosetta.rosetta.protocols.rosetta_scripts")
+    xml_mod.XmlObjects = FakeXmlObjects
+    for name, module in (
+        ("pyrosetta", fake_pyrosetta),
+        ("pyrosetta.rosetta", ModuleType("pyrosetta.rosetta")),
+        ("pyrosetta.rosetta.protocols", protocols),
+        ("pyrosetta.rosetta.protocols.rosetta_scripts", xml_mod),
+    ):
+        monkeypatch.setitem(sys.modules, name, module)
+
+    result = execute({
+        "native_xml": str(xml),
+        "output_dir": str(tmp_path / "out"),
+        "input_pdb": str(source),
+        "binder_chains": ["Y"],
+        "target_chains": ["X"],
+        "interface_dist": 2.0,
+    })
+    assert result["relax_applied"] is False
+    assert result["interface_residue_energies"] == {"Y": {"2": -2.0}}
+    assert Path(result["scored_structure"]).is_file()
+    assert not (tmp_path / "out" / "relaxed.pdb").exists()
