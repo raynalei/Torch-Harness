@@ -99,8 +99,8 @@ def configured_xml(path: Path, normalized: Path, antibody: bool) -> str:
 def parse_resres_e(log: Path) -> dict[tuple[tuple[str, int], tuple[str, int]], float]:
     """Parse official ScoreCutoffFilter ResResE rows; reject missing/malformed data.
 
-    Residue IDs use the same ASCII chain-prefix encoding as upstream PPIFlow:
-    e.g. ALA_651 for chain A residue 1. Sum only negative interchain energies.
+    Accept both upstream ASCII-chain IDs (ALA_651 = A:1) and newer
+    amino-acid-ASCII IDs (69_A1 = A:1). Skip the optional weight metadata row.
     """
     rows: dict[tuple[tuple[str, int], tuple[str, int]], float] = {}
     header = None
@@ -117,14 +117,22 @@ def parse_resres_e(log: Path) -> dict[tuple[tuple[str, int], tuple[str, int]], f
             raise ValueError("ResResE data before header")
         if all(set(token) <= {"-", "="} for token in parts[1:]):
             continue
+        # Newer PyRosetta emits a "ResResE nonzero weights ..." metadata row.
+        if len(parts) >= 3 and parts[1:3] == ["nonzero", "weights"]:
+            continue
         if len(parts) != len(header):
             raise ValueError("Malformed ResResE row")
         fields = dict(zip(header, parts))
         def residue(value: str) -> tuple[str, int]:
-            match = re.fullmatch(r"[^_]+_([0-9]{2})(-?[0-9]+)", value)
-            if match is None or not 65 <= int(match[1]) <= 90:
-                raise ValueError(f"Unsupported Rosetta ResResE residue: {value}")
-            return chr(int(match[1])), int(match[2])
+            # Old release: ALA_651 = A:1 (65 is ASCII for chain A).
+            old = re.fullmatch(r"[^_]+_([0-9]{2})(-?[0-9]+)", value)
+            if old is not None and 65 <= int(old[1]) <= 90:
+                return chr(int(old[1])), int(old[2])
+            # New release: 69_A1 = A:1 (69 is ASCII for amino acid E).
+            new = re.fullmatch(r"[0-9]+_([A-Z])(-?[0-9]+)", value)
+            if new is not None:
+                return new[1], int(new[2])
+            raise ValueError(f"Unsupported Rosetta ResResE residue: {value}")
         first, second = residue(fields["Res1"]), residue(fields["Res2"])
         energy = float(fields["total"])
         if not math.isfinite(energy):
