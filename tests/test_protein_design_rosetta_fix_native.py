@@ -204,3 +204,17 @@ def test_execute_uses_original_pose_without_relax(tmp_path, monkeypatch):
     assert result["interface_residue_energies"] == {"Y": {"2": -2.0}}
     assert Path(result["scored_structure"]).is_file()
     assert not (tmp_path / "out" / "relaxed.pdb").exists()
+
+
+def test_parse_new_pyrosetta_2026_resres_e_and_weights(tmp_path):
+    log = tmp_path / "new-format.out"
+    log.write_text(
+        "ResResE Res1 Res2 fa_atr total\\n"
+        "ResResE nonzero weights 1.000 NA\\n"
+        "ResResE 69_A1 86_C2 -1.250 -1.228\\n"
+        "ResResE 69_A1 81_C3 -0.966 -0.289\\n"
+    )
+    rows = parse_resres_e(log)
+    assert rows[(("A", 1), ("C", 2))] == -1.228
+    assert rows[(("A", 1), ("C", 3))] == -0.289
+    assert interface_energies_from_resres_e(rows, {(1, 2), (1, 3)}, "A", "C") == {"1": -1.517}
