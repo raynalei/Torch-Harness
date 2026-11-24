@@ -19,7 +19,7 @@ model_services:
     service:
       url: http://slurm-api.invalid:8010
       health_path: /openapi.json
-      sbatch_script: /lustre/grp/cmclab/leiy/ppiflow_api/ppiflow-api.sbatch
+      sbatch_script: ../../api/ppiflow_api/ppiflow-api.sbatch
       sbatch_resolve_host: true
       environment:
         PPIFLOW_ROOT: /lustre/grp/cmclab/leiy/v3_basic
@@ -35,7 +35,7 @@ model_services:
     service:
       url: http://slurm-api.invalid:8020  # Confirm this port against the actual script.
       health_path: /openapi.json
-      sbatch_script: /lustre/grp/cmclab/leiy/torchcraft_api/torchcraft-api.sbatch
+      sbatch_script: ../../api/torchcraft_api/torchcraft-api.sbatch
       sbatch_resolve_host: true
       # Its sbatch must activate its own environment and resolve source/weights.
       environment: {}
@@ -45,7 +45,7 @@ model_services:
     request_defaults: {}
     service:
       url: http://slurm-api.invalid:8030
-      sbatch_script: /lustre/grp/cmclab/leiy/af3score_api/af3score-api.sbatch
+      sbatch_script: ../../api/af3score_api/af3score-api.sbatch
       sbatch_resolve_host: true
       environment: {}
   torchfold:
@@ -54,7 +54,7 @@ model_services:
     request_defaults: {}
     service:
       url: http://slurm-api.invalid:8040
-      sbatch_script: /lustre/grp/cmclab/leiy/torchfold_api/torchfold-api.sbatch
+      sbatch_script: ../../api/torchfold_api/torchfold-api.sbatch
       sbatch_resolve_host: true
       environment: {}
   rosetta:
@@ -81,7 +81,7 @@ model_services:
     service:
       url: http://slurm-api.invalid:8060  # Confirm against actual script.
       status_field: state
-      sbatch_script: /lustre/grp/cmclab/leiy/torchoptimization-api/torchopt_api.sbatch
+      sbatch_script: ../../api/torchoptimization-api/torchopt_api.sbatch
       sbatch_resolve_host: true
       environment: {}
   torchscore:
@@ -90,7 +90,7 @@ model_services:
     request_defaults: {}
     service:
       url: http://slurm-api.invalid:8070
-      sbatch_script: /lustre/grp/cmclab/leiy/Torchscore-api/torchscore-api.sbatch
+      sbatch_script: ../../api/Torchscore-api/torchscore-api.sbatch
       sbatch_resolve_host: true
       metric_fields: {iptm: iptm, ptm: ptm}
       environment: {}

@@ -154,6 +154,12 @@ def load_deployment_defaults(settings):
     defaults = yaml.safe_load(path.read_text())
     if not isinstance(defaults, dict) or set(defaults) - {"model_services", *SETTINGS_KEYS}:
         raise ValueError("deployment YAML must contain deployment sections, not a historical task run_config")
+    for model in defaults.get("model_services", {}).values():
+        service = model.get("service", {})
+        if script := service.get("sbatch_script"):
+            script_path = Path(script).expanduser()
+            if not script_path.is_absolute():
+                service["sbatch_script"] = str((path.resolve().parent / script_path).resolve())
     result = merge_defaults(defaults, settings)
     result["deployment_config"] = str(path.resolve())
     # An explicitly configured registry/adapter declares the available capabilities.

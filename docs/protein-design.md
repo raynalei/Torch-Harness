@@ -6,6 +6,12 @@ The [cluster profile](examples/cluster_deployment.yaml) shows the supported Slur
 settings and shared input/output paths. Set these to paths available to the client
 and its model jobs.
 
+The example resolves relative `sbatch_script` paths from the deployment YAML.
+Keep it at `docs/examples/cluster_deployment.yaml` in the checkout alongside the
+repository's `api/` directory. For a wheel installation, point
+`plugins.config["protein-design"].deployment_config` at that checkout's YAML.
+The scripts still require their configured cluster runtimes and shared paths.
+
 Use [Model Registry](protein-model-tools.md) to register and inspect standalone
 model requests. Use [Initial Round](initial-round.md) for workflow preflight,
 background launch and resume. See [Autonomous Design Loop](autonomous-feedback.md)
