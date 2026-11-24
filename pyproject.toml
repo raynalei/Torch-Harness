@@ -2,7 +2,7 @@
 name = "opendde-harness"
 version = "0.0.5"
 readme = "README.md"
-description = "OpenDDE Harness - antibody design harness: agent runtime, protein-design plugin, and compute service"
+description = "OpenDDE Harness - antibody design harness: agent runtime, protein-design plugin, and external model clients"
 requires-python = ">=3.12"
 license =  "Apache-2.0"
 license-files = ["LICENSE", "LICENSES/*.txt"]
@@ -58,13 +58,8 @@ dev = [
     "ruff>=0.6.0",
 ]
 protein-design = [
-    "fastapi>=0.116,<1.0",
-    "uvicorn>=0.35,<1.0",
     "biotite>=1.2,<2.0",
-    "gradio-client>=0.10.0",
     "scipy>=1.10.0",
-    "torch>=2.3.0,<2.8.0",
-    "transformers>=4.30.0",
 ]
 initial-round = [
     "biotite>=1.2,<2",
@@ -85,15 +80,6 @@ packages = ["opendde_harness"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "docs/examples/cluster_deployment.yaml" = "opendde_harness/plugin/protein_design/initial_round/cluster_deployment.yaml"
-# The quickstart designs the agent reads before writing a new one. Without them
-# in the wheel, an installed release had no examples at all: they were found by
-# locating a source checkout, which a pip install does not have.
-"docs/examples/crlf2_quickstart.yaml" = "opendde_harness/plugin/protein_design/examples/crlf2_quickstart.yaml"
-"docs/examples/cacng1_quickstart.yaml" = "opendde_harness/plugin/protein_design/examples/cacng1_quickstart.yaml"
-"docker/versions.env" = "opendde_harness/cli/source_versions.env"
-"docker/environment.json" = "opendde_harness/cli/compute_environment.json"
-"docker/model-checksums.sha256" = "opendde_harness/cli/model-checksums.sha256"
-"docker/ESM-LICENSE.txt" = "opendde_harness/cli/esm-model-license.txt"
 # The changelog is where this project records when a version shipped, and the
 # welcome panel shows that date beside the version. Package metadata carries no
 # release date, so the file itself travels with the wheel.
@@ -129,10 +115,6 @@ include = [
 [tool.hatch.build.targets.sdist]
 include = [
     "docs/examples/*.yaml",
-    "docker/versions.env",
-    "docker/environment.json",
-    "docker/model-checksums.sha256",
-    "docker/ESM-LICENSE.txt",
     "opendde_harness/",
     # ``uv build`` creates the wheel from this sdist. Preserve the already
     # built bundles so the wheel hook can package a working ``opendde tui``.
@@ -144,10 +126,7 @@ include = [
 ]
 
 [tool.hatch.build.targets.sdist.force-include]
-"docker/versions.env" = "docker/versions.env"
-"docker/environment.json" = "docker/environment.json"
-"docker/model-checksums.sha256" = "docker/model-checksums.sha256"
-"docker/ESM-LICENSE.txt" = "docker/ESM-LICENSE.txt"
+"docs/examples/cluster_deployment.yaml" = "docs/examples/cluster_deployment.yaml"
 # A release archive without these installs a broken ``ddeharness tui`` and a
 # model layer that cannot start. ``dist/`` is gitignored, and ``include`` above
 # cannot re-add a VCS-ignored path — only a forced artifact survives into the archive. ``uv build`` builds the wheel from
@@ -170,7 +149,6 @@ constraint-dependencies = [
 line-length = 120
 target-version = "py312"
 extend-exclude = [
-    # Third-party sources are cloned separately during compute preparation.
     "external/**",
 ]
 

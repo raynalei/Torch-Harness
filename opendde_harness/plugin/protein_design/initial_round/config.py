@@ -10,13 +10,13 @@ from typing import Any, Literal
 
 from pydantic import AliasChoices, ConfigDict, Field, field_validator, model_serializer, model_validator
 
-from opendde_harness.plugin.protein_design.core.contracts import ContractModel
 from opendde_harness.plugin.protein_design.core.model_requests import (
     PPIFLOW_DEFAULT_SAMPLES,
     AF3ScoreControls,
     TorchScoreControls,
     validate_request,
 )
+from opendde_harness.plugin.protein_design.core.schema import ContractModel
 
 
 class RoundModel(ContractModel):

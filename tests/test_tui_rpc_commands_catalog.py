@@ -34,7 +34,7 @@ def test_no_bare_group_head_is_offered() -> None:
     """A head with subcommands under it is the shape that failed."""
     names = {entry["name"] for entry in _catalog()["commands"]}
 
-    for head in ("provider", "sessions", "skill", "compute", "protein-design"):
+    for head in ("provider", "sessions", "skill", "protein-design"):
         assert head not in names, f"/{head} is a group, not a command"
         assert any(name.startswith(f"{head} ") for name in names), f"nothing under /{head} is offered"
 
@@ -64,7 +64,7 @@ def test_what_cannot_run_inside_a_request_is_not_offered() -> None:
     assert "onboard" not in names
     assert "tui" not in names
     # What is left of those groups is what finishes.
-    assert "compute stop" in names
+    assert not any(name.startswith("compute ") for name in names)
     assert "provider list" in names
 
 
@@ -98,13 +98,12 @@ def test_a_description_is_one_line_of_the_commands_own_help() -> None:
 def test_an_argument_hint_names_what_the_command_takes() -> None:
     commands = {entry["name"]: entry for entry in _catalog()["commands"]}
 
-    assert commands["compare"]["argument_hint"] == "<legacy> <current>"
     assert commands["sessions resume"]["argument_hint"] == "<id-or-prefix>"
     # Optional in brackets: `tracing` opens the dashboard with no argument.
     assert commands["tracing"]["argument_hint"] == "[action]"
     # An option with no default is not optional: without it the command
     # answers "Missing option", so the hint says how to type it.
-    assert commands["protein-design validate"]["argument_hint"] == "--config <config>"
+    assert commands["protein-design initial-round"]["argument_hint"] == "--config <config>"
     # And a command that takes none says nothing rather than an empty string.
     assert "argument_hint" not in commands["sessions list"]
 

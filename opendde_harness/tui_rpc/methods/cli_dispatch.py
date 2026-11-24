@@ -65,7 +65,6 @@ if TYPE_CHECKING:
 # ``docs/openspec/changes/harness-command-catalog-dynamic/design.md §D4``.
 _DISPATCH_BLACKLIST: set[tuple[str, ...]] = {
     ("provider", "login"),  # OAuth flow requires browser
-    ("compute", "serve"),  # long-running compute API server
     # tui and onboard were unreachable under the old _DISPATCH_WHITELIST.
     # Reflection makes them and the registered upgrade command reachable, so
     # the blacklist hard-rejects all three to preserve safety.
@@ -79,13 +78,7 @@ _DISPATCH_BLACKLIST: set[tuple[str, ...]] = {
 #: enough. Declared here, beside the blacklist, because both answer the same
 #: question -- what a dispatch can host -- and a client that decided this by
 #: name would have to be updated whenever the CLI changes.
-_DISPATCH_TIMEOUTS: dict[tuple[str, ...], float] = {
-    # A first run downloads model weights with parallel workers and checks out
-    # runtime source: minutes on a slow link, and a killed download leaves a
-    # half-prepared weights directory. A later run reads the state file and
-    # returns at once, which is why this is a timeout and not a blacklist.
-    ("compute", "prepare"): 1800.0,
-}
+_DISPATCH_TIMEOUTS: dict[tuple[str, ...], float] = {}
 
 
 def dispatch_timeout(argv: "list[str] | tuple[str, ...]") -> float | None:

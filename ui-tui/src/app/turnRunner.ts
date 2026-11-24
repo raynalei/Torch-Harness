@@ -185,7 +185,7 @@ export class TurnRunner {
    * Say that something which is not a turn is running, until it is not.
    *
    * A slash command that runs on the gateway is a round trip with nothing on
-   * screen: `/compute prepare` downloads model weights for minutes and the UI
+   * screen: a slow gateway command can take time and the UI
    * looked hung for all of them. The busy row already exists and already says
    * how to interrupt; this borrows it.
    *

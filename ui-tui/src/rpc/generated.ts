@@ -403,7 +403,7 @@ export interface CommandsCatalogResponse {
      */
     argument_hint?: string;
     /**
-     * Seconds this command is allowed, where the ordinary slash timeout is not enough (a first `compute prepare` downloads model weights). Absent for everything else. The gateway applies the same figure itself; a client reads it to say that a command may take a while.
+     * Seconds this command is allowed, where the ordinary slash timeout is not enough. Absent for everything else. The gateway applies the same figure itself; a client reads it to say that a command may take a while.
      */
     timeout_s?: number;
   }[];

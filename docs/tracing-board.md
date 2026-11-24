@@ -66,5 +66,5 @@ Task state and worker logs default to
 `OPENDDE_HARNESS_PROTEIN_DESIGN_ROOT`. Dashboard events and captured structures
 live under `~/.opendde_harness/traces/logs/`, overridden by
 `OPENDDE_HARNESS_TRACING_DIR`. Original structure files are on the compute host.
-See [setup and monitoring](protein-design.md#monitor-a-design-task) and
+See [setup and monitoring](initial-round.md) and
 [example configurations](examples/).

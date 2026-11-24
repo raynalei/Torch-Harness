@@ -3,16 +3,13 @@
 The static checks reach no vendor. The one child they start is the model
 service, asked what it knows about the default model and closed again -- a
 catalogue read, with no credential store written and no key seeded. The store is
-read, though, because "is this provider signed in" has no other answer. Memory
-and, when Protein Design is configured, the compute service are probed over
-HTTP; without a Protein Design configuration doctor touches neither Docker nor
-the network. ``--probe`` sends one chat exchange via
+read, though, because "is this provider signed in" has no other answer. Memory is probed over HTTP. ``--probe`` sends one chat exchange via
 :func:`opendde_harness.cli._helpers.send_probe`.
 
 Exit codes:
   0  — all green (and probe ok if requested)
   1  — static check failed (config missing / schema invalid / unresolved routing)
-  2  — static checks ok but ``--probe``, memory or compute readiness failed
+  2  — static checks ok but ``--probe``, memory readiness failed
 """
 
 from __future__ import annotations
@@ -150,7 +147,6 @@ class DoctorReport:
     features: Optional[FeaturesInfo] = None
     memory: Optional[MemoryInfo] = None
     probe: Optional[ProbeResult] = None
-    compute: Optional[dict] = None
 
     def exit_code(self) -> int:
         if self.paths is None or not self.paths.config_exists:
@@ -166,8 +162,6 @@ class DoctorReport:
         # A role the user configured that the server could not build is a real
         # fault, not a warning: recall silently returns nothing.
         if self.memory is not None and self.memory.broken:
-            return 2
-        if self.compute is not None and not self.compute.get("ready"):
             return 2
         return 0
 
@@ -619,9 +613,6 @@ def _render_human_output(report: DoctorReport) -> None:
             console.print(f"  [red]✗ Failed:[/red] {report.probe.error}")
             print_probe_troubleshooting(routing.provider if routing else None)
 
-    if report.compute is not None:
-        _render_compute(report.compute)
-
     console.print()
     code = report.exit_code()
     if code == 0:
@@ -641,86 +632,6 @@ def _render_human_output(report: DoctorReport) -> None:
         )
 
 
-def _render_compute(report: dict, indent: str = "  ") -> None:
-    from rich.markup import escape
-
-    if indent == "  ":
-        console.print("\n[bold]Protein Design compute[/bold]")
-    console.print(
-        f"{indent}Placement: {report.get('placement', 'assets')}  OpenDDE: {report.get('fold_mode', 'api')}  "
-        f"Device: {report.get('device') or 'not verified'}"
-    )
-    for check in report.get("checks", []):
-        icon = "[green]OK[/green]" if check["ok"] else "[red]FAIL[/red]"
-        console.print(
-            f"{indent}{icon} {escape(check['name'])}"
-            + (f": {escape(check['error'])}" if check.get("error") else "")
-            + (f"  [dim]({escape(check['note'])})[/dim]" if check.get("note") else "")
-        )
-    for service in report.get("external_services") or []:
-        from opendde_harness.cli.onboard_compute import external_service_line
-
-        console.print(f"{indent}{escape(external_service_line(service))}")
-    if report.get("service") is not None:
-        _render_service(report["service"], indent)
-    assets = report.get("assets") or {}
-    if assets.get("root"):
-        console.print(f"{indent}Harness tool weights: {escape(assets['root'])}")
-    if assets.get("opendde_root"):
-        console.print(f"{indent}OpenDDE data: {escape(assets['opendde_root'])}")
-    files = assets.get("files") or []
-    for item in files:
-        if not item["ok"]:
-            console.print(f"{indent}[red]FAIL[/red] {escape(item['path'])}: {escape(item['error'])}")
-    if files:
-        verification = (
-            "SHA256 verified"
-            if assets.get("hashes_verified")
-            else "presence/size checked; use --verify-hashes for content verification"
-        )
-        console.print(f"{indent}Assets: {sum(item['ok'] for item in files)}/{len(files)} ({verification})")
-    if assets.get("opendde") == "not_required":
-        console.print(f"{indent}OpenDDE weights/common data: not required in API mode")
-    for worker in report.get("workers", []):
-        console.print(f"{indent}Worker: {escape(worker['id'])}")
-        _render_compute(worker, indent + "  ")
-    if indent == "  " and not report.get("ready"):
-        console.print(
-            "  Run [cyan]ddeharness onboard[/cyan] to configure or start the service; "
-            "[cyan]ddeharness compute prepare[/cyan] downloads missing weights and runtime code."
-        )
-
-
-def _render_service(service: dict, indent: str) -> None:
-    """The on-demand container: not running is normal, running shows its queue, idle countdown and GPU leases."""
-    from rich.markup import escape
-
-    container = escape(str(service.get("container") or ""))
-    if not service.get("running"):
-        console.print(f"{indent}Service: [dim]not running  (starts on demand as {container})[/dim]")
-        return
-    release = "" if service.get("current_release", True) else "  [yellow](previous release; exits when idle)[/yellow]"
-    code_id = escape(str(service.get("code_id") or "")[:12])
-    console.print(
-        f"{indent}Service: [green]running[/green]  {container}  port {service.get('port')}  code {code_id}{release}"
-    )
-    if not service.get("healthy"):
-        return
-    idle, limit = service.get("idle_seconds"), service.get("idle_timeout_seconds")
-    countdown = (
-        f"idle {int(idle)}s of {int(limit)}s" if idle is not None and limit is not None else "idle timeout not reported"
-    )
-    console.print(
-        f"{indent}Jobs: {service.get('jobs_running') or 0} running, {service.get('jobs_queued') or 0} queued  ({countdown})"
-    )
-    for lease in service.get("gpu_leases") or []:
-        detail = ", ".join(f"{key}={value}" for key, value in lease.items()) if isinstance(lease, dict) else str(lease)
-        console.print(f"{indent}GPU lease: {escape(detail)}")
-    for lease in service.get("task_leases") or []:
-        detail = ", ".join(f"{key}={value}" for key, value in lease.items()) if isinstance(lease, dict) else str(lease)
-        console.print(f"{indent}Task lease: {escape(detail)}")
-
-
 def register(app: typer.Typer) -> None:
     @app.command()
     def doctor(
@@ -732,33 +643,9 @@ def register(app: typer.Typer) -> None:
             help="LLM probe timeout in seconds.",
             min=1,
         ),
-        compute_only: bool = typer.Option(
-            False, "--compute-only", help="Check Protein Design compute only; skip LLM and memory checks."
-        ),
-        verify_hashes: bool = typer.Option(
-            False, "--verify-hashes", help="Read every required weight and verify its SHA256."
-        ),
     ) -> None:
-        """Check configuration, and the Protein Design compute setup when one is configured."""
-        from opendde_harness.cli.onboard_compute import inspect_compute, load_protein_design_config
-
-        config = load_protein_design_config()
-        if compute_only:
-            if not config:
-                console.print(
-                    "[red]✗ Protein Design is not configured.[/red] Run [cyan]ddeharness onboard[/cyan] to set it up."
-                )
-                raise typer.Exit(1)
-            compute = inspect_compute(config, verify_hashes=verify_hashes)
-            if json_output:
-                console.print_json(json.dumps(compute))
-            else:
-                _render_compute(compute)
-            raise typer.Exit(0 if compute["ready"] else 2)
-
+        """Check provider and memory configuration."""
         report = _gather_static_checks()
-        if config:
-            report.compute = inspect_compute(config, verify_hashes=verify_hashes)
 
         if report.config_loaded:
             from opendde_harness.config.opendde_harness import load_opendde_harness_config

@@ -5,17 +5,26 @@ from __future__ import annotations
 import json
 import logging
 import re
+from dataclasses import dataclass
 from typing import Any
 
 from opendde_harness.memory_engine.backend import MemoryBackend
 from opendde_harness.memory_engine.skill_forge.memory_source import MemorySkillSource
 from opendde_harness.memory_engine.skill_forge.router import SkillForgeRouter
-from opendde_harness.plugin.protein_design.agents.skills import LearnedSkill
 from opendde_harness.providers import messages as msg
 
 logger = logging.getLogger(__name__)
 
 _COLLAPSED_ENGLISH_TOKEN = re.compile(r"(?=[A-Za-z]{48,})(?=[A-Za-z]*[a-z])[A-Za-z]+")
+
+
+@dataclass(frozen=True)
+class LearnedSkill:
+    name: str
+    content: str
+    roles: tuple[str, ...]
+    native_id: str
+    score: float = 0.0
 
 
 class DesignMemory:

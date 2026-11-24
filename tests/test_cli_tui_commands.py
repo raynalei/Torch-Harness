@@ -160,42 +160,6 @@ def test_node_provisioning_can_be_disabled(home, launch, monkeypatch, capsys):
     assert launch == []
 
 
-def test_tui_exit_asks_idle_compute_to_stop_best_effort(home, launch, monkeypatch):
-    import httpx
-
-    from opendde_harness.plugin.protein_design.servers import local_service
-
-    protein_design = {"compute_token": "tok", "compute_docker": {"image": "x"}, "compute_url": "http://127.0.0.1:1"}
-    write_config(home, {**MINIMAL_CONFIG, "plugins": {"config": {"protein-design": protein_design}}})
-    monkeypatch.setattr(tui_commands, "_stdout_isatty", lambda: False)
-    monkeypatch.setattr(onboard_commands, "run_wizard", lambda **kwargs: pytest.fail("wizard must not run"))
-    monkeypatch.setattr(
-        local_service, "read_state", lambda: {"container": "opendde-compute-abc", "url": "http://127.0.0.1:18089"}
-    )
-    requests = []
-
-    def request_shutdown(url, token, *, if_idle, timeout=5.0):
-        requests.append((url, token, if_idle, timeout))
-        raise httpx.ConnectError("gone")
-
-    monkeypatch.setattr(local_service, "request_shutdown", request_shutdown)
-    result = CliRunner().invoke(tui_commands.tui_app, [])
-    assert result.exit_code == 0, result.output
-    assert len(launch) == 1
-    assert requests == [("http://127.0.0.1:18089", "tok", True, 2.0)]
-
-
-def test_tui_exit_without_recorded_container_sends_nothing(home, launch, monkeypatch):
-    from opendde_harness.plugin.protein_design.servers import local_service
-
-    write_config(home, MINIMAL_CONFIG)
-    monkeypatch.setattr(tui_commands, "_stdout_isatty", lambda: False)
-    monkeypatch.setattr(onboard_commands, "run_wizard", lambda **kwargs: pytest.fail("wizard must not run"))
-    monkeypatch.setattr(local_service, "request_shutdown", lambda *a, **k: pytest.fail("no container to stop"))
-    assert CliRunner().invoke(tui_commands.tui_app, []).exit_code == 0
-    assert len(launch) == 1
-
-
 def test_terminal_fds_are_redirected_to_the_log_while_the_tui_owns_the_screen(tmp_path):
     import os
 

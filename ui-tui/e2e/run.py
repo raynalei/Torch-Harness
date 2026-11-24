@@ -159,22 +159,13 @@ class Fixture:
         self.script.write_text(json.dumps(substitute(json.loads((HERE / "script.json").read_text())), indent=2))
 
     def design_task(self, task_id: str, *, log: str | None = None, mtime: float | None = None, **fields) -> Path:
-        """Write one protein-design task directory the way the worker's store does.
-
-        The payload goes through the plugin's own TaskSnapshot contract, so a
-        fixture cannot drift from the file a real detached run leaves behind.
-        Nothing here starts a worker or reserves compute, and everything lands
-        under this fixture's temporary HOME, never a real task root.
+        """Write a historical task snapshot for the TUI monitor.
 
         `mtime` pins the snapshot's timestamp. That is what the monitor records
         as the task's last observation and orders its rows on, and it also makes
         a rewrite a change the unchanged-file check has to look at rather than
         skip.
         """
-        if str(self.repo) not in sys.path:
-            sys.path.insert(0, str(self.repo))
-        from opendde_harness.plugin.protein_design.core.contracts import TaskSnapshot
-
         payload = {
             "task_id": task_id,
             "status": "running",
@@ -190,7 +181,7 @@ class Fixture:
         directory = self.task_root / task_id
         directory.mkdir(exist_ok=True)
         snapshot = directory / "snapshot.json"
-        snapshot.write_text(json.dumps(TaskSnapshot.model_validate(payload).model_dump(mode="json")))
+        snapshot.write_text(json.dumps(payload))
         if log is not None:
             (directory / "worker.log").write_text(log)
         if mtime is not None:

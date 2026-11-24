@@ -19,7 +19,7 @@ async def test_setup_status_never_treats_missing_or_invalid_config_as_ready(tmp_
 async def test_setup_status_reports_compute_and_provider_separately(tmp_path, monkeypatch):
     path = tmp_path / "config.json"
     monkeypatch.setattr(setup, "_config_path", lambda: path)
-    path.write_text('{"plugins": {"config": {"protein-design": {"compute_url": "http://127.0.0.1:8080"}}}}')
+    path.write_text('{"plugins": {"config": {"protein-design": {"model_services": "models.json"}}}}')
     status = await setup.setup_status({})
     assert status == {"provider_configured": False, "compute_configured": True}
 

@@ -58,9 +58,7 @@ added to the hermes slash handler.
 _SLASH_TIMEOUT_S = 20.0
 """Tighter than cli.dispatch's 30s default — slash commands are interactive
 and a 20s ceiling keeps the UI responsive. A command that declares its own
-(``_DISPATCH_TIMEOUTS``) gets that instead: `compute prepare` downloads model
-weights on a first run and twenty seconds is not a ceiling but a guarantee of
-failure."""
+(``_DISPATCH_TIMEOUTS``) gets that instead."""
 
 #: Click's exit code for a command invoked wrongly.
 _USAGE_EXIT = 2
@@ -172,7 +170,7 @@ async def slash_exec(params: dict[str, Any], *, confirm_broker: "ConfirmBroker |
             confirm_broker=confirm_broker,
         )
     except NotDispatchCompatibleError:
-        # Either P3 blacklist (provider login / compute serve / tui / onboard /
+        # Either P3 blacklist (provider login / tui / onboard /
         # agent-REPL) or a verb not in the whitelist. We
         # distinguish by checking the well-known blacklist prefixes.
         if _is_blacklist_argv(argv):

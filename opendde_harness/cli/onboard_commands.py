@@ -9,7 +9,6 @@ Steps:
   1. LLM provider (required; the TUI's ``/login`` at a terminal, then the
      connectivity check, the default model and a test message)
   2. Long-term memory (optional; one question -- it runs on the default model)
-  3. Protein Design compute and folding configuration
   4. Web search (optional)
   5. Done
 
@@ -79,7 +78,7 @@ class _ThemedConsole(Console):
 
 console = _ThemedConsole()
 
-_TOTAL_STEPS = 4
+_TOTAL_STEPS = 3
 
 # Sentinel returned by a screen function to ask the runner to go back one
 # screen; ``None`` from a picker means Ctrl+C (exit).
@@ -1708,32 +1707,6 @@ def _step1_provider(
         return
 
 
-def _protein_design_recap() -> str:
-    """Where Protein Design compute runs and whether it answers, for the recap.
-
-    Read from disk and probed the same way ``ddeharness doctor`` does, so the
-    recap reports the state the user will find rather than what the step
-    intended.
-    """
-    from opendde_harness.cli.onboard_compute import inspect_compute, load_protein_design_config
-
-    config = load_protein_design_config()
-    if not config:
-        return _t("[warn]not configured[/warn]", "[warn]未配置[/warn]")
-    report = inspect_compute(config)
-    placement = {
-        "local_docker": _t("local Docker", "本地 Docker"),
-        "remote_service": _t("remote service", "远程服务"),
-        "worker_pool": _t("worker pool", "计算节点池"),
-    }.get(str(report.get("placement")), str(report.get("placement") or "—"))
-    readiness = (
-        _t("[ok]ready[/ok]", "[ok]就绪[/ok]")
-        if report.get("ready")
-        else _t("[warn]unreachable[/warn]", "[warn]未就绪[/warn]")
-    )
-    return f"{placement}, {readiness}"
-
-
 def _print_next_steps(*, warnings: list[str], show_next_steps: bool = True) -> None:
     console.print()
     if warnings:
@@ -1763,7 +1736,6 @@ def _print_next_steps(*, warnings: list[str], show_next_steps: bool = True) -> N
             (_t("Provider", "服务商"), provs),
             (_t("Default model", "默认模型"), _load_current_default_model() or "—"),
             (_t("Memory", "长期记忆"), mem),
-            (_t("Protein design", "蛋白设计"), _protein_design_recap()),
             (
                 _t("Web search", "网页搜索"),
                 _t("Brave Search API", "Brave Search API")
@@ -1789,7 +1761,7 @@ def _print_next_steps(*, warnings: list[str], show_next_steps: bool = True) -> N
         console,
         [
             ("ddeharness", _t("start the antibody design TUI", "启动抗体设计 TUI")),
-            ("ddeharness doctor", _t("check configuration and compute readiness", "检查配置与计算就绪状态")),
+            ("ddeharness doctor", _t("check configuration and memory readiness", "检查配置与记忆就绪状态")),
             ("ddeharness tracing", _t("open the results dashboard", "打开结果面板")),
         ],
         key_style="accent",
@@ -1809,7 +1781,6 @@ def run_wizard(
     base_url: Optional[str] = None,
     model: Optional[str] = None,
     skip_memory: bool = False,
-    skip_protein_design: bool = False,
     brave_api_key: Optional[str] = None,
     non_interactive: bool = False,
     yes: bool = False,
@@ -1837,7 +1808,6 @@ def run_wizard(
             base_url=base_url,
             model=model,
             skip_memory=skip_memory,
-            skip_protein_design=skip_protein_design,
             brave_api_key=brave_api_key,
             non_interactive=non_interactive,
             yes=yes,
@@ -1849,17 +1819,6 @@ def run_wizard(
         _logger.enable("opendde_harness")
 
 
-def _step3_protein_design(*, skip: bool, non_interactive: bool, warnings: list[str]) -> object:
-    """Step 3 -- Protein Design compute settings."""
-    _step_header(3, _t("Protein Design", "蛋白设计配置"))
-    if skip or non_interactive:
-        return None
-    from opendde_harness.cli.onboard_protein_design import configure_protein_design
-
-    configure_protein_design()
-    return None
-
-
 def _web_search_configured() -> bool:
     """Is a Brave key in effect -- configured under either spelling, or in the environment?"""
     from opendde_harness.agent.tools.web import brave_key
@@ -1868,10 +1827,10 @@ def _web_search_configured() -> bool:
     return bool(brave_key(web.get("braveApiKey") or web.get("brave_api_key")))
 
 
-def _step4_web_search(
+def _step3_web_search(
     *, brave_api_key: Optional[str], non_interactive: bool, warnings: list[str], skip_test: bool
 ) -> object:
-    """Step 4 -- Web search (optional).
+    """Step 3 -- Web search (optional).
 
     Without a key ``web_search`` queries DuckDuckGo, which needs none, and a
     provider with a hosted search (the Codex login, OpenAI, Anthropic) uses
@@ -1883,7 +1842,7 @@ def _step4_web_search(
     from opendde_harness.agent.tools.web import header_safe
     from opendde_harness.config.update import set_web_search_key
 
-    _step_header(4, _t("Web search", "网页搜索"))
+    _step_header(3, _t("Web search", "网页搜索"))
     console.print(
         _t(
             "  [dim]Without a key, web_search uses DuckDuckGo (no key needed); a provider with its own "
@@ -1973,7 +1932,6 @@ def _run_wizard_body(
     base_url: Optional[str] = None,
     model: Optional[str] = None,
     skip_memory: bool = False,
-    skip_protein_design: bool = False,
     brave_api_key: Optional[str] = None,
     non_interactive: bool = False,
     yes: bool = False,
@@ -2010,7 +1968,6 @@ def _run_wizard_body(
         [
             _t("LLM provider", "LLM 服务商"),
             _t("Long-term memory", "长期记忆"),
-            _t("Protein design", "蛋白设计"),
             _t("Web search", "网页搜索"),
         ],
     )
@@ -2039,12 +1996,7 @@ def _run_wizard_body(
             skip_test=skip_test,
         ),
         lambda: _memory_step(skip=skip_memory, non_interactive=non_interactive, warnings=warnings),
-        lambda: _step3_protein_design(
-            skip=skip_protein_design,
-            non_interactive=non_interactive,
-            warnings=warnings,
-        ),
-        lambda: _step4_web_search(
+        lambda: _step3_web_search(
             brave_api_key=brave_api_key,
             non_interactive=non_interactive,
             warnings=warnings,
@@ -2138,13 +2090,10 @@ def register(app: typer.Typer) -> None:
             help="Default model id (e.g. 'openai/gpt-4o-mini'); for a declared provider, the id(s) it serves",
         ),
         skip_memory: bool = typer.Option(False, "--skip-memory", help="Skip Step 2 (Persistent Memory)"),
-        skip_protein_design: bool = typer.Option(
-            False, "--skip-protein-design", help="Skip Step 3 (Protein Design compute settings)"
-        ),
         brave_api_key: Optional[str] = typer.Option(
             None,
             "--brave-api-key",
-            help="Step 4: Brave Search API key for web_search (without one, DuckDuckGo is used)",
+            help="Step 3: Brave Search API key for web_search (without one, DuckDuckGo is used)",
         ),
         non_interactive: bool = typer.Option(
             False,
@@ -2164,14 +2113,13 @@ def register(app: typer.Typer) -> None:
             "understands its shape",
         ),
     ) -> None:
-        """Configure LLM, memory, Protein Design compute and web search."""
+        """Configure LLM, memory and web search."""
         run_wizard(
             provider=provider,
             api_key=api_key,
             base_url=base_url,
             model=model,
             skip_memory=skip_memory,
-            skip_protein_design=skip_protein_design,
             brave_api_key=brave_api_key,
             non_interactive=non_interactive,
             yes=yes,

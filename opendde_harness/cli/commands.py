@@ -13,7 +13,6 @@ group. The actual implementations live in per-feature modules:
   ``compare`` is defined in this module.
 
 - Subcommand groups (each exposes a typer ``*_app`` instance):
-    - ``compute``        → ``opendde_harness/cli/compute_commands.py``
     - ``provider``       → ``opendde_harness/cli/provider_commands.py``
     - ``protein-design`` → ``opendde_harness/cli/protein_design_commands.py``
     - ``sessions``       → ``opendde_harness/cli/session_commands.py``
@@ -26,7 +25,6 @@ Shared helpers used across multiple command modules live in
 
 import os
 import sys
-from pathlib import Path
 
 # Force UTF-8 encoding for Windows console
 if sys.platform == "win32":
@@ -111,12 +109,10 @@ upgrade_commands.register(app)
 # Subcommand registrations
 # ============================================================================
 
-from opendde_harness.cli.compute_commands import compute_app
 from opendde_harness.cli.protein_design_commands import protein_design_app
 from opendde_harness.cli.provider_commands import provider_app
 from opendde_harness.cli.skill_commands import skill_app
 
-app.add_typer(compute_app, name="compute")
 app.add_typer(provider_app, name="provider")
 app.add_typer(protein_design_app, name="protein-design")
 app.add_typer(skill_app, name="skill")
@@ -133,20 +129,6 @@ app.add_typer(session_app, name="sessions")
 from opendde_harness.cli.workspace_commands import workspace_app
 
 app.add_typer(workspace_app, name="workspace")
-
-
-@app.command("compare")
-def compare(
-    legacy: Path = typer.Argument(..., exists=True, dir_okay=False),
-    current: Path = typer.Argument(..., exists=True, dir_okay=False),
-    top_k: int = typer.Option(20, "--top-k", min=1),
-    maximize: bool = typer.Option(False, "--maximize"),
-) -> None:
-    """Compare two protein-design candidate populations."""
-    from opendde_harness.plugin.protein_design.core.validation import compare_runs, load_candidates
-
-    report = compare_runs(load_candidates(legacy), load_candidates(current), top_k=top_k, minimize=not maximize)
-    typer.echo(report.model_dump_json(indent=2))
 
 
 def run() -> None:

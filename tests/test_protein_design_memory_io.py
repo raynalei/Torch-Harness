@@ -1,37 +1,11 @@
 """Design memory uses compact queries and durable, deferred appends."""
 
 import json
-from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 
 from opendde_harness.plugin.memory.longterm.backend import _HttpMemoryAdapter
-from opendde_harness.plugin.protein_design.agents.phases import ProteinDesignPhases
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("design_type,region", [("antibody", "antibody CDR"), ("minibinder", "binder interface")])
-async def test_recall_query_excludes_candidate_dump(design_type, region):
-    class RecallComplete(Exception):
-        pass
-
-    memory = SimpleNamespace(
-        retrieve=AsyncMock(return_value=[]),
-        retrieve_skills=AsyncMock(side_effect=RecallComplete),
-    )
-    phases = ProteinDesignPhases(None, None, memory)
-    best = SimpleNamespace(model_dump=lambda: pytest.fail("Do not serialize candidates for keyword recall"))
-    config = SimpleNamespace(target="test-target", design_type=design_type, objective_key="loss")
-    for cycle in (1, 99):
-        with pytest.raises(RecallComplete):
-            await phases.design_cycle(config, cycle, None, [{"sequence": "A" * 10000}], best)
-    queries = [call.args[1] for call in memory.retrieve.call_args_list]
-    assert queries[0] == queries[1]
-    assert region in queries[0] and "loss" in queries[0]
-    assert len(queries[0]) < 200
-    assert memory.retrieve.call_args_list == memory.retrieve_skills.call_args_list
 
 
 @pytest.mark.asyncio

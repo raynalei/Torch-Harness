@@ -274,11 +274,7 @@ def _stage_release_tree(root, uis=("ui-tui",)):
     (root / "opendde_harness").mkdir()
     (root / "opendde_harness" / "__init__.py").write_text("")
     (root / "docs" / "examples").mkdir(parents=True)
-    for name in ("crlf2_quickstart.yaml", "cacng1_quickstart.yaml"):
-        (root / "docs" / "examples" / name).write_text("stub: true\n")
-    (root / "docker").mkdir()
-    for name in ("versions.env", "environment.json", "model-checksums.sha256", "ESM-LICENSE.txt"):
-        (root / "docker" / name).write_text("stub\n")
+    (root / "docs" / "examples" / "cluster_deployment.yaml").write_text("stub: true\n")
     for name in uis:
         (root / name / "dist").mkdir(parents=True)
         for bundle in BUNDLES:
@@ -310,6 +306,7 @@ def test_the_tui_bundle_reaches_the_sdist_and_the_wheel_built_from_it(tmp_path):
     shipped = sorted(n for n in names["wheel"] if "ui-tui" in n)
     assert shipped == sorted(f"opendde_harness/ui-tui/dist/{b}" for b in BUNDLES), shipped
     assert not any("node_modules" in n for n in names["wheel"])
+    assert "opendde_harness/plugin/protein_design/initial_round/cluster_deployment.yaml" in names["wheel"]
 
 
 # The three tests that used to sit here held LiteLLM's loggers at WARNING, so

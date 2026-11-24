@@ -2,37 +2,17 @@
 name: structure-analysis
 description: |
   Analyze protein-ligand or protein-protein interactions from a single structure
-  file with PLIP in the OpenDDE Harness compute service.
+  file with a locally installed PLIP executable.
   Use this skill when you need to profile interaction types such as hydrogen
   bonds, hydrophobic contacts, pi-stacking, salt bridges, or water bridges.
-
-  PLIP (Protein-Ligand Interaction Profiler) runs inline in the persistent
-  configured compute service. It does not launch or pull a separate
-  PLIP container at runtime.
 ---
 
 # Structure Analysis Skill
 
-## EvoReflect Direct Tool
-
-Within ReflectAgent, call `analyze_current_cycle_structure`. It accepts trusted
-candidate IDs paired with the exact structure paths from Reflection's allowed
-catalog. The compute service validates that every path belongs to the active
-task output, invokes the packaged backend with validated arguments, parses the reports,
-and returns a bounded interaction summary. Do not invent paths or load raw PLIP
-reports into model context.
-
-Call the tool at most once per Reflection and analyze no more than three
-informative complexes: the current parent, the best new candidate, and one
-contrasting candidate. Copy candidate IDs, structure paths, binder chains,
-target chains, and cycle number exactly from the trusted catalog. PLIP failure
-is non-fatal; continue from fold metrics and supplied contact-gate evidence and
-mark detailed interaction evidence unavailable.
-
 ## Standalone Usage
 
 ```bash
-python -m opendde_harness.plugin.protein_design.servers.backends.plip_runner \
+python -m opendde_harness.plugin.protein_design.analysis.plip_runner \
     outputs/.../some_complex_structure.cif \
     --cyc-num 1 \
     --name cycle_1_mut_001 \
@@ -62,10 +42,5 @@ scores alone.
 
 ## Dependencies
 
-The persistent configured compute service provides both runtime
-dependencies:
-
-- **PLIP**: invoked inline through `PLIP_COMMAND`
-- **biotite**: converts `.cif`/`.mmcif` structures to standard `.pdb`
-
-No separate PLIP Docker image is required or launched by this skill.
+Install PLIP in the local environment and ensure its command is on PATH.
+Use the optional `protein-design` dependencies for local structure parsing.

@@ -9,11 +9,11 @@
 
 ![tui](docs/assets/tui.png)
 
-Harness for agentic antibody design: prepare targets, optimize CDR sequences, predict structures with OpenDDE, and inspect results. Supports VHH, scFv and paired VH/VL binders while preserving configured fixed residues.
+Harness for agentic antibody design: prepare targets, optimize CDR sequences, predict structures with registered model services, and inspect results. Supports VHH, scFv and paired VH/VL binders while preserving configured fixed residues.
 
 - Guided setup and reviewed design plans in natural language.
 - Generate antibody sequences through LLM reasoning and structural verification.
-- Agentic evolutional discovery for antibody design.
+- Initial Round and Autonomous Design Loop workflows.
 
 > [!NOTE]
 > OpenDDE Harness is an early preview, and you may encounter bugs. If something
@@ -74,10 +74,7 @@ ddeharness tui --check
 ```
 
 If the command is not found, run `uv tool update-shell` and open a new terminal.
-Updates preserve configuration, results, and model data. Running compute
-containers keep their current code until they exit; later starts use the updated
-code. See the [installation guide](docs/installation.md) for runtime overrides,
-compute environments, and model download options.
+Updates preserve configuration, results, and model data. See the [installation guide](docs/installation.md) for source installs.
 
 ### Uninstall
 
@@ -91,30 +88,17 @@ Configuration, results, model data, and compute services are retained.
 
 ## Quick Start
 
-### 1. Configure the client and compute
+### 1. Configure the client and model services
 
 ```bash
 ddeharness onboard
-```
-
-Follow the wizard to configure your LLM provider, optional memory, and a local
-Docker environment or existing Linux compute service. Choose API or local OpenDDE
-folding; both use the Harness compute service.
-
-Local compute requires Linux x86-64 and Docker; CUDA also requires NVIDIA drivers
-and NVIDIA Container Toolkit. See [onboarding](docs/onboarding.md) for setup and
-model preparation details.
-
-After setup, check your configuration, memory service, and compute readiness:
-
-```bash
 ddeharness doctor
+ddeharness protein-design models list
 ```
 
-Use `ddeharness doctor --probe` to send a test message to your LLM, or
-`ddeharness doctor --compute-only` to check just the compute service. When
-reporting a problem, include `ddeharness doctor --json` output and your command
-or design request. See [troubleshooting](docs/troubleshooting.md) for common issues.
+The wizard configures the LLM provider, optional memory, and web search.
+See [model registration](docs/protein-model-tools.md) and the
+[deployment guide](docs/protein-design.md) for model endpoints and workflow profiles.
 
 ### 2. Start a design
 
@@ -131,10 +115,7 @@ Then describe your task:
 See the [terminal UI guide](docs/tui.md) for the screen, commands and keys.
 CLI-based design workflows are also supported. See the
 [CLI usage guide](docs/cli.md).
-For YAML-based runs, see the [complete parameter reference](docs/protein-design-yaml.md)
-and the [CRLF2 staged example](docs/examples/crlf2_scheduled.yaml), which changes
-batch size, strategy weights, population capacity, and parent temperature by cycle interval.
-The parameter reference also explains stagnation-triggered redesign, defaults, and current limitations.
+See [Initial Round](docs/initial-round.md) and [Autonomous Design Loop](docs/autonomous-feedback.md).
 
 ### 3. Inspect results
 
@@ -148,12 +129,9 @@ Open the printed URL and select **Protein design** to inspect sequences, structu
 
 ![Design progress, agent activity and candidate lineage](docs/assets/tracing_board_2.png)
 
-Started design tasks run in background processes and continue after the TUI
-closes while the client host remains running. Task state and worker logs default
-to `~/.opendde_harness/protein_design/<task_id>/`; set
-`OPENDDE_HARNESS_PROTEIN_DESIGN_ROOT` to change the task root. With remote compute,
-original structure files are stored on the compute host, and the dashboard uses
-structures captured in the client's tracing data. See the [dashboard guide](docs/tracing-board.md).
+Detached runs record their working directory when launched. Use that directory
+to inspect or resume a run after reconnecting. See the [CLI guide](docs/cli.md)
+and [dashboard guide](docs/tracing-board.md).
 
 ## Development & License
 
@@ -167,11 +145,11 @@ For the original tools/skills and registration troubleshooting, see the
 For PPIFlow-only background automation and shorter Qwen responses, see
 [automatic initial rounds](docs/automatic-initial-round.md).
 
-See the [repository rules](AGENTS.md) and [compute image build instructions](docker/README.md). Ordinary users consume a prebuilt image; Dockerfiles remain available for publishers and customization. Licensed under [Apache-2.0](LICENSE); see [third-party notices](LICENSES/README.md). TUI and memory foundations are adapted from Raven, and long-term memory is served by EverOS. Models may have separate terms. Computational results require experimental validation. Model calls and compute may incur costs.
+See the [repository rules](AGENTS.md). Licensed under [Apache-2.0](LICENSE); see [third-party notices](LICENSES/README.md). TUI and memory foundations are adapted from Raven, and long-term memory is served by EverOS. Models may have separate terms. Computational results require experimental validation. Model calls and compute may incur costs.
 
 ## Citation and Acknowledgements
 
-If you use OpenDDE Harness in your work, please cite this software and the technical report linked above. When using OpenDDE for structure prediction, also cite the [OpenDDE technical report](https://arxiv.org/abs/2607.03787) and follow its citation and acknowledgement guidance. Cite the original methods for other models and tools used in your experiments, including SolubleMPNN and ESM2 when applicable.
+If you use OpenDDE Harness in your work, please cite this software and the technical report linked above. When using OpenDDE for structure prediction, also cite the [OpenDDE technical report](https://arxiv.org/abs/2607.03787) and follow its citation and acknowledgement guidance. Cite the original methods for the models and tools used in your experiments.
 
 We acknowledge Raven, EverOS, and the upstream projects listed in the [third-party notices](LICENSES/README.md). Their software and model licenses continue to apply.
 

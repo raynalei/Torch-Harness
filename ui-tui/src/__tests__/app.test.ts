@@ -1408,16 +1408,16 @@ describe('commands and the screen', () => {
     await app.boot()
     transport.hold('slash.exec')
 
-    const running = app.submit('/compute prepare')
+    const running = app.submit('/protein-design models list')
 
     await tick(10)
     terminal.writes.length = 0
     tui.requestRender(true)
     tui.renderNow()
 
-    // Minutes of weight downloading used to look like a hung UI: the command
+    // A slow gateway request can look like a hung UI: the command
     // occupies the same busy row a turn does.
-    expect(screen()).toContain('compute prepare')
+    expect(screen()).toContain('protein-design models list')
 
     transport.release('slash.exec')
     await running
@@ -1427,7 +1427,7 @@ describe('commands and the screen', () => {
     tui.renderNow()
 
     // And the row goes when it finishes.
-    expect(screen()).not.toContain('compute prepare…')
+    expect(screen()).not.toContain('protein-design models list…')
   })
 
   it('takes the offer to exit back when a turn runs between the two presses', async () => {
@@ -1464,7 +1464,7 @@ describe('commands and the screen', () => {
     await app.boot()
     transport.hold('slash.exec')
 
-    const running = app.submit('/compute prepare')
+    const running = app.submit('/protein-design models list')
 
     await tick(10)
 
@@ -1476,7 +1476,7 @@ describe('commands and the screen', () => {
       return screen()
     }
 
-    expect(painted()).toContain('compute prepare')
+    expect(painted()).toContain('protein-design models list')
 
     terminal.onInput?.('\x03')
     await tick(10)

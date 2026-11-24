@@ -82,8 +82,7 @@ jobs:
           config.read_string(archive.read(entries).decode())
           assert config["console_scripts"]["ddeharness"] == "opendde_harness.cli.commands:run", "ddeharness entry missing"
           assert "ddehess" not in config["console_scripts"], "incorrect CLI entry present"
-          for name in ("compute_environment.json", "source_versions.env", "model-checksums.sha256", "esm-model-license.txt"):
-              assert f"opendde_harness/cli/{name}" in names, f"runtime preparation resource missing: {name}"
+          assert "opendde_harness/plugin/protein_design/initial_round/cluster_deployment.yaml" in names
           assert not any(n.startswith(("external/opendde/", "external/ligandmpnn/", "external/plip/", "external/foldmason/")) for n in names), "upstream checkout leaked into wheel"
           assert not any(n.endswith((".pt", ".ckpt", ".safetensors")) for n in names), "model weights leaked into wheel"
           with tarfile.open(glob.glob("release/packages/*.tar.gz")[0]) as sdist:

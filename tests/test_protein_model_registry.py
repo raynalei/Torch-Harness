@@ -488,10 +488,10 @@ def test_cli_bootstrap_exposes_named_models_to_existing_qwen_provider(registrati
 
 
 def test_readiness_accepts_external_models_without_legacy_compute_url(registration):
-    from opendde_harness.plugin.protein_design.readiness import compute_configured
+    from opendde_harness.plugin.protein_design.readiness import models_configured
 
-    assert compute_configured({"model_services": registration})
-    assert not compute_configured({"model_services": {}})
+    assert models_configured({"model_services": registration})
+    assert not models_configured({"model_services": {}})
 
 
 async def test_torchcraft_unconditional_mode_accepts_the_users_curl_shape(api, tmp_path):

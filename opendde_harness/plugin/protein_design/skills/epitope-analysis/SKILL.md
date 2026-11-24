@@ -26,7 +26,7 @@ Rapidly identifies epitope residues and analyzes antibody-antigen contacts using
 ### Single Structure Analysis
 
 ```bash
-python3 -m opendde_harness.plugin.protein_design.servers.backends.epitope_analysis \
+python3 -m opendde_harness.plugin.protein_design.analysis.epitope_analysis \
     --config_yaml configs/design.yaml \
     --binder_name seed_name \
     --structure_file outputs/structures/candidate_042_complex.pdb \
@@ -43,7 +43,7 @@ are not YAML hotspot positions: YAML uses one-based order within the supplied
 target sequence. Map between them using the actual structure, not a fixed offset.
 
 ```bash
-python3 -m opendde_harness.plugin.protein_design.servers.backends.epitope_analysis \
+python3 -m opendde_harness.plugin.protein_design.analysis.epitope_analysis \
     --config_yaml configs/design.yaml \
     --binder_name seed_name \
     --structure_file outputs/structures/candidate_042_complex.pdb \
@@ -56,7 +56,7 @@ python3 -m opendde_harness.plugin.protein_design.servers.backends.epitope_analys
 ### Batch Processing
 
 ```bash
-python3 -m opendde_harness.plugin.protein_design.servers.backends.epitope_batch \
+python3 -m opendde_harness.plugin.protein_design.analysis.epitope_batch \
     --config_yaml configs/design.yaml \
     --binder_name seed_name \
     --structure_dir outputs/structures/ \
@@ -141,7 +141,7 @@ Default: 4.5Å (standard for antibody-antigen contacts)
 
 ```bash
 # Custom cutoff
-python3 -m opendde_harness.plugin.protein_design.servers.backends.epitope_analysis \
+python3 -m opendde_harness.plugin.protein_design.analysis.epitope_analysis \
     --config_yaml configs/design.yaml \
     --binder_name seed_name \
     --structure_file structure.pdb \
@@ -159,7 +159,7 @@ All YAML positions are 1-based sequence indices and are mapped to structure
 residues by chain-local residue order, not by PDB/mmCIF residue number.
 
 ```bash
-python3 -m opendde_harness.plugin.protein_design.servers.backends.epitope_analysis \
+python3 -m opendde_harness.plugin.protein_design.analysis.epitope_analysis \
     --config_yaml configs/design.yaml \
     --binder_name seed_name \
     --structure_file structure.pdb \
@@ -176,7 +176,7 @@ Default: Heavy atoms only (C, N, O, S)
 
 ```bash
 # Include all atoms
-python3 -m opendde_harness.plugin.protein_design.servers.backends.epitope_analysis \
+python3 -m opendde_harness.plugin.protein_design.analysis.epitope_analysis \
     --config_yaml configs/design.yaml \
     --binder_name seed_name \
     --structure_file structure.pdb \
@@ -190,7 +190,7 @@ python3 -m opendde_harness.plugin.protein_design.servers.backends.epitope_analys
 ### After Structure Prediction
 
 ```python
-from opendde_harness.plugin.protein_design.servers.backends.epitope_analysis import (
+from opendde_harness.plugin.protein_design.analysis.epitope_analysis import (
     analyze_epitope,
     load_cdr_regions_from_yaml,
 )
@@ -209,23 +209,6 @@ epitope_result = analyze_epitope(
 # Check hotspot coverage
 if epitope_result["hotspot_analysis"]["hotspot_coverage"] < 0.6:
     print(f"⚠️  Low hotspot coverage: {epitope_result['hotspot_analysis']['hotspot_coverage']:.1%}")
-```
-
-### With ReflectAgent
-
-Agent can use this skill to:
-- Verify CDR3_H is contributing to binding (should be dominant)
-- Check if known hotspots are being contacted
-- Compare epitope coverage across variants
-
-```python
-# Agent calls this skill
-epitope_result = run_epitope_analysis(structure_file)
-
-# Agent interprets results
-if epitope_result["cdr_contributions"]["CDR3_H"]["total_contacts"] < 30:
-    # Flag: CDR3_H should be the major contributor
-    warning = "CDR3_H shows weak binding contribution"
 ```
 
 ## Algorithm Details
@@ -334,7 +317,7 @@ result = analyze_epitope(
 # outputs/structures/candidate_042_complex.pdb
 
 # 2. Run epitope analysis
-python3 -m opendde_harness.plugin.protein_design.servers.backends.epitope_analysis \
+python3 -m opendde_harness.plugin.protein_design.analysis.epitope_analysis \
     --config_yaml configs/design.yaml \
     --binder_name seed_name \
     --structure_file outputs/structures/candidate_042_complex.pdb \

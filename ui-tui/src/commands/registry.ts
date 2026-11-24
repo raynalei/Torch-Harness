@@ -6,7 +6,6 @@ import type { Command, CommandContext } from './types.js'
 
 import { authCommands } from './auth.js'
 import { coreCommands } from './core.js'
-import { designCommands } from './design.js'
 import { mcpCommands } from './mcp.js'
 import { memoryCommands } from './memory.js'
 import { sessionCommands } from './session.js'
@@ -23,7 +22,6 @@ export class CommandRegistry {
     this.commands = [
       ...authCommands,
       ...coreCommands(),
-      ...designCommands,
       ...mcpCommands,
       ...memoryCommands,
       ...sessionCommands,

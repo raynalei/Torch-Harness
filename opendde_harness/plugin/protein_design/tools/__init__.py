@@ -1,1 +1,1 @@
-"""External control tools and Agent-internal protein-design tools."""
+"""Tools for registered model requests and background design workflows."""

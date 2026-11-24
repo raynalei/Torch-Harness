@@ -145,7 +145,7 @@ jobs:
         run: |
           uv run ddeharness --version
           uv run ddeharness --help
-          uv run ddeharness compute prepare --help
+          uv run ddeharness protein-design initial-round --help
 
   tui:
     name: TUI checks (${{ matrix.os }})

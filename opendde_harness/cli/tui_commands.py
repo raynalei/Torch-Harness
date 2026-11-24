@@ -738,16 +738,6 @@ def _is_abnormal_child_exit(exit_code: int) -> bool:
     return exit_code not in (0, 129, 130, 143, _RPC_HANDSHAKE_EXIT_CODE)
 
 
-def _release_compute() -> None:
-    """Ask the on-demand compute container to stop if idle; best-effort, never delays the exit."""
-    try:
-        from opendde_harness.plugin.protein_design.servers.local_service import release_if_idle
-
-        release_if_idle(timeout=2.0)
-    except Exception:
-        pass
-
-
 def _diagnose_crash(node_path: str, dist_entry: Path, cwd: Path) -> None:
     """When `tui` child exits non-zero, re-run capturing stderr for diagnosis."""
     try:
@@ -928,9 +918,6 @@ def tui(
             exit_code = run_subprocess_with_rpc(node_path, [str(dist_entry)], cwd=dist_cwd, log_path=log_path)
         if _is_abnormal_child_exit(exit_code):
             _diagnose_crash(node_path, dist_entry, dist_cwd)
-
-    if not check:
-        _release_compute()
 
     # tui.log stays silent on a clean run; surface it only when the child
     # exited abnormally (see _is_abnormal_child_exit).

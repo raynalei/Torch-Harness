@@ -11,7 +11,6 @@ from uuid import uuid4
 import httpx
 from pydantic import Field, model_validator
 
-from opendde_harness.plugin.protein_design.core.contracts import ContractModel
 from opendde_harness.plugin.protein_design.core.model_requests import (
     REQUEST_TYPES,
     ROSETTA_OPERATIONS,
@@ -20,6 +19,7 @@ from opendde_harness.plugin.protein_design.core.model_requests import (
     validate_request,
     validate_request_defaults,
 )
+from opendde_harness.plugin.protein_design.core.schema import ContractModel
 from opendde_harness.plugin.protein_design.initial_round.api_startup import allocation_record, allocation_was_released
 from opendde_harness.plugin.protein_design.initial_round.config import Service
 from opendde_harness.plugin.protein_design.initial_round.services import ServiceConnection

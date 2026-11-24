@@ -24,7 +24,7 @@ def test_a_command_that_needs_an_argument_says_which_one() -> None:
 
 
 def test_a_missing_option_is_named_the_way_it_is_typed() -> None:
-    assert _exec("protein-design validate")["output"] == "/protein-design validate needs --config <config>"
+    assert _exec("protein-design initial-round")["output"] == "/protein-design initial-round needs --config <config>"
 
 
 def test_the_hint_in_the_answer_is_the_one_the_popup_shows() -> None:
@@ -34,7 +34,7 @@ def test_the_hint_in_the_answer_is_the_one_the_popup_shows() -> None:
     catalog = asyncio.run(commands_catalog({}))
     hints = {entry["name"]: entry.get("argument_hint") for entry in catalog["commands"]}
 
-    for name in ("provider get", "compare", "sessions resume"):
+    for name in ("provider get", "sessions resume"):
         assert _exec(name)["output"] == f"/{name} needs {hints[name]}"
 
 
@@ -57,9 +57,10 @@ def test_a_command_that_fails_for_any_other_reason_keeps_its_error() -> None:
     assert answer["warning"] == "boom: the disk is full"
 
 
-def test_a_command_that_declares_a_timeout_is_given_it() -> None:
-    """A first `compute prepare` downloads model weights. Twenty seconds is not
-    a ceiling for that, it is a guarantee of failure."""
+def test_a_command_that_declares_a_timeout_is_given_it(monkeypatch) -> None:
+    from opendde_harness.tui_rpc.methods.cli_dispatch import _DISPATCH_TIMEOUTS
+
+    monkeypatch.setitem(_DISPATCH_TIMEOUTS, ("doctor",), 1800.0)
     seen = []
 
     async def fake_dispatch(params, **_kwargs):
@@ -69,7 +70,7 @@ def test_a_command_that_declares_a_timeout_is_given_it() -> None:
     original = slash_routing.cli_dispatch
     slash_routing.cli_dispatch = fake_dispatch
     try:
-        _exec("compute prepare")
+        _exec("doctor")
         _exec("sessions list")
     finally:
         slash_routing.cli_dispatch = original
@@ -77,11 +78,12 @@ def test_a_command_that_declares_a_timeout_is_given_it() -> None:
     assert seen == [1800.0, slash_routing._SLASH_TIMEOUT_S]
 
 
-def test_the_catalog_publishes_what_the_gateway_will_allow() -> None:
+def test_the_catalog_publishes_what_the_gateway_will_allow(monkeypatch) -> None:
     """So a client can say a command may take a while, and cannot shorten it."""
-    from opendde_harness.tui_rpc.methods.cli_dispatch import dispatch_timeout
+    from opendde_harness.tui_rpc.methods.cli_dispatch import _DISPATCH_TIMEOUTS, dispatch_timeout
     from opendde_harness.tui_rpc.methods.commands import commands_catalog
 
+    monkeypatch.setitem(_DISPATCH_TIMEOUTS, ("doctor",), 1800.0)
     catalog = asyncio.run(commands_catalog({}))
 
     for entry in catalog["commands"]:

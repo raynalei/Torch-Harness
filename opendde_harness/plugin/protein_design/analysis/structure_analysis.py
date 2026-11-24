@@ -8,7 +8,7 @@ from collections import Counter
 from pathlib import Path
 from typing import List, Union
 
-from opendde_harness.plugin.protein_design.servers.backends.plip_parser import PLIPAnalysis, parse_plip_report
+from opendde_harness.plugin.protein_design.analysis.plip_parser import PLIPAnalysis, parse_plip_report
 
 # Reflection must remain a bounded diagnostic.
 _REFLECTION_PLIP_MAX_CANDIDATES = 3
@@ -106,7 +106,7 @@ def run_plip_structure_analysis(
     command = [
         sys.executable,
         "-m",
-        "opendde_harness.plugin.protein_design.servers.backends.plip_runner",
+        "opendde_harness.plugin.protein_design.analysis.plip_runner",
         *structure_files,
         "--cyc-num",
         str(cycle_num),

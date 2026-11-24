@@ -186,9 +186,9 @@ async def test_the_row_is_sent_a_kilobyte_of_the_result_and_told_when_that_is_no
     assert (capped.truncated, len(capped.result_preview)) == (True, TOOL_PREVIEW_MAX_CHARS)
 
 
-@pytest.mark.parametrize("window", [None, 30_000])
+@pytest.mark.parametrize("window", [None, 27_000])
 async def test_older_tool_bodies_are_elided_before_a_call_the_window_cannot_hold(tmp_path, window) -> None:
-    """Six 15k-char results (a few thousand tokens each) against a 30k window
+    """Six 15k-char results (a few thousand tokens each) against a 27k window
     whose reply ceiling is 16k leave the prompt over its budget, so the older
     results are elided before the call. An unknown window elides nothing."""
     providers = ProvidersConfig() if window is None else _windows(model=window)

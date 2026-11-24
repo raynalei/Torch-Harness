@@ -8,7 +8,7 @@ enabled_by_default = true
 
 [plugin.contributes]
 skills_dirs = ["skills"]
-readiness = "opendde_harness.plugin.protein_design.readiness:compute_configured"
+readiness = "opendde_harness.plugin.protein_design.readiness:models_configured"
 
 [plugin.contributes.tool_description_notes]
 bash = "Protein Design models run through registered external model services. Use protein_model_list and protein_initial_round_start for model discovery and design workflows."

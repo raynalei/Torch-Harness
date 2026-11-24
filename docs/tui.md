@@ -16,7 +16,7 @@ plain terminal instead, and `/fullscreen on|off|status` switches at any time.
 
 | Option | Purpose |
 | --- | --- |
-| `--check` | Start the child process and exit. It proves the bundle loads; it does not check a provider, the compute service, or the screen |
+| `--check` | Start the child process and exit. It proves the bundle loads; it does not check a provider, model services, or the screen |
 | `--dev` | Run the TypeScript source through `tsx` instead of the built bundle. Needs a source checkout with its frontend dependencies installed |
 | `--color auto\|truecolor\|256\|16\|none` | Pin the color capability instead of detecting it |
 
@@ -110,7 +110,7 @@ brings the text back, still unsent. Prompt history lives in
 
 Type `/` in the editor to open the command popup, keep typing to filter, then Tab
 or Enter to accept. Every command in the popup is one you reach for while talking
-to the agent. Administration — providers, skills, compute, the tracing dashboard
+to the agent. Administration — providers, skills, the tracing dashboard
 — lives in the CLI: run `ddeharness --help` in a terminal. Those commands still
 work if you type one in full here, they are simply not offered.
 
@@ -139,16 +139,13 @@ bare name is the view: `/tasks` lists the design tasks, `/task:logs` reads one.
 | `/fast [normal\|fast\|status]` | Switch the model between normal and fast service |
 | `/verbose [cycle\|on\|off]` | How much tool output the agent reports |
 | `/fullscreen [on\|off\|status]` | Alternate screen, or the plain terminal |
-| `/doctor [--fix]` | Check configuration and compute resources |
+| `/doctor [--fix]` | Check provider and memory configuration |
 | `/tracing [stop]` | Open the tracing dashboard (LLM, tool and memory spans); `stop` shuts it down |
 | `/mcp` | The MCP servers this session can reach |
 | `/mcp:reload [always]` | Reload them in the live session |
 | `/tasks [id]` | Protein-design tasks: all of them, or one in detail |
 | `/task:logs <id>` | Read one task's worker log |
 | `/task:follow <id>` | Follow one task until it finishes |
-| `/design` | What a design run would use: defaults, paths, compute |
-| `/design:validate <config.yaml>` | Check a configuration without starting anything |
-| `/design:start <config.yaml>` | Launch a design run as a detached task |
 
 Some commands that used to be here are gone, and typing one says where it went:
 `/yolo` is Shift+Tab, `/details` is Ctrl+T and Ctrl+O, `/history` is the
@@ -280,17 +277,14 @@ for every panel, and reach one a click expanded on its own.
 
 ## Design tasks
 
-A protein-design task runs in a detached worker and outlives the UI. The
-design-task bar sits above the queue and lists work that is still queued or
-running, three rows at a time and then a `+N more`; it empties itself as tasks
-finish. Nothing switches it on: it appears when a design the agent started
-reports progress, or when `/tasks` finds one running, and it draws nothing while
-nothing is running.
+Initial Round runs can continue in a detached worker after the TUI closes.
+Run `/protein-design initial-round-list` to discover saved runs. Pass the returned
+directory to `/protein-design initial-round-status --run-dir <directory>` to
+inspect progress or to `/protein-design initial-round-resume --run-dir <directory>`
+to resume. See [Initial Round](initial-round.md).
 
-`/tasks` lists running and recent tasks. `/tasks <id>` reports one task's compute
-details and scores, `/task:logs <id>` reads its worker log, and
-`/task:follow <id>` shows the bar with that task first. See
-[protein design](protein-design.md) for what the tasks themselves do.
+The task bar and `/tasks` still read historical design snapshots. Use
+`/task:logs <id>` to inspect saved worker logs.
 
 ## Resuming
 

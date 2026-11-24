@@ -50,9 +50,6 @@ describe('registry', () => {
     // `/login` and `/logout` are pi's own two, added with their pi names.
     expect(names).toEqual([
       'copy',
-      'design',
-      'design:start',
-      'design:validate',
       'doctor',
       'export',
       'fast',
@@ -506,31 +503,18 @@ describe('commands', () => {
     expect(harness.text()).toContain('tool list changed')
   })
 
-  it('/doctor, /tracing and the design commands go through slash.exec', async () => {
+  it('/doctor and /tracing go through slash.exec', async () => {
     const harness = createTestContext({ 'slash.exec': { output: 'all good' } })
 
     await dispatch(registry, harness.context, '/doctor --fix')
     await dispatch(registry, harness.context, '/tracing')
     await dispatch(registry, harness.context, '/tracing stop')
-    await dispatch(registry, harness.context, '/design')
-    await dispatch(registry, harness.context, '/design:validate run.yaml')
 
     expect(harness.transport.calls.map(call => (call.params as { command: string }).command)).toEqual([
       'doctor --fix',
       'tracing',
-      'tracing stop',
-      'protein-design context',
-      'protein-design validate --config run.yaml'
+      'tracing stop'
     ])
-  })
-
-  it('a design action without its configuration says so instead of running', async () => {
-    const harness = createTestContext({ 'slash.exec': { output: 'all good' } })
-
-    await dispatch(registry, harness.context, '/design:start')
-
-    expect(harness.transport.calls).toEqual([])
-    expect(harness.text()).toContain('usage: /design:start <config.yaml>')
   })
 
   it('says where a removed command went instead of failing', async () => {

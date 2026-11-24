@@ -6,7 +6,7 @@ from typing import Annotated, Literal
 
 from pydantic import Field, StrictBool, TypeAdapter, model_validator
 
-from opendde_harness.plugin.protein_design.core.contracts import ContractModel
+from opendde_harness.plugin.protein_design.core.schema import ContractModel
 
 
 class AF3ScoreControls(ContractModel):
