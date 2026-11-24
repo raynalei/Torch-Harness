@@ -227,15 +227,20 @@ def test_replacing_static_defaults_requires_explicit_flag(tmp_path):
 def test_cluster_deployment_yaml_imports_confirmed_native_contract(tmp_path):
     from pathlib import Path
 
-    source = tmp_path / "deployment.yaml"
-    content = (Path(__file__).resolve().parents[1] / "docs/examples/cluster_deployment.yaml").read_text()
-    source.write_text(content)
+    repo = Path(__file__).resolve().parents[1]
+    source = repo / "docs/examples/cluster_deployment.yaml"
     path = tmp_path / "config.json"
-    source.write_text(content)
     result = invoke(path, "register", "--services-file", str(source))
     assert result.exit_code == 0, result.output
     settings = json.loads(path.read_text())["plugins"]["config"]["protein-design"]
     assert len(settings["model_services"]) == 7
+    scripts = {
+        Path(model["service"]["sbatch_script"])
+        for name, model in settings["model_services"].items()
+        if name != "rosetta"
+    }
+    assert len(scripts) == 6
+    assert scripts == set((repo / "api").glob("*/*.sbatch"))
     assert (
         settings["workflow_defaults"]["evaluation"]["dockq_python"]
         == "/lustre/grp/cmclab/leiy/conda_envs/ppi_env/bin/python"

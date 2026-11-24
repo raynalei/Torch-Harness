@@ -146,6 +146,18 @@ if not DEFAULT_DEPLOYMENT_CONFIG.is_file():
     DEFAULT_DEPLOYMENT_CONFIG = Path(__file__).resolve().parents[4] / "docs/examples/cluster_deployment.yaml"
 
 
+def resolve_service_scripts(registrations: dict, source: Path) -> None:
+    """Make script paths absolute before validating services from a profile."""
+    if not isinstance(registrations, dict):
+        return
+    directory = source.resolve().parent
+    for model in registrations.values():
+        service = model.get("service") if isinstance(model, dict) else None
+        script = service.get("sbatch_script") if isinstance(service, dict) else None
+        if isinstance(script, str) and script and not Path(script).is_absolute():
+            service["sbatch_script"] = str((directory / Path(script).expanduser()).resolve())
+
+
 def load_deployment_defaults(settings):
     """Use only the dedicated deployment YAML; never inspect historical tasks."""
     path = Path(settings.get("deployment_config") or DEFAULT_DEPLOYMENT_CONFIG).expanduser()
@@ -154,12 +166,7 @@ def load_deployment_defaults(settings):
     defaults = yaml.safe_load(path.read_text())
     if not isinstance(defaults, dict) or set(defaults) - {"model_services", *SETTINGS_KEYS}:
         raise ValueError("deployment YAML must contain deployment sections, not a historical task run_config")
-    for model in defaults.get("model_services", {}).values():
-        service = model.get("service", {})
-        if script := service.get("sbatch_script"):
-            script_path = Path(script).expanduser()
-            if not script_path.is_absolute():
-                service["sbatch_script"] = str((path.resolve().parent / script_path).resolve())
+    resolve_service_scripts(defaults.get("model_services", {}), path)
     result = merge_defaults(defaults, settings)
     result["deployment_config"] = str(path.resolve())
     # An explicitly configured registry/adapter declares the available capabilities.

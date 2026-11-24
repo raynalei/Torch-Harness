@@ -14,6 +14,7 @@ from opendde_harness.plugin.protein_design.core.model_registry import ProteinMod
 from opendde_harness.plugin.protein_design.initial_round.defaults import (
     SETTINGS_KEYS,
     merge_defaults,
+    resolve_service_scripts,
     validate_settings,
 )
 from opendde_harness.plugin.protein_design.initial_round.storage import write_json
@@ -182,6 +183,7 @@ def register_models(
             registrations = section.get("model_services", {} if settings else section)
             if not isinstance(registrations, dict) or not registrations and not settings:
                 raise ValueError("services file contains no model registrations or workflow defaults")
+            resolve_service_scripts(registrations, services_file)
         else:
             registrations = local_defaults()
             settings = {}
