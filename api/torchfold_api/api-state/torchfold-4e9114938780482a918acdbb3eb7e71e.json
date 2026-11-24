@@ -1,0 +1,15 @@
+{
+  "signature": "de4be141ae7f6eb70f9d8681f3b5cce00e5cc855043eb872a748e011fad89875",
+  "state": "terminated",
+  "allocation_name": "harness-api-67c29b84cdb00ca1175f",
+  "job_id": "21315680",
+  "query_failures": 0,
+  "slurm_state": "FAILED",
+  "queue_observation": "not_visible",
+  "exit_code": "64:0",
+  "cleanup": {
+    "state": "not_in_queue",
+    "job_id": "21315680",
+    "slurm_state": "FAILED"
+  }
+}

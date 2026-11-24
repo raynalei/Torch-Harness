@@ -1,0 +1,24 @@
+{
+  "model_services": {
+    "torchscore": {
+      "kind": "torchscore",
+      "service": {
+        "url": "http://127.0.0.1:8060",
+        "health_path": "/health",
+        "sbatch_script": "/lustre/grp/cmclab/leiy/Torchscore-api/torchscore-api.sbatch",
+        "sbatch_state_file": "/lustre/grp/cmclab/leiy/Torchscore-api/api-state/torchscore.json",
+        "sbatch_resolve_host": true,
+        "startup_timeout": 1800,
+        "startup_poll_interval": 5,
+        "status_field": "status",
+        "exit_code_field": "exit_code",
+        "require_exit_code": true,
+        "files_field": "files",
+        "metrics_field": "metrics",
+        "metric_fields": {"iptm": "iptm"}
+      },
+      "max_samples": 1,
+      "allowed_input_roots": ["/lustre/grp/cmclab"]
+    }
+  }
+}

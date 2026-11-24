@@ -1,0 +1,5 @@
+sbatch exit_code=255
+
+sbatch: unrecognized option '--cpu-bind=cores'
+Try "sbatch --help" for more information
+

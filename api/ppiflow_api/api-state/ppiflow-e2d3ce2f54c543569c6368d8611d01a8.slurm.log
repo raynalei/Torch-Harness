@@ -1,0 +1,5 @@
+sbatch exit_code=1
+
+sbatch: error: invalid partition specified: gpu31
+sbatch: error: Batch job submission failed: Invalid partition name specified
+

@@ -1,0 +1,4 @@
+squeue exit_code=1
+
+slurm_load_jobs error: Invalid job id specified
+

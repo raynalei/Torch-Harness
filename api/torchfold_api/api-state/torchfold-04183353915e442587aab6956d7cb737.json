@@ -1,0 +1,9 @@
+{
+  "signature": "497b24d2f8b403bdcb271050125bec62aa5e399fd907781ad3aff46ffaebc61c",
+  "state": "ready",
+  "allocation_name": "harness-api-800d55f176ee18ab7f26",
+  "job_id": "21062522",
+  "query_failures": 0,
+  "slurm_state": "RUNNING",
+  "resolved_url": "http://c05b27n03:8040/"
+}

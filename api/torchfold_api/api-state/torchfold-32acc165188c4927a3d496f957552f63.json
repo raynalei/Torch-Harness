@@ -1,0 +1,11 @@
+{
+  "signature": "bc7310f94f055916945d4c5072bdfaf9482a3bf0a975548a59dce53947868dcb",
+  "state": "terminated",
+  "allocation_name": "harness-api-09ed428ed0b0bbb9cbd1",
+  "job_id": "21309640",
+  "query_failures": 0,
+  "slurm_state": "FAILED",
+  "queue_observation": "not_visible",
+  "exit_code": "64:0",
+  "query_error": "squeue failed (exit 1); inspect /lustre/grp/cmclab/leiy/torchfold_api/api-state/torchfold-32acc165188c4927a3d496f957552f63.slurm.log"
+}
