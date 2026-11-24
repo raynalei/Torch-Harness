@@ -1,0 +1,8 @@
+{
+  "signature": "80fac07debf6dbdae92f2fd624c0859af3eff02a999d30b01b3663ed0fe39240",
+  "state": "ready",
+  "job_id": "5287538",
+  "query_failures": 0,
+  "slurm_state": "RUNNING",
+  "resolved_url": "http://c06b04n01:8030/"
+}

@@ -1,0 +1,30 @@
+Bootstrap: localimage
+From: /lustre/grp/cmclab/leiy/containers/ubuntu22.04.sif
+
+%labels
+    Description "TorchCraft runtime: packed torchx_env; source and models mounted from Lustre"
+    Application "TorchCraft"
+
+%files
+    /lustre/grp/cmclab/leiy/TorchX/torchx_env.tar.gz /tmp/torchx_env.tar.gz
+
+%post
+    set -eu
+    mkdir -p /opt/torchx_env /workspace /work /tmp/torchcraft
+    tar -xzf /tmp/torchx_env.tar.gz -C /opt/torchx_env
+    /opt/torchx_env/bin/conda-unpack
+    rm -f /tmp/torchx_env.tar.gz
+
+%environment
+    export CONDA_PREFIX=/opt/torchx_env
+    export PATH=/opt/torchx_env/bin:$PATH
+    export PYTHONNOUSERSITE=1
+    export PYTHONUNBUFFERED=1
+    export PYTHONPATH=/workspace/TorchX/torchx_gpu/torchx${PYTHONPATH:+:$PYTHONPATH}
+
+%runscript
+    exec /opt/torchx_env/bin/python "$@"
+
+%test
+    /opt/torchx_env/bin/python --version
+    /opt/torchx_env/bin/python -c 'import torch; print("PyTorch:", torch.__version__)'

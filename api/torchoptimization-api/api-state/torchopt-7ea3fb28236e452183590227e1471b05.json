@@ -1,0 +1,9 @@
+{
+  "signature": "535bb9451acb21ac6da9fcaba95895c1bd285ebb507d94b26f90613d3df0f3a9",
+  "state": "terminated",
+  "job_id": "21020367",
+  "query_failures": 0,
+  "slurm_state": "FAILED",
+  "queue_observation": "not_visible",
+  "exit_code": "3:0"
+}

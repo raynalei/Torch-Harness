@@ -1,0 +1,13 @@
+sbatch exit_code=255
+
+sbatch: unrecognized option '--cpu-bind=cores'
+Try "sbatch --help" for more information
+
+squeue exit_code=1
+
+slurm_load_jobs error: Invalid job id specified
+
+squeue exit_code=1
+
+slurm_load_jobs error: Invalid job id specified
+

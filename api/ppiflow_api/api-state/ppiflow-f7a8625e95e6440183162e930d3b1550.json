@@ -1,0 +1,13 @@
+{
+  "signature": "578b860458c4454df64e649729874536a036dba1df9f03d6209c04e48f259fde",
+  "state": "ready",
+  "allocation_name": "harness-api-2e379bd4c7e85d6e7ce3",
+  "job_id": "21333218",
+  "query_failures": 0,
+  "slurm_state": "RUNNING",
+  "resolved_url": "http://c05b27n03:8010/",
+  "cleanup": {
+    "state": "cancel_requested",
+    "job_id": "21333218"
+  }
+}

@@ -1,0 +1,17 @@
+Bootstrap: docker
+From: python:3.11-slim
+
+%files
+    main.py /app/main.py
+
+%post
+    apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+    python -m pip install --no-cache-dir 'fastapi>=0.110,<1' 'uvicorn>=0.29,<1' 'pydantic>=2,<3'
+    mkdir -p /work
+
+%environment
+    export AF3SCORE_API_WORK=/work
+    export AF3SCORE_EXECUTION=local
+
+%runscript
+    exec uvicorn main:app --app-dir /app --host 0.0.0.0 --port 8040 "$@"

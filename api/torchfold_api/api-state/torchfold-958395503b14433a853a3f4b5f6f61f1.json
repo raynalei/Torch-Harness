@@ -1,0 +1,11 @@
+{
+  "signature": "497b24d2f8b403bdcb271050125bec62aa5e399fd907781ad3aff46ffaebc61c",
+  "state": "terminated",
+  "allocation_name": "harness-api-7284ff130a851630e62a",
+  "job_id": "21060170",
+  "query_failures": 0,
+  "slurm_state": "CANCELLED",
+  "resolved_url": "http://c05b08n05:8040/",
+  "queue_observation": "not_visible",
+  "exit_code": "0:0"
+}
